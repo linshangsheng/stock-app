@@ -1,0 +1,16 @@
+# 后端依赖（版本锁定见 1.3.1 / 2.5：升级前先跑 M0 验证脚本 tools/m0_probe.py）
+fastapi==0.142.2
+uvicorn==0.54.0
+pandas==3.0.5
+numpy==2.5.1
+PyYAML==6.0.3
+baostock==0.9.4
+tzdata
+yfinance==1.7.0                 # 美股（M5）
+exchange_calendars==4.13.2      # 美股交易日历（节假日 / 夏令时 / 提前收盘）
+requests
+# 可选：A 股全市场快照 / 板块 / 业绩预约披露（AkShare 为网页接口，易随改版失效，须锁版本）
+# akshare==<M0 验证通过的版本>
+# 测试
+pytest==9.1.1
+httpx==0.28.1

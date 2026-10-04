@@ -1,0 +1,13 @@
+{
+  "name": "股票 · 趋势波段",
+  "short_name": "趋势波段",
+  "description": "个人自用 · 本地优先 · A 股趋势波段选股、验证与持仓管理",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>股票 · 趋势波段</title>
+<meta name="theme-color" content="#ffffff">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="app" class="app" data-view="screener">
+  <nav class="nav" id="nav" aria-label="主导航">
+    <div class="brand" title="股票 · 趋势波段">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 17l5-6 4 3 8-9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 21h18" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity=".4"/></svg>
+      <span>趋势波段</span>
+    </div>
+    <div class="market-switch" role="tablist" aria-label="市场">
+      <button data-market="CN" class="on" role="tab">A股</button>
+      <button data-market="US" role="tab">美股</button>
+    </div>
+    <a href="#/screener" data-nav="screener"><i data-ico="radar"></i><span>选股</span></a>
+    <a href="#/watchlist" data-nav="watchlist"><i data-ico="star"></i><span>自选股</span></a>
+    <a href="#/portfolio" data-nav="portfolio"><i data-ico="wallet"></i><span>持仓</span></a>
+    <a href="#/market" data-nav="market"><i data-ico="chart"></i><span>行情</span></a>
+    <a href="#/news" data-nav="news"><i data-ico="news"></i><span>资讯</span></a>
+    <a href="#/backtest" data-nav="backtest"><i data-ico="flask"></i><span>回测</span></a>
+    <a href="#/settings" data-nav="settings"><i data-ico="gear"></i><span>设置</span></a>
+    <div class="nav-foot">
+      <span class="badge demo" id="demo-badge" hidden title="当前使用合成演示数据，不代表真实行情">演示数据</span>
+      <button class="icon-btn" id="theme-btn" title="切换深色 / 浅色" aria-label="切换主题">◐</button>
+    </div>
+  </nav>
+
+  <main class="main" id="main">
+    <section class="col-list" id="col-list"></section>
+    <section class="col-detail" id="col-detail"></section>
+    <section class="col-page" id="col-page"></section>
+  </main>
+</div>
+<div id="toast-root" aria-live="polite"></div>
+<div id="modal-root"></div>
+
+<script src="vendor/lightweight-charts.standalone.production.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

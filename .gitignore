@@ -1,0 +1,12 @@
+# 运行时数据（不入版本库）：行情库 / 个人库 / 备份 / 日志
+data/
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+*.db
+*.db-wal
+*.db-shm
+
+# 本机开发环境的预览配置（含个人解释器路径）
+.claude/

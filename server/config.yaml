@@ -1,0 +1,211 @@
+# 股票 App 集中配置（限频 / 过滤阈值 / 策略参数 / 费用与滑点）
+# 对应需求书：3.25.1 / 3.26.1 / 3.26.3 / 5.4 / 5.4.1 / 5.5.1 / 5.8 / 3.26.6
+# 所有数值均为「初始假设」，需经 M1 剔除统计与 M2 因子检验后校准（附录 B）。
+
+server:
+  host: 127.0.0.1          # 默认只监听本机；改成 0.0.0.0 开放局域网时必须设置 token（1.6）
+  port: 8000
+  token: ""                # 局域网访问口令；host 非 127.0.0.1 且 token 为空时拒绝启动
+
+data_dir: data
+history_years: 10          # 3.26 历史深度（含 200 日均线预热期）
+
+# 数据源：cn 可选 baostock | demo（demo 为合成数据，仅用于离线演示与界面验证，写入 data/demo/）
+datasource:
+  cn: baostock
+  us: yfinance                       # yfinance | demo
+
+# 3.26.3 反爬 / 防封 IP：随机延迟 + 指数退避 + 熔断（单位：秒）
+throttle:
+  baostock: {min_delay: 0.3, max_delay: 1.0, backoff_base: 10, backoff_max: 80, breaker_failures: 3, breaker_pause: 600}
+  akshare:  {min_delay: 1.5, max_delay: 3.0, backoff_base: 10, backoff_max: 80, breaker_failures: 3, breaker_pause: 600}
+  yfinance: {min_delay: 2.0, max_delay: 5.0, backoff_base: 10, backoff_max: 80, breaker_failures: 3, breaker_pause: 600}
+  eastmoney: {min_delay: 2.0, max_delay: 4.0, backoff_base: 20, backoff_max: 120, breaker_failures: 3, breaker_pause: 1800}   # 东财行情 / 数据中心：有 IP 级限流（M0 实测：连续密集请求后被断开），宁可慢
+  cninfo:   {min_delay: 1.0, max_delay: 2.5, backoff_base: 10, backoff_max: 80, breaker_failures: 3, breaker_pause: 600}
+  sec:      {min_delay: 0.25, max_delay: 0.6, backoff_base: 10, backoff_max: 80, breaker_failures: 3, breaker_pause: 600}   # SEC 要求 ≤ 10 次/秒
+
+# 3.26.1 股票池分层（CN）
+universe:
+  cn:
+    boards: [main, chinext, star]   # 北交所默认不纳入（B.2-1）；科创板默认纳入（B.2-2）
+    l1:
+      min_list_days: 120            # 交易日
+      min_price: 2.0                # 入库时快照粗筛（元）
+      min_float_mktcap: 3000000000       # 流通市值，入库时快照粗筛（元）
+      min_avg_amount20: 50000000       # 20 日日均成交额（元）
+    l2:
+      min_list_days: 250
+      min_price: 3.0                # 不复权收盘价，逐日
+      min_avg_amount20: 100000000       # 逐日
+      max_suspend_60d: 3            # 近 60 日停牌天数上限
+      max_oneword_20d: 2            # 近 20 日一字涨/跌停天数上限
+      exclude_st: true              # 当日 ST / *ST 剔除（点时）
+  us:
+    # 证券类型（普通股，剔除 ETF / 优先股 / 权证 / 单位 / 权利 / SPAC / 测试标的）在名单阶段处理，见 datasource_us.py
+    l1:
+      min_list_days: 120
+      min_price: 3.0                # 入库预筛（近 45 日日线；yfinance 无全市场快照）
+      min_float_mktcap: 500000000   # 市值：无快照时不筛（L2 的成交额门槛已间接约束小市值）
+      min_avg_amount20: 10000000    # $1,000 万
+    l2:
+      min_list_days: 250
+      min_price: 5.0                # 还原后的「当时真实价」（拆股调整价 × 之后所有拆股的累计比例，3.6.1），逐日
+      min_avg_amount20: 20000000    # $2,000 万，逐日
+      max_suspend_60d: 3            # 近 60 日缺失交易日（长期暂停交易）上限
+      max_oneword_20d: 99           # 美股无涨跌停：该项不起作用
+      exclude_st: false
+
+# 3.25.1 数据完整性闸门
+gate:
+  min_coverage: 0.98
+  max_anomaly_ratio: 0.01
+  volume_drift_range: [0.2, 5.0]    # 全池成交量/成交额中位数与前 20 日中位数之比的合理区间
+  snapshot_recon_tol: 0.005
+  benchmark_symbols_cn: ["sh.000300", "sh.000001", "sz.399001", "sz.399006", "sh.000905", "sh.000852"]
+  benchmark_symbols_us: ["SPY", "QQQ", "IWM", "DIA", "^GSPC", "^IXIC", "^VIX"]
+  sector_etfs_us: ["XLK", "XLF", "XLV", "XLY", "XLP", "XLE", "XLI", "XLU", "XLB", "XLRE", "XLC"]   # 行业 ETF：辅助基准 / 校验（3.14），不参与完整性闸门
+
+# 3.6.1 / 3.13.1 口径
+features:
+  min_valid_ratio: 0.9              # 滚动窗口内有效交易日占比下限（停牌日不填充，不足输出缺失）
+  rps_min_sample: 300               # RPS 当日有效样本数下限
+  high_52w_days: 252
+  atr_period: 14
+
+# 4.4.1 / 5.4 市场环境闸门（候选规则，参数待回测）
+regime:
+  benchmark: "sh.000300"            # A 股默认沪深 300；美股见 markets.US（SPY）
+  vix_caution: 0                    # 美股：VIX 高于此值时 NORMAL 降为 CAUTION（0 = 不启用；候选规则，参数待回测）
+  ma_mid: 50
+  ma_long: 200
+  breadth_ma: 50                    # 宽度 = 站上 MA50 的股票比例
+  breadth_normal: 0.45              # 宽度高于此值且指数在 MA50 之上 -> 正常
+  breadth_defensive: 0.25           # 指数跌破 MA200 且宽度低于此值 -> 防守
+
+# 5.4 漏斗各层的硬 / 软约束
+funnel:
+  l1_l2: {hard: true}
+  regime_gate: {hard: true}
+  industry_strength: {hard: false, weight: 1.0}
+  rps: {hard: false, weight: 1.0, min_rps: 0}
+  setup: {hard: true}
+  risk_exclusion: {hard: true, earnings_window_days: 3, projection_margin_days: 3}   # 预计披露日有不确定性：proj / deadline 额外放宽的交易日数
+  top_n: 15
+  cooldown_days: 5                  # 5.4.1 同标的信号冷却期
+
+# 5.4.1 形态规格（默认值；搜索范围见需求书，仅回测网格使用）
+setups:
+  enabled: [breakout, pullback, vcp]
+  breakout:
+    n: 20
+    vol_ratio_min: 1.5
+    close_pos_min: 0.7
+    ext_atr_min: 0.1
+    ext_atr_max: 2.0
+  pullback:
+    rps60_min: 80
+    depth_atr_min: -0.5
+    depth_atr_max: 1.0
+    vol_ratio_max: 0.8
+    close_pos_min: 0.6
+  vcp:
+    atr_ratio_max: 0.8
+    bb_pct_max: 0.20
+    range10_atr_max: 4.0
+    vol_ratio_min: 1.3
+    close_pos_min: 0.7
+    high52_dist_max: 0.25
+
+# 6.6.1 / 6.6.2 检验通过标准（默认值，附录 B.2-6；偏保守，可按需调整）
+# 只有通过检验的因子才进入买入条件 / 综合打分；未通过的形态保持「仅标注、不进入综合打分」。
+validation:
+  factor:            # 单因子：在 horizons 中至少 min_horizons_pass 个周期同时满足
+    min_abs_ic: 0.02          # |Rank IC 均值|
+    min_ic_ir: 0.30           # |IC 均值 / IC 标准差|
+    min_t_eff: 2.0            # 按前瞻窗口重叠折算有效样本后的 t 值
+    min_abs_monotonic: 0.8    # 分层收益的单调性（Spearman，1 = 严格单调）
+    min_horizons_pass: 2
+  event:             # 形态事件研究
+    min_independent_days: 50  # 独立信号日下限（低于则不下结论）
+    max_p: 0.05               # 相对随机入场基线的 p 值
+    min_mean_r: 0.0           # 按信号日聚合的期望 R 须为正
+    ci_lower_gt_zero: true    # block bootstrap 95% 置信区间下限须 > 0
+    min_positive_year_ratio: 0.6   # 样本量 ≥ min_year_n 的年份里，期望 R 为正的比例
+    min_year_n: 10
+
+# 5.5.1 日线成交规则
+execution:
+  entry_mode: next_open             # next_open | stop_entry
+  stop_entry_valid_days: 1
+  slippage: 0.001                   # 0.1%，不利方向
+  max_adv_pct: 0.01                 # 单笔成交额 ≤ 信号日 20 日均成交额 × 1%
+  lot_size: 100                     # A 股整手；科创板 200 股起、之后 1 股递增（见 backtest.lot_rules）
+
+# 5.7 / 5.6 止损止盈
+exits:
+  stop_atr_k: 2.0                   # 初始止损 = 入场价 - k × ATR14
+  trail: atr                        # atr | ma10 | none
+  trail_atr_k: 3.0                  # 跟踪止损 = 持仓以来最高收盘 - k × ATR14（T 日收盘后更新，T+1 生效）
+  max_hold_days: 20                 # 时间退出：持满 N 个交易日后第 N+1 日开盘卖出
+  exit_below_ma: 20                 # 收盘跌破 MA20：T+1 开盘卖出（0 关闭）
+  hard_stop_pct: 0.10               # 硬止损：相对入场价单笔最大亏损上限
+
+# 5.8 仓位与组合约束
+portfolio:
+  risk_per_trade: 0.005             # 单笔风险（净值比例）；账户表中可覆盖
+  max_positions: 8
+  max_per_industry: 3
+  max_total_risk: 0.04              # 组合总风险上限（净值比例）
+  caution_position_factor: 0.5      # 谨慎状态：仓位上限减半
+  initial_equity: 1000000
+
+# 5.5.1-4 费用。2026-10 核对现行规则：印花税 0.05%（仅卖出，2023-08-28 起）；过户费 0.001%（双向，2022-04-29 起）；
+# 经手费 + 证管费（合计约 0.0341‰）通常已含在券商佣金内。佣金按市场常见的万 2.5（最低 5 元）保守设定——你的券商更低请自行下调。
+costs:
+  cn:
+    commission_rate: 0.00025        # 双向
+    commission_min: 5.0
+    stamp_duty_sell: 0.0005         # 卖出，按现行规则核实
+    transfer_fee: 0.00001           # 双向，按现行规则核实
+  us:
+    commission_per_share: 0.0
+    sec_fee_sell: 0.0000278         # SEC 规费（卖出，按成交额；费率每年调整，以 SEC 公布为准）
+    finra_taf_per_share: 0.000166   # FINRA TAF（卖出，按股数，单笔封顶 8.3 美元）
+    finra_taf_cap: 8.30
+
+# A 股涨跌幅规则表（带生效日期；按现行规则核实后维护，5.5.1 / 6.4）
+limit_rules:
+  main:    [{from: "1996-12-16", pct: 0.10}]
+  chinext: [{from: "2009-10-30", pct: 0.10}, {from: "2020-08-24", pct: 0.20}]
+  star:    [{from: "2019-07-22", pct: 0.20}]
+  st_main: [{from: "1996-12-16", pct: 0.05}]   # 主板 ST；如规则变更请追加生效日期
+  st_other: [{from: "2020-08-24", pct: 0.20}]  # 创业板 / 科创板 ST 与普通股一致
+
+# 3.26.5 盘后调度
+events:
+  cache_hours: 6                    # 3.17：新闻 / 公告 / Insider 缓存时长
+  max_symbols_per_run: 40           # 盘后任务链每次最多为多少只「候选 + 持仓」拉取事件
+
+jobs:
+  poll_interval_minutes: 30         # 运行期间检查缺失交易日的间隔
+  data_ready_after_close_minutes: 90  # M0 实测前的保守默认：收盘后多久探测当日数据
+  scan_on_startup: true
+
+# 3.26.6 备份（相对路径相对于数据目录 data/）
+# dir：每日备份（个人库 + 扫描 / 回测记录等不可重建数据，体积小）——建议放网盘同步目录；
+#      用户机器上请在 data/user_config.yaml 里写绝对路径（见 README）。
+# full_dir：行情库全量备份（每周一份、只留 3 份，体积大）——默认留在本机。
+backup:
+  dir: backups
+  full_dir: backups_full
+  keep_daily: 14
+  keep_monthly: 12
+
+# 2.1 / 6.6：A股、美股参数各自独立——此处是对基础配置的覆盖层（美股参数需独立验证，不沿用 A 股参数）
+markets:
+  US:
+    regime: {benchmark: "SPY"}
+    execution: {slippage: 0.0005, lot_size: 1}     # 美股流动性好：滑点初始 0.05%；整股（可改零股）
+    portfolio: {initial_equity: 100000}
+    jobs: {data_ready_after_close_minutes: 30}
+    features: {rps_min_sample: 300}
