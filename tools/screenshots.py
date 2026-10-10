@@ -52,6 +52,18 @@ class Page:
         path.write_bytes(base64.b64decode(r["data"]))
         print("  ", path.name, f"{path.stat().st_size // 1024} KB")
 
+    async def tall_shot(self, path: Path, selector: str, width: int, height: int):
+        """元素比窗口高时：临时把窗口调到够高（应用在自己的面板里滚动，窗口外的内容不会被渲染），截完恢复。"""
+        r = await self.rect(selector)
+        if r and r["height"] + 40 > height:
+            await self.cmd("Emulation.setDeviceMetricsOverride", width=width, height=int(r["height"] + 80), deviceScaleFactor=1, mobile=False)
+            await asyncio.sleep(1.5)
+            r = await self.rect(selector)
+        if r:
+            await self.shot(path, r)
+        await self.cmd("Emulation.setDeviceMetricsOverride", width=width, height=height, deviceScaleFactor=1, mobile=False)
+        await asyncio.sleep(0.5)
+
     async def rect(self, selector: str, pad: int = 8):
         r = await self.js(f"const e = document.querySelector({json.dumps(selector)}); if (!e) return null; e.scrollIntoView({{block:'start'}}); "
                           f"await new Promise(r => setTimeout(r, 300)); const b = e.getBoundingClientRect(); return [b.x, b.y, b.width, b.height];")
@@ -88,7 +100,8 @@ async def run(base: str, out: Path, width: int, height: int):
             await p.cmd("Emulation.setEmulatedMedia", features=[{"name": "prefers-color-scheme", "value": "light"}])
             await p.goto(base + "/#/screener", 6)
             await p.js("localStorage.setItem('sa.theme', JSON.stringify('light')); localStorage.setItem('sa.autoFullscreen', 'false'); localStorage.setItem('sa.market', JSON.stringify('CN'));")
-            await p.goto(base + "/#/screener", 6)
+            await p.cmd("Page.reload", ignoreCache=True)        # 同一网址再 navigate 不会重新加载：必须 reload，设置才生效
+            await asyncio.sleep(6)
             for f in out.glob("*.png"):
                 f.unlink()                                     # 重新生成全部截图（编号可能变化）
             await p.shot(out / "01-选股首页.png")
@@ -120,13 +133,9 @@ async def run(base: str, out: Path, width: int, height: int):
             # 行情页
             await p.goto(base + "/#/market", 8)
             await p.shot(out / "10-行情-市场温度.png")
-            r = await p.rect("#col-page .card:nth-of-type(2)")
-            if r:
-                await p.shot(out / "11-行情-宽基指数规则.png", r)
+            await p.tall_shot(out / "11-行情-宽基指数规则.png", "#col-page .card:nth-of-type(2)", width, height)
             await p.js("const d = document.querySelectorAll('#col-page details.card')[1]; if (d) { d.open = true; d.dispatchEvent(new Event('toggle')); }", 2)
-            r = await p.rect("#col-page details.card[open]")
-            if r:
-                await p.shot(out / "12-行情-指数详情与回测.png", r)
+            await p.tall_shot(out / "12-行情-指数详情与回测.png", "#col-page details.card[open]", width, height)
             # 持仓
             await p.goto(base + "/#/portfolio", 4)
             await p.shot(out / "13-持仓页.png")
@@ -138,6 +147,23 @@ async def run(base: str, out: Path, width: int, height: int):
             r = await p.rect("#col-page .card:nth-of-type(3)")
             if r:
                 await p.shot(out / "16-设置-费用与组合参数.png", r)
+            # 深色模式与手机（窄屏）
+            await p.goto(base + "/#/screener", 2)
+            await p.js("localStorage.setItem('sa.theme', JSON.stringify('dark'));")
+            await p.cmd("Page.reload", ignoreCache=True)
+            await asyncio.sleep(6)
+            await p.js("document.querySelector('#col-list .list-item')?.click();", 5)
+            await p.shot(out / "18-深色模式.png")
+            await p.js("localStorage.setItem('sa.theme', JSON.stringify('light'));")
+            await p.cmd("Emulation.setDeviceMetricsOverride", width=390, height=844, deviceScaleFactor=2, mobile=True)
+            await p.cmd("Page.reload", ignoreCache=True)
+            await asyncio.sleep(6)
+            await p.shot(out / "19-手机-首页.png")
+            await p.js("document.querySelector('#col-list .list-item')?.click();", 5)
+            r = await p.rect(".plan-card", pad=4)
+            await p.shot(out / "20-手机-明天怎么操作.png", {"x": 0, "y": r["y"], "width": 390, "height": min(r["height"], 1400)} if r else None)
+            await p.cmd("Emulation.setDeviceMetricsOverride", width=width, height=height, deviceScaleFactor=1, mobile=False)
+            await p.goto(base + "/#/settings", 8)
             st = await p.js("const c = [...document.querySelectorAll('#col-page .card')].find(x => x.innerText.startsWith('存储空间')); "
                             "if (!c) return null; c.id = 'shot-storage'; return true;")
             if st:

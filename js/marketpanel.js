@@ -42,11 +42,13 @@ export function marketBrief(d) {
   }
   const t = d.thermometer;
   const rows = d.indices.flatMap(i => {
-    const next = i.trend.holding ? `跌破 ${fmtNum(i.trend.exit_level, 0)} 卖` : `站上 ${fmtNum(i.trend.buy_level, 0)} 买`;
+    const next = i.trend.holding ? `跌破 ${fmtNum(i.trend.exit_level, 0)} 卖` : (i.trend.rank_ok === false ? `进前 ${i.trend.top_k} 且站上 ${fmtNum(i.trend.buy_level, 0)}` : `站上 ${fmtNum(i.trend.buy_level, 0)} 买`);
     const dist = i.trend.holding ? i.trend.dist_exit : i.trend.dist_buy;
     const sub = h('tr', { class: 'tmr', hidden: true }, h('td', { colspan: 5 }, tomorrowTable(i)));
     return [h('tr', { style: 'cursor:pointer', title: '点开看明天的情景（高开 / 低开 / 收盘到多少会触发买卖）', onclick: () => { sub.hidden = !sub.hidden; } },
-      h('td', {}, h('span', { class: 'muted' }, '▸ '), h('b', {}, i.name), h('span', { class: 'tiny faint' }, ' ' + (i.etf || '').split(' ')[0])),
+      h('td', {}, h('span', { class: 'muted' }, '▸ '), h('b', {}, i.name),
+        i.trend.rank ? h('span', { class: 'rank-badge' + (i.trend.rank_ok ? ' ok' : ''), title: `近 20 日强弱第 ${i.trend.rank} 名；趋势仓只做前 ${i.trend.top_k} 名` }, '#' + i.trend.rank) : null,
+        h('div', { class: 'tiny faint' }, (i.etf || '').split(' ')[0])),
       h('td', { class: 'num r ' + dirClass(i.chg_1d) }, fmtPct(i.chg_1d, 1)),
       h('td', { class: 'r' }, h('span', { class: 'badge ' + (i.position >= 1 ? 'ok' : i.position > 0 ? 'accent' : '') }, fmtPct(i.position, 0, false)),
         i.hold_amount != null ? h('div', { class: 'tiny muted num' }, money(i.hold_amount)) : null),
@@ -63,9 +65,10 @@ export function marketBrief(d) {
         h('span', { class: 'num small', title: '全A站上 20 日线的股票比例' }, pct0(t.b20))),
       h('a', { href: '#/market', class: 'small' }, '指数买入位 / 止损位 →')),
     gauge(t.b20, t.cuts),
-    h('div', { class: 'tiny muted mt-s' }, t.hint, ' 指数规则只看收盘：明天高开还是低开都不改变信号，有信号就开盘照做，没信号就不动。点指数名可展开明天的情景。'),
+    h('div', { class: 'tiny muted mt-s' }, t.hint),
     allocLine,
-    h('table', { class: 'mini mt-s' }, h('thead', {}, h('tr', {}, h('th', {}, '宽基 / ETF'), h('th', { class: 'r' }, '今日'), h('th', { class: 'r' }, '规则仓位'), h('th', {}, '趋势仓下一步'), h('th', {}, '明天开盘'))),
+    h('table', { class: 'mini mt-s' }, h('thead', {}, h('tr', {}, h('th', { title: '#名次 = 近 20 日涨幅强弱；趋势仓只做前 2 名。点指数名展开明天的情景' }, '宽基 / ETF（点开）'), h('th', { class: 'r' }, '今日'), h('th', { class: 'r' }, '规则仓位'), h('th', {}, '趋势仓下一步'),
+      h('th', { title: '指数规则只看收盘：明天高开还是低开都不改变信号' }, '明天开盘'))),
       h('tbody', {}, rows)));
 }
 
@@ -113,11 +116,16 @@ export function marketFull(d) {
     h('div', { class: 'alert mt-s small' },
       h('b', {}, '规则怎么用：'), `每个指数分两半仓位。`,
       h('br'), `① 趋势仓（${fmtPct(tw.weight, 0, false)}）：收盘站上 MA${tw.ma}×${(1 + tw.band).toFixed(2)} 第二天开盘买；收盘跌破 MA${tw.ma}×${(1 - tw.band).toFixed(2)} 第二天开盘卖。`,
+      tw.top_k ? h('span', {}, `（并且只做近 ${tw.mom_days || 20} 日涨幅排前 ${tw.top_k} 的指数，掉出前 ${tw.top_k} 也卖——轮动让回撤更小）`) : null,
       h('br'), `② 抄底仓（${fmtPct(ww.weight, 0, false)}）：全A站上 20 日线比例跌破 ${pct0(ww.enter_below)}（恐慌）第二天开盘买；收盘跌破「信号日收盘 − ${ww.stop_atr_k}×ATR${ww.atr_n}」止损；比例回到 ${pct0(ww.exit_above)} 以上止盈，最多持有 ${ww.max_hold_days} 个交易日。`,
       h('br'), `③ 短期止盈：趋势仓的离场位（MA${tw.ma}×${(1 - tw.band).toFixed(2)}）会随均线上移，本身就是移动止盈；抄底仓表格里给出 +5% / +10% 的「参考止盈位」——回测中给抄底仓加固定止盈反而少赚（恐慌后的反弹常走得更远），所以规则不采用，想落袋为安时再参考。`,
       h('br'), h('b', {}, '④ 高开 / 低开怎么办：'), '指数规则所有判断都在收盘时做（站上 / 跌破均线、宽度、止损都看收盘价）。所以：今天收盘出了买入 / 卖出信号，明天就在开盘时买 / 卖，不论高开还是低开（回测就是按次日开盘价执行的）；没有信号，明天不论怎么开盘都不用操作；盘中跌破止损价也先不卖，等收盘确认，收盘仍在止损价下方才在下一个交易日开盘卖。宽基指数开盘跳空通常很小（近两年中位数约 0.2%~0.4%）。',
       h('br'), h('span', { class: 'muted' }, '规则仓位是「计划投入这个指数的资金」的比例，不是总资产比例。规则输出，不构成投资建议。'),
       d.allocation ? h('div', { class: 'mt-s' }, h('b', {}, '按你的资金：'), `宽基 ETF 一共 ${money(d.allocation.etf_amount)}，每个指数 ${money(d.allocation.per_index)}（趋势仓 ${money(d.allocation.trend_amount)}、抄底仓 ${money(d.allocation.washout_amount)}）；个股 ${money(d.allocation.stock_amount)}，最多同时 ${d.allocation.stock_max_positions} 只。`) : null),
+    d.portfolio?.oos ? h('div', { class: 'alert ok mt-s small' }, h('b', {}, `${d.portfolio.n} 个宽基等分资金的组合（规则要整体看）：`),
+      `样本外 ${d.portfolio.oos.rule.from} ~ ${d.portfolio.oos.rule.to}：规则 年化 ${fmtPct(d.portfolio.oos.rule.cagr, 1)}、最大回撤 ${fmtPct(d.portfolio.oos.rule.mdd, 1)}、Sharpe ${d.portfolio.oos.rule.sharpe}；`,
+      `一直持有 ${fmtPct(d.portfolio.oos.hold.cagr, 1)}、${fmtPct(d.portfolio.oos.hold.mdd, 1)}、${d.portfolio.oos.hold.sharpe}。单个指数的成绩受轮动影响，参考意义有限。`) : null,
+    d.portfolio?.health ? healthBox(d.portfolio) : null,
     h('div', { class: 'tbl-wrap mt' }, h('table', {},
       h('thead', {}, h('tr', {}, ['指数 / 对应 ETF', '收盘', '20 日', '规则仓位', '趋势仓', '抄底仓', '明天开盘（高开低开都一样）', '样本外：规则 vs 持有'].map((x, k) => h('th', { class: k > 0 && k < 4 ? 'r' : '' }, x)))),
       h('tbody', {}, d.indices.map(i => indexRow(i)))))));
@@ -145,6 +153,25 @@ export function marketFull(d) {
   return api;
 }
 
+/** 策略健康度 + 分年度（压力测试）：让人提前知道「熊市少亏很多、牛市会明显跑输」。 */
+function healthBox(pf) {
+  const hl = pf.health;
+  const cls = hl.status === '警告' ? 'bad' : hl.status === '注意' ? 'warn' : 'ok';
+  return h('div', { class: 'grid c2 mt-s', style: 'align-items:start' },
+    h('div', { class: 'card soft' }, h('div', { class: 'card-title' }, h('h3', {}, '策略健康度'), h('span', { class: 'badge ' + cls }, hl.status)),
+      h('div', { class: 'grid c2' },
+        h('div', { class: 'kv' }, h('span', { class: 'k' }, '当前回撤（距最高点）'), h('span', { class: 'v num' }, fmtPct(hl.current_dd, 1))),
+        h('div', { class: 'kv' }, h('span', { class: 'k' }, `10 年最大回撤（${hl.max_dd_date}）`), h('span', { class: 'v num' }, fmtPct(hl.max_dd, 1)))),
+      h('p', { class: 'small mt-s' }, hl.text),
+      h('p', { class: 'tiny muted' }, '超过历史最大回撤 = 出现了回测里没见过的情况，是规则可能失效的信号。')),
+    h('div', { class: 'card soft' }, h('div', { class: 'card-title' }, h('h3', {}, '分年度：规则 vs 一直持有'), h('span', { class: 'hint' }, `${pf.n} 个宽基等分`)),
+      h('table', { class: 'mini' }, h('thead', {}, h('tr', {}, ['年份', '规则', '规则回撤', '持有', '持有回撤'].map((x, k) => h('th', { class: k ? 'r' : '' }, x)))),
+        h('tbody', {}, pf.by_year.map(y => h('tr', {}, h('td', {}, y.year + (y.partial ? '*' : '')),
+          h('td', { class: 'num r ' + dirClass(y.rule) }, fmtPct(y.rule, 1)), h('td', { class: 'num r' }, fmtPct(y.rule_dd, 1)),
+          h('td', { class: 'num r muted' }, fmtPct(y.hold, 1)), h('td', { class: 'num r muted' }, fmtPct(y.hold_dd, 1)))))),
+      h('p', { class: 'tiny muted mt-s' }, '规则的特点：熊市（2018、2022）少亏很多，牛市（2019、2020、2025）明显跑输。这是用收益换平稳，不是失效。* = 不满一年。')));
+}
+
 function idxName(d, sym) { return (d.indices.find(i => i.symbol === sym) || {}).name || sym; }
 
 function indexRow(i) {
@@ -156,6 +183,7 @@ function indexRow(i) {
     h('td', { class: 'num r ' + dirClass(i.ret_20d) }, fmtPct(i.ret_20d, 1)),
     h('td', { class: 'r' }, h('span', { class: 'badge ' + (i.position >= 1 ? 'ok' : i.position > 0 ? 'accent' : '') }, fmtPct(i.position, 0, false))),
     h('td', { class: 'small' }, h('span', { class: 'badge ' + (tr.holding ? 'ok' : '') }, tr.holding ? '持有' : '空仓'), ' ',
+      tr.rank ? h('span', { class: 'rank-badge' + (tr.rank_ok ? ' ok' : ''), title: `近 20 日强弱第 ${tr.rank} 名；只做前 ${tr.top_k} 名` }, '#' + tr.rank) : null, ' ',
       tr.holding ? h('span', {}, '离场位 ', h('b', { class: 'num' }, fmtNum(tr.exit_level, 0)), h('span', { class: 'tiny muted num' }, ` (${fmtPct(tr.dist_exit, 1)})`))
         : h('span', {}, '买入位 ', h('b', { class: 'num' }, fmtNum(tr.buy_level, 0)), h('span', { class: 'tiny muted num' }, ` (${fmtPct(tr.dist_buy, 1)})`))),
     h('td', { class: 'small' }, h('span', { class: 'badge ' + (wo.holding ? 'ok' : '') }, wo.holding ? '持有' : '等待'), ' ',
@@ -163,7 +191,7 @@ function indexRow(i) {
         (wo.ref_take_profit || []).length ? h('div', { class: 'tiny muted' }, '参考止盈 ' + wo.ref_take_profit.map(x => `+${Math.round(x.pct * 100)}% ${fmtNum(x.price, 0)}`).join(' · ')) : null)
         : h('span', { class: 'muted' }, `宽度 ${pct0(wo.b20)} → 需 < ${pct0(wo.enter_below)}；触发时止损约 ${fmtNum(wo.stop_if_today, 0)} (${fmtPct(wo.stop_pct_if_today, 1)})`,
           (wo.ref_take_profit || []).length ? `；参考止盈 ${wo.ref_take_profit.map(x => `+${Math.round(x.pct * 100)}% ≈ ${fmtNum(x.price, 0)}`).join(' / ')}` : '')),
-    h('td', { class: 'small' }, h('b', {}, i.next_open?.actions?.length ? i.next_open.actions.join('；') : '不用操作'),
+    h('td', { class: 'small' }, h('b', {}, i.next_open?.actions?.length ? i.next_open.actions.join('；') : '不操作'),
       i.next_open?.gap_median != null ? h('div', { class: 'tiny muted' }, `近两年开盘跳空中位数 ${fmtPct(i.next_open.gap_median, 2, false)}，超过 1% 的日子 ${fmtPct(i.next_open.gap_gt1, 0, false)}`) : null),
     h('td', { class: 'small num' }, s?.rule?.cagr != null
       ? h('span', {}, `年化 ${fmtPct(s.rule.cagr, 1)} / 回撤 ${fmtPct(s.rule.mdd, 0)}`, h('div', { class: 'tiny muted' }, `持有 ${fmtPct(s.hold.cagr, 1)} / ${fmtPct(s.hold.mdd, 0)}`)) : '—'));

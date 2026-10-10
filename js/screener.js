@@ -33,18 +33,58 @@ export const screener = {
       render();
     }
 
-    // 市场温度 + 宽基指数规则：单独加载，不阻塞观察清单
+    // 市场温度 + 宽基指数规则：单独加载，不阻塞观察清单。
+    // 宽屏：放在右侧（没点开股票时那块原本是空白）；窄屏（手机）：放在左列顶部。
     const brief = h('div', {});
+    const wide = () => matchMedia('(min-width: 900px)').matches;
+    function showOverview() {
+      if (!wide()) return;
+      ctx.currentSymbol = null; S.sel = null;
+      [...el.querySelectorAll('.list-item.sel')].forEach(x => x.classList.remove('sel'));
+      clear(ctx.detailEl);
+      ctx.detailEl.append(h('div', { class: 'pane-body overview' },
+        h('div', { class: 'row between mb' }, h('h2', {}, '市场概览'), h('a', { href: '#/market', class: 'small' }, '完整版（行情页）→')),
+        S.mv ? marketBrief(S.mv) : h('div', { class: 'empty' }, h('span', { class: 'spinner' }), ' 加载市场温度…'),
+        S.mv?.portfolio?.health ? h('div', { class: 'alert small mt ' + ({ 警告: 'bad', 注意: 'warn' }[S.mv.portfolio.health.status] || 'ok') },
+          h('b', {}, `ETF 规则健康度：${S.mv.portfolio.health.status}。`), S.mv.portfolio.health.text,
+          `（当前回撤 ${fmtPct(S.mv.portfolio.health.current_dd, 1)}，10 年最大 ${fmtPct(S.mv.portfolio.health.max_dd, 1)}）`, ' ',
+          h('a', { href: '#/market' }, '分年度表现 →')) : null,
+        h('p', { class: 'hint mt' }, '点左侧清单里的股票，这里会换成它的详情和「明天怎么操作」；点详情顶部的「← 市场概览」回到这里。')));
+    }
+    ctx.showOverview = showOverview;
     (async () => {
       try { S.mv = await loadMarketView(); } catch (e) { S.mv = { status: 'error', message: e.message }; }
       clear(brief); brief.append(marketBrief(S.mv));
+      if (S.data) render();
+      if (!ctx.currentSymbol) showOverview();
     })();
+
+    /** 「明天要做什么」：把宽基 ETF、个股、持仓三件事汇总成一张卡（数据都来自后端，前端只汇总展示）。 */
+    function actionCard(d) {
+      const mv = S.mv, run = d.run;
+      const day = run?.valid_until ? shortDate(run.valid_until) : '下一交易日';
+      const etfActs = mv?.status === 'ok' ? mv.indices.filter(i => i.next_open?.actions?.length).map(i => `${i.name}：${i.next_open.actions.join('、')}`) : null;
+      const buys = (d.candidates || []).filter(c => c.fit !== false && run?.official && !run?.is_stale);
+      const must = S.health?.summary?.levels?.must ?? 0;
+      const line = (icon, title, body, onclick) => h('div', { class: 'act-line' + (onclick ? ' link' : ''), onclick },
+        h('span', { class: 'act-ico' }, icon), h('div', {}, h('div', { class: 'act-t' }, title), h('div', { class: 'act-b' }, body)));
+      return h('div', { class: 'act-card' },
+        h('div', { class: 'row between' }, h('b', {}, `明天（${day}）要做什么`), mv?.status === 'ok' ? h('span', { class: 'zone-pill z' + mv.thermometer.zone }, `温度 ${mv.thermometer.zone_name} ${fmtPct(mv.thermometer.b20, 0, false)}`) : null),
+        mv?.portfolio?.health?.status === '警告' ? h('div', { class: 'alert bad small mt-s' }, '⚠ ETF 规则：', mv.portfolio.health.text) : null,
+        line('📊', '宽基 ETF', etfActs == null ? '市场温度计算中…' : etfActs.length ? etfActs.join('；') + '（开盘按市价成交，高开低开都一样）' : '5 个指数都没有买卖信号，不操作',
+          () => { location.hash = '#/market'; }),
+        line('📈', '个股', buys.length ? buys.map(c => `${c.name} 开盘买${c.op?.planned_shares ? ' ' + c.op.planned_shares + ' 股' : ''}（止损 ${fmtPrice(c.stop_price)}）`).join('；') + ' —— 点这里看高开 / 低开各买多少'
+          : (run?.is_stale ? '这份清单已过期，等今天收盘后的新清单' : '今天没有符合条件的股票，不买'),
+          buys.length ? () => { S.sel = buys[0].symbol; showDetail(ctx, buys[0].symbol); } : null),
+        line('💼', '持仓', must ? `${must} 只需要处理（止损 / 止盈 / 上移止损）—— 点这里看` : '没有需要处理的持仓', () => { location.hash = '#/portfolio'; }),
+        d.account?.equity ? null : h('div', { class: 'tiny', style: 'margin-top:6px;color:var(--warn)' }, '还没填账户资金：在下方清单上方填一次，就能算出具体股数'));
+    }
 
     function render() {
       clear(el);
       const d = S.data, run = d.run;
       if (!brief.firstChild) brief.append(S.mv ? marketBrief(S.mv) : h('div', { class: 'mkt-brief hint' }, h('span', { class: 'spinner' }), ' 市场温度…'));
-      el.append(brief, statusBar(d, S.jobs, S.health, ctx, recompute), tabsBar());
+      el.append(actionCard(d), wide() ? null : brief, statusBar(d, S.jobs, S.health, ctx, recompute), tabsBar());
       if (d._stale) el.append(h('div', { class: 'alert warn', style: 'margin:10px 16px' }, '后端未连接：显示的是最近一次缓存快照（数据延迟）'));
       if (S.tab === 'list') renderList(d);
       else if (S.tab === 'exec') renderExec(d);
@@ -71,7 +111,7 @@ export const screener = {
 
     function renderList(d) {
       const run = d.run;
-      if (!run) { el.append(emptyNoRun(d, ctx, load)); return; }
+      if (!run) { el.append(emptyNoRun(d, ctx, load, S.jobs)); return; }
       if (!run.official && !S.preview) {
         el.append(h('div', { style: 'padding:16px' },
           h('div', { class: 'alert bad' }, h('b', {}, '数据完整性闸门未通过，不生成观察清单。'),
@@ -201,14 +241,15 @@ export const screener = {
     }
 
     async function renderFilter() {
-      const F = S.filter ||= { min_rps20: 80, min_vol_ratio: '', max_atr_pct: '', above_ma50: true, ma20_gt_ma50: true, breakout20: false, max_dist_52w_high: '', min_amount_wan: '', sort: 'rps_20' };
+      const F = S.filter ||= { min_rps20: '', min_vol_ratio: '', max_atr_pct: '', above_ma50: true, ma20_gt_ma50: false, breakout20: false, max_dist_52w_high: '', min_amount_wan: '', sort: 'lowrisk' };
       const num = (k, label, ph) => h('label', { class: 'f' }, label, h('input', { type: 'number', step: 'any', placeholder: ph || '', value: F[k], oninput: e => { F[k] = e.target.value; } }));
       const chk = (k, label) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: F[k] ? true : null, onchange: e => { F[k] = e.target.checked; } }), label);
       const out = h('div', {});
       el.append(h('div', { style: 'padding:12px 16px' },
         h('p', { class: 'hint' }, '漏斗之外的手动补充：按第三章指标自定义组合筛选（当前交易池 L2）。'),
+        h('div', { class: 'alert warn small mb-s' }, h('b', {}, '先看证据：'), 'A 股横截面检验（约 1000 只 × 6 年，样本内外一致）里，近期涨得多（RPS、20 日涨幅高）、换手高、波动大的股票，之后平均反而更弱；冷门、平稳的股票更强。所以默认按「低换手 + 低波动」排序，不再默认要求 RPS20 ≥ 80。'),
         h('div', { class: 'grid c2' }, num('min_rps20', 'RPS20 ≥'), num('min_vol_ratio', '量比 ≥'), num('max_atr_pct', 'ATR% ≤（百分数）'), num('max_dist_52w_high', '距52周高 ≤（%）'), num('min_amount_wan', '20日均成交额 ≥（万元）'),
-          h('label', { class: 'f' }, '排序', h('select', { onchange: e => { F.sort = e.target.value; } }, [['rps_20', 'RPS20'], ['rps_60', 'RPS60'], ['vol_ratio', '量比'], ['ret_20', '20日涨幅']].map(([v, l]) => h('option', { value: v, selected: F.sort === v ? true : null }, l))))),
+          h('label', { class: 'f' }, '排序', h('select', { onchange: e => { F.sort = e.target.value; } }, [['lowrisk', '低换手 + 低波动（推荐）'], ['rps_20', 'RPS20'], ['rps_60', 'RPS60'], ['vol_ratio', '量比'], ['ret_20', '20日涨幅']].map(([v, l]) => h('option', { value: v, selected: F.sort === v ? true : null }, l))))),
         h('div', { class: 'row wrap mt-s' }, chk('above_ma50', '收盘 > MA50'), chk('ma20_gt_ma50', 'MA20 > MA50'), chk('breakout20', '突破 20 日高点')),
         h('div', { class: 'row mt' }, h('button', { class: 'btn primary', onclick: run }, '筛选')), out));
       async function run() {
@@ -251,13 +292,25 @@ export const screener = {
     }
 
     await load();
+    if (!ctx.currentSymbol) showOverview();
     ctx.onEnter = load;
   },
 };
 
 function kvEl(k, v, cls = '') { return h('div', { class: 'kv' }, h('span', { class: 'k' }, k), h('span', { class: 'v num ' + cls }, v)); }
 
-function emptyNoRun(d, ctx, reload) {
+function emptyNoRun(d, ctx, reload, jobs) {
+  const noData = jobs ? !jobs.has_data : /初始化/.test(d.message || '');
+  if (noData) {
+    const step = (n, title, body, action) => h('div', { class: 'onb-step' }, h('span', { class: 'onb-n' }, n), h('div', {}, h('b', {}, title), h('div', { class: 'small muted' }, body), action));
+    return h('div', { class: 'onboard' }, h('h2', {}, '欢迎使用 👋'), h('p', { class: 'hint' }, '三步开始：'),
+      step('1', '初始化数据', 'A 股全市场 10 年日线，约 6~9 小时；想先试用可以只随机拉 100 只（几分钟）。可以随时中断，下次接着下。',
+        h('a', { class: 'btn sm primary mt-s', href: '#/settings' }, '去设置页初始化')),
+      step('2', '填账户资金', '例如 100000。软件按它算每只股票买多少股、每个指数投多少钱；每笔碰到止损最多亏资金的 0.75%。',
+        h('a', { class: 'btn sm mt-s', href: '#/portfolio' }, '去持仓页填写')),
+      step('3', '每天收盘后看这里', '软件会自动更新数据、选股、体检持仓。最上方的「明天要做什么」告诉你第二天开盘该做什么。', null),
+      h('p', { class: 'hint mt' }, '详细说明见项目目录里的 README.md（使用手册）。'));
+  }
   return h('div', { class: 'empty' }, h('div', { class: 'big' }, '还没有观察清单'), h('div', {}, d.message || ''),
     h('div', { class: 'row', style: 'justify-content:center;margin-top:12px' },
       h('button', { class: 'btn primary', onclick: async () => {

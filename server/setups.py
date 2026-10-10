@@ -85,6 +85,11 @@ def detect_all(feat: Features, params: dict | None = None, enabled: list[str] | 
     return out
 
 
+def _xrank(df: pd.DataFrame, member: pd.DataFrame | None) -> pd.DataFrame:
+    x = df.where(member) if member is not None else df
+    return x.rank(axis=1, pct=True) * 100
+
+
 def apply_cooldown(sig: pd.DataFrame, days: int) -> pd.DataFrame:
     """同一标的触发后 days 个交易日内不重复出信号（5.4.1）。"""
     a = sig.to_numpy(dtype=bool)
@@ -110,9 +115,19 @@ def merge_setups(sigs: dict[str, pd.DataFrame]) -> tuple[pd.DataFrame, pd.DataFr
     return any_sig, primary
 
 
-def score_frame(feat: Features, weights: dict | None = None) -> pd.DataFrame:
-    """综合打分（第一阶段保持简单）：各因子截面分位的加权和，初始等权；缺失分量跳过。
-    只有通过 6.6.1 检验的因子才应加入——初始仅 RPS（强度）与行业强弱两个「打分项」（5.4）。"""
+def score_frame(feat: Features, weights: dict | None = None, method: str | None = None) -> pd.DataFrame:
+    """候选综合分（0~100，越高越优先）。
+    lowrisk（默认）：低换手 + 低波动各占一半——A 股横截面单因子检验（2 组抽样、样本内 2018~2022 / 样本外 2023~）中，
+      20 日平均换手率、ATR% 的 Rank IC 都稳定为负（-0.05 ~ -0.11），即越冷门、越平稳的股票之后越强；
+    momentum（旧）：RPS 强度 + 行业强弱——同一检验里两者也都是负 IC，按它排序等于把最可能跑输的排在前面，保留仅作对照。"""
+    fcfg = settings.cfg()["funnel"]
+    method = method or fcfg.get("score_method", "lowrisk")
+    F = feat.f
+    if method == "lowrisk" and "turnover_ma20" in F:
+        member = F["rps_20"].notna() if "rps_20" in F else None          # rps 只在当日交易池 L2 内计算：借它的非空标记当成员
+        lo_turn = 100 - _xrank(F["turnover_ma20"], member)
+        lo_vol = 100 - _xrank(F["atr_pct"], member)
+        return (lo_turn.fillna(50) + lo_vol.fillna(50)) / 2
     fcfg = settings.cfg()["funnel"]
     w_rps = (weights or {}).get("rps", fcfg["rps"]["weight"])
     w_ind = (weights or {}).get("industry", fcfg["industry_strength"]["weight"])

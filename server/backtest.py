@@ -149,7 +149,7 @@ class BtContext:
         if not f["industry_score"] and not f["rps_score"]:
             return None
         w = {"rps": 1.0 if f["rps_score"] else 0.0, "industry": 1.0 if f["industry_score"] else 0.0}
-        return setups.score_frame(self.feat, w).to_numpy(dtype=np.float64)
+        return setups.score_frame(self.feat, w, f.get("score_method")).to_numpy(dtype=np.float64)
 
     # ---- 单笔交易退出路径（纯函数）----
     def trade_path(self, j: int, e: int, fill: float, stop0: float, st: dict, with_stops: bool = False) -> dict:

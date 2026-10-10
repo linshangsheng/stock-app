@@ -115,6 +115,7 @@ def compute_features(panel: Panel, l2: pd.DataFrame | None = None, bench_close: 
         F[f"vol_ma{n}"] = vol.rolling(n, min_periods=_mp(n, vr)).mean()
     F["amt_ma5"] = amt.rolling(5, min_periods=_mp(5, vr)).mean()
     F["amt_ma20"] = amt.rolling(20, min_periods=_mp(20, vr)).mean()
+    F["turnover_ma20"] = panel.turnover.astype(np.float32).rolling(20, min_periods=_mp(20, vr)).mean()   # 20 日平均换手率（关注度 / 拥挤度）
     base = vol.rolling(20, min_periods=_mp(20, vr)).mean().shift(1)         # 不含当日
     F["vol_ratio"] = vol / base
 

@@ -17,11 +17,11 @@ export function planCard(s, onSaved) {
   const tp = s.take_profit ? h('div', {}, h('b', {}, '止盈：'), '买入后挂条件单，涨到 ', h('b', { class: 'num' }, fmtPrice(s.take_profit)),
     `（按参考价估算；实际 = 你的买入价 × ${(1 + s.take_profit_pct).toFixed(2)}）全部卖出；没涨到就按「持仓」页每天更新的移动止损走`) : null;
   const rows = s.open_plan.map(r => h('tr', { class: r.shares === 0 ? 'no' : '' },
-    h('td', { style: 'white-space:nowrap' }, r.case), h('td', { class: 'num', style: 'white-space:nowrap' }, r.open),
-    h('td', {}, r.action),
-    h('td', { class: 'num r' }, r.shares == null ? '—' : r.shares ? `${r.shares} 股` : '不买'),
-    h('td', { class: 'num r' }, r.shares ? money(r.cost) : '—'),
-    h('td', { class: 'num r' }, r.shares ? money(r.max_loss) : '—')));
+    h('td', { class: 'c-case', style: 'white-space:nowrap' }, r.case), h('td', { class: 'num c-open', style: 'white-space:nowrap' }, r.open),
+    h('td', { class: 'c-act' }, r.action),
+    h('td', { class: 'num r c-n', 'data-label': '买 ' }, r.shares == null ? '—' : r.shares ? `${r.shares} 股` : '不买'),
+    h('td', { class: 'num r c-cost', 'data-label': '约花 ' }, r.shares ? money(r.cost) : '—'),
+    h('td', { class: 'num r c-loss', 'data-label': '最多亏 ' }, r.shares ? money(r.max_loss) : '—')));
   let eq = '';
   const acctBox = o ? h('div', { class: 'tiny muted mt-s' }, `按账户资金 ${money(acct.equity)}、每笔最多亏 ${fmtPct(acct.risk_per_trade, 2, false)}（${money((acct.equity || 0) * (acct.risk_per_trade || 0))}）计算。`, h('a', { href: '#/portfolio' }, '修改'))
     : h('div', { class: 'alert info small mt-s' }, h('b', {}, '填账户资金，表里就会出现具体股数：'),

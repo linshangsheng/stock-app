@@ -22,13 +22,13 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import backup, backtest, datasource_events as ev_mod, db, ingest, markets, features as feats, market_calendar as mc, portfolio, quality, scanner, settings, \
-    selection, throttle, universe
+    selection, setups, throttle, universe
 from .datasource_cn import get_source
 from .jobs import manager
 from .panel import load_panel
 
 ROOT = settings.ROOT
-app = FastAPI(title="股票 App 本地后端", version="0.3")
+app = FastAPI(title="股票 App 本地后端", version="0.6.0")
 
 
 # ---- 工具 ---------------------------------------------------------------------
@@ -125,7 +125,7 @@ BUILD_ID = _build_id()
 
 @app.get("/api/ping")
 def ping():
-    return {"ok": True, "version": app.version, "build": BUILD_ID, "auth_required": bool(settings.cfg()["server"].get("token")),
+    return {"ok": True, "version": app.version, "build": BUILD_ID, "disk_build": _build_id(), "auth_required": bool(settings.cfg()["server"].get("token")),
             "datasource": settings.cfg()["datasource"], "demo": {"CN": markets.is_demo("CN"), "US": markets.is_demo("US")}}
 
 
@@ -331,9 +331,12 @@ def analysis(body: dict = Body(default={}), market: str = "CN"):
     need("ma20_gt_ma50", lambda v: row("ma20_ma50") > 1)
     need("breakout20", lambda v: F["close"].loc[last] > F["hh20"].loc[last])
     need("min_amount_wan", lambda v: row("amt_ma20") >= float(v) * 1e4)
-    sort = body.get("sort", "rps_20")
-    sort = sort if sort in F else "rps_20"
-    syms = row(sort)[m].sort_values(ascending=False).head(int(body.get("limit", 200))).index
+    sort = body.get("sort", "lowrisk")
+    if sort == "lowrisk":                                   # 低换手 + 低波动（与候选排序同一口径）
+        key = setups.score_frame(ctx["feat"], method="lowrisk").loc[last]
+    else:
+        key = row(sort if sort in F else "rps_20")
+    syms = key[m].sort_values(ascending=False).head(int(body.get("limit", 200))).index
     items = []
     for s in syms:
         items.append({"symbol": s, "name": ctx["names"].get(s, s), "industry": ctx["industry"].get(s) if len(ctx["industry"]) else None,

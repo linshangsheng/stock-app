@@ -94,13 +94,13 @@ def test_index_tomorrow_close_threshold_matches_engine(demo_env):
         br = mv.load_breadth(c)
         i = d["indices"][0]
         px = mv._index_px(c, i["symbol"])
-    holding = i["trend"]["holding"]
-    lvl = i["next_open"]["exit_close" if holding else "buy_close"]
+    rule_on = i["trend"]["rule_on"]                      # 均线规则本身的状态（轮动只决定能不能持有，不改变点位）
+    lvl = i["next_open"]["exit_close" if rule_on else "buy_close"]
     got = []
     for cl in (lvl * 0.999, lvl * 1.001):
         nxt = pd.DataFrame({"open": [cl], "high": [cl], "low": [cl], "close": [cl]}, index=["2099-01-01"])
         sim = mv.simulate(pd.concat([px, nxt]), pd.concat([br["b20"], pd.Series([0.5], index=["2099-01-01"])]))
-        got.append(int(sim["trend"].iloc[-1]))
+        got.append(int(sim["trend_rule"]))
     assert got == [0, 1]
 
 
@@ -118,3 +118,30 @@ def test_market_view_allocation_follows_account(demo_env):
     assert al["etf_amount"] == 70000 and al["stock_amount"] == 30000 and al["stock_max_positions"] == 2
     assert al["per_index"] == round(70000 / n, 2) and al["trend_amount"] == al["washout_amount"] == round(70000 / n / 2, 2)
     assert all(i["hold_amount"] == round(al["per_index"] * i["position"], 2) for i in d["indices"])
+
+
+
+def test_rotation_only_top_k_hold_trend_sleeve(demo_env):
+    """轮动：同一天最多只有 top_k 个指数持有趋势仓；名次超出 top_k 的不持有。"""
+    from server import db, market_view as mv, settings
+    with db.market_db("CN") as c:
+        mv.ensure_breadth(c, "CN")
+    mv._cache.clear()
+    d = mv.build("CN")
+    k = settings.cfg()["market_view"]["index_rule"]["trend"]["top_k"]
+    holders = [i for i in d["indices"] if i["trend"]["holding"]]
+    assert len(holders) <= k and all(i["trend"]["rank"] <= k for i in holders)
+    assert d["portfolio"]["oos"]["rule"] and d["portfolio"]["oos"]["hold"]
+
+
+
+def test_portfolio_health_and_yearly_table(demo_env):
+    """组合分年度表与策略健康度：当前回撤不会比历史最大回撤更深（同一条权益曲线）；状态只取三档之一。"""
+    from server import db, market_view as mv
+    with db.market_db("CN") as c:
+        mv.ensure_breadth(c, "CN")
+    mv._cache.clear()
+    pf = mv.build("CN")["portfolio"]
+    hl = pf["health"]
+    assert hl["status"] in ("正常", "注意", "警告") and hl["max_dd"] <= hl["current_dd"] <= 0
+    assert pf["by_year"] and all({"year", "rule", "hold"} <= set(y) for y in pf["by_year"])

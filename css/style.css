@@ -8,7 +8,7 @@
   --radius: 8px; --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.05);
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
   --mono: ui-monospace, "SF Mono", Consolas, monospace;
-  --nav-w: 92px; --list-w: 392px;
+  --nav-w: 92px; --list-w: 432px;
 }
 :root[data-theme="dark"] {
   --bg: #0f1115; --panel: #161920; --panel-2: #1c2029; --line: rgba(255,255,255,.09); --line-strong: rgba(255,255,255,.18);
@@ -115,7 +115,7 @@ tbody tr:hover { background: var(--panel); } tr.sel { background: var(--accent-s
 .score { font-weight: 700; font-size: 15px; font-variant-numeric: tabular-nums; }
 .pill-state { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; }
 .pill-state.NORMAL { background: var(--good-soft); color: var(--green); } .pill-state.CAUTION, .pill-state.UNKNOWN { background: var(--warn-soft); color: var(--warn); } .pill-state.DEFENSIVE { background: var(--bad-soft); color: var(--red); }
-.status-bar { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.status-bar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 12px; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
 .status-bar .cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; } .status-bar .cell .k { font-size: 11px; color: var(--muted); }
 .status-bar .cell .v { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .level-must { border-left: 3px solid var(--red); } .level-watch { border-left: 3px solid var(--warn); } .level-ok { border-left: 3px solid transparent; }
@@ -159,6 +159,8 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; margi
   .form-grid { grid-template-columns: 1fr; } .quote-head .price { font-size: 26px; }
   .mobile-top { display: flex !important; }
 }
+.desk-top { padding: 8px 16px 0; } @media (max-width: 899px) { .desk-top { display: none; } }
+.overview .mkt-brief { border: 1px solid var(--line); border-radius: 10px; }
 .mobile-top { display: none; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 .flash { animation: flash .9s ease-out; } @keyframes flash { from { background: var(--accent-soft); } to { background: transparent; } }
@@ -177,6 +179,19 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; margi
 .live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--green); margin-right: 4px; animation: pulse 1.5s infinite; }
 @keyframes pulse { 50% { opacity: .3; } }
 @media (max-width: 860px) { .nav a { font-size: 10px; } .heat { grid-template-columns: 1fr 52px 52px 52px; } .heat .hide-m { display: none; } }
+
+/* 首次使用引导 */
+.onboard { padding: 18px 16px; }
+.onb-step { display: flex; gap: 12px; padding: 12px; margin-top: 10px; border: 1px solid var(--line); border-radius: 10px; }
+.onb-n { flex: 0 0 26px; height: 26px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+
+/* 首页「明天要做什么」行动卡 */
+.act-card { margin: 10px 12px 4px; padding: 10px 12px; border-radius: 10px; background: var(--accent-soft); border: 1px solid var(--line); }
+.act-line { display: flex; gap: 8px; padding: 6px 4px; border-radius: 6px; margin-top: 4px; }
+.act-line.link { cursor: pointer; } .act-line.link:hover { background: rgba(255,255,255,.55); }
+:root[data-theme="dark"] .act-line.link:hover { background: rgba(255,255,255,.06); }
+.act-ico { font-size: 16px; line-height: 20px; }
+.act-t { font-size: 11px; color: var(--muted); } .act-b { font-size: 13px; font-weight: 600; }
 
 /* 观察清单：每只股票的操作计算 */
 .op-line { margin-top: 5px; padding: 5px 8px; border-radius: 6px; background: var(--accent-soft); font-size: 12px; line-height: 1.6; }
@@ -199,6 +214,8 @@ table.mini.plan tr.no td { color: var(--muted); }
 .zone-pill.z0 { background: var(--z0); } .zone-pill.z1 { background: var(--z1); } .zone-pill.z2 { background: var(--z2); color: var(--text); } .zone-pill.z3 { background: var(--z3); } .zone-pill.z4 { background: var(--z4); }
 .mkt-brief { padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--bg); }
 .mkt-brief .k { font-size: 11px; color: var(--muted); }
+.rank-badge { display: inline-block; margin-left: 4px; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 700; background: var(--panel-2); color: var(--muted); vertical-align: 1px; }
+.rank-badge.ok { background: var(--good-soft); color: var(--green); }
 .big-num { font-size: 34px; font-weight: 800; line-height: 1.1; font-variant-numeric: tabular-nums; }
 table.mini { width: 100%; border-collapse: collapse; font-size: 12px; }
 table.mini th { font-weight: 500; color: var(--muted); font-size: 11px; text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line); }
@@ -207,3 +224,21 @@ table.mini th.r, table.mini td.r { text-align: right; }
 table.mini tr.hl td { background: var(--accent-soft); }
 details.card > summary { cursor: pointer; list-style: none; } details.card > summary::-webkit-details-marker { display: none; }
 details.card > summary::before { content: '▸ '; color: var(--muted); } details.card[open] > summary::before { content: '▾ '; }
+
+/* 窄屏（手机）：「明天怎么操作」表改成每行一张小卡片，文字不再被挤成一字一行 */
+@media (max-width: 640px) {
+  table.mini.plan thead { display: none; }
+  table.mini.plan tr { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 2px 8px; padding: 7px 2px; border-bottom: 1px solid var(--line); }
+  table.mini.plan td { border: 0; padding: 0; text-align: left !important; white-space: normal !important; }
+  table.mini.plan td.c-case { grid-column: 1 / 3; font-weight: 600; }
+  table.mini.plan td.c-open { grid-column: 3; text-align: right !important; }
+  table.mini.plan td.c-act { grid-column: 1 / -1; color: var(--muted); }
+  table.mini.plan td.c-n::before, table.mini.plan td.c-cost::before, table.mini.plan td.c-loss::before { content: attr(data-label); color: var(--muted); font-weight: 400; }
+  table.mini.plan td.c-n { font-weight: 700; }
+  .plan-card { margin: 10px 10px 0; padding: 10px; }
+  .act-card { margin: 8px 8px 4px; }
+}
+@media (max-width: 899px) {
+  .nav a span { white-space: nowrap; font-size: 10.5px; }
+  #fs-btn { display: none; }                      /* 手机上不需要全屏按钮 */
+}

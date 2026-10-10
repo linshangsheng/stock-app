@@ -138,8 +138,9 @@ def atr(px: pd.DataFrame, n: int = 20) -> pd.Series:
     return tr.ewm(alpha=1.0 / n, adjust=False, min_periods=n).mean()
 
 
-def simulate(px: pd.DataFrame, b20: pd.Series, rule: dict | None = None) -> dict:
-    """逐日模拟规则仓位（收盘决定，次日开盘执行）。px: index=date，含 open/high/low/close。"""
+def simulate(px: pd.DataFrame, b20: pd.Series, rule: dict | None = None, trend_ok: pd.Series | None = None) -> dict:
+    """逐日模拟规则仓位（收盘决定，次日开盘执行）。px: index=date，含 open/high/low/close。
+    trend_ok：每个交易日收盘时这个指数是否允许持有趋势仓（风格轮动：近 N 日涨幅排前 k）；为空 = 一直允许（与不轮动完全相同）。"""
     rule = rule or mv_cfg()["index_rule"]
     tr_c, wo = rule["trend"], rule["washout"]
     c = px["close"].to_numpy(dtype=float)
@@ -152,6 +153,8 @@ def simulate(px: pd.DataFrame, b20: pd.Series, rule: dict | None = None) -> dict
     pt, pw = np.zeros(T), np.zeros(T)
     trades: list[dict] = []
     t_on, w_on = False, False
+    t_rule = False                                     # 均线规则本身的状态（不含轮动限制）
+    ok = (trend_ok.reindex(px.index).fillna(False).to_numpy(dtype=bool) if trend_ok is not None else np.ones(T, dtype=bool))
     t_open: dict = {}
     w_open: dict = {}
 
@@ -164,12 +167,18 @@ def simulate(px: pd.DataFrame, b20: pd.Series, rule: dict | None = None) -> dict
     for t in range(T):
         # 趋势仓：带 ±band 滞回，减少来回打脸
         if not np.isnan(ma[t]):
-            if not t_on and c[t] > ma[t] * (1 + tr_c["band"]):
-                t_on = True
-                t_open = {"signal_date": dates[t], "entry_date": dates[t + 1] if t + 1 < T else None, "entry": o[t + 1] if t + 1 < T else None}
-            elif t_on and c[t] < ma[t] * (1 - tr_c["band"]):
-                t_on = False
-                _close("trend", t_open, t, f"收盘跌破 MA{tr_c['ma']}×{1 - tr_c['band']:.2f}")
+            if not t_rule and c[t] > ma[t] * (1 + tr_c["band"]):
+                t_rule = True
+            elif t_rule and c[t] < ma[t] * (1 - tr_c["band"]):
+                t_rule = False
+        want = t_rule and bool(ok[t])
+        if want and not t_on:
+            t_on = True
+            t_open = {"signal_date": dates[t], "entry_date": dates[t + 1] if t + 1 < T else None, "entry": o[t + 1] if t + 1 < T else None}
+        elif t_on and not want:
+            t_on = False
+            _close("trend", t_open, t, f"收盘跌破 MA{tr_c['ma']}×{1 - tr_c['band']:.2f}" if not t_rule
+                   else f"近 {tr_c.get('mom_days', 20)} 日强弱掉出前 {tr_c.get('top_k')}")
         # 抄底仓：全 A 宽度冰点买入，止损 / 宽度过热 / 持有期满离场
         if w_on:
             held = t - w_open["t"]
@@ -194,6 +203,7 @@ def simulate(px: pd.DataFrame, b20: pd.Series, rule: dict | None = None) -> dict
         pt[t], pw[t] = float(t_on), float(w_on)
     pos = tr_c["weight"] * pt + wo["weight"] * pw
     return {"pos": pd.Series(pos, index=px.index), "trend": pd.Series(pt, index=px.index), "washout": pd.Series(pw, index=px.index),
+            "trend_rule": t_rule,
             "trades": trades, "open": {"trend": t_open if t_on else None, "washout": w_open if w_on else None},
             "ma": pd.Series(ma, index=px.index), "atr": pd.Series(a, index=px.index)}
 
@@ -240,13 +250,29 @@ def _index_px(conn, symbol: str) -> pd.DataFrame:
     return df.dropna(subset=["close"])
 
 
-def analyze_index(conn, item: dict, br: pd.DataFrame) -> dict | None:
+def rotation_ranks(conn, items: list[dict], rule: dict) -> pd.DataFrame | None:
+    """每个交易日收盘时各宽基近 N 日涨幅的名次（1 = 最强）。top_k 为 0 时返回 None（不轮动）。"""
+    tr_c = rule["trend"]
+    if not tr_c.get("top_k"):
+        return None
+    n = int(tr_c.get("mom_days", 20))
+    closes = pd.DataFrame({it["symbol"]: _index_px(conn, it["symbol"])["close"] for it in items}).sort_index()
+    mom = closes / closes.shift(n) - 1
+    return mom.rank(axis=1, ascending=False, method="first")
+
+
+def analyze_index(conn, item: dict, br: pd.DataFrame, ranks: pd.DataFrame | None = None) -> dict | None:
     px = _index_px(conn, item["symbol"])
     if len(px) < 120:
         return None
     c = mv_cfg()
     rule = c["index_rule"]
-    sim = simulate(px, br["b20"], rule)
+    k_top = rule["trend"].get("top_k") or 0
+    rank_s = ranks[item["symbol"]] if ranks is not None and item["symbol"] in ranks else None
+    trend_ok = (rank_s <= k_top) if rank_s is not None and k_top else None
+    sim = simulate(px, br["b20"], rule, trend_ok)
+    rank_now = None if rank_s is None or rank_s.reindex(px.index).isna().iloc[-1] else int(rank_s.reindex(px.index).iloc[-1])
+    n_idx = int(ranks.shape[1]) if ranks is not None else None
     last = px.index[-1]
     cl = float(px["close"].iloc[-1])
     ma = float(sim["ma"].iloc[-1])
@@ -260,14 +286,20 @@ def analyze_index(conn, item: dict, br: pd.DataFrame) -> dict | None:
 
     # 趋势仓
     t_open = sim["open"]["trend"]
-    trend = {"holding": t_open is not None, "ma": ma, "buy_level": ma * (1 + tr_c["band"]), "exit_level": ma * (1 - tr_c["band"])}
+    trend = {"holding": t_open is not None, "ma": ma, "buy_level": ma * (1 + tr_c["band"]), "exit_level": ma * (1 - tr_c["band"]),
+             "rank": rank_now, "top_k": k_top or None, "n_rank": n_idx, "rule_on": bool(sim.get("trend_rule")),
+             "rank_ok": (rank_now is not None and rank_now <= k_top) if k_top else True}
+    rank_txt = f"近 {tr_c.get('mom_days', 20)} 日强弱第 {rank_now}/{n_idx}" if rank_now else ""
     if t_open:
         trend.update(since=t_open["signal_date"], entry=t_open["entry"],
                      dist_exit=cl / trend["exit_level"] - 1,
-                     text=f"持有中：收盘跌破 {trend['exit_level']:.0f}（MA{tr_c['ma']}×{1 - tr_c['band']:.2f}，距今 {cl / trend['exit_level'] - 1:+.1%}）则次日开盘卖出")
+                     text=f"持有中：收盘跌破 {trend['exit_level']:.0f}（MA{tr_c['ma']}×{1 - tr_c['band']:.2f}，距今 {cl / trend['exit_level'] - 1:+.1%}）则次日开盘卖出"
+                          + (f"；{rank_txt}，掉出前 {k_top} 也卖出" if k_top and rank_now else ""))
     else:
         trend.update(dist_buy=trend["buy_level"] / cl - 1,
-                     text=f"空仓：收盘站上 {trend['buy_level']:.0f}（MA{tr_c['ma']}×{1 + tr_c['band']:.2f}，距今 {trend['buy_level'] / cl - 1:+.1%}）则次日开盘买入")
+                     text=(f"空仓：{rank_txt}，不在前 {k_top}——要先进入前 {k_top}，" if k_top and rank_now and rank_now > k_top else "空仓：")
+                          + (f"已站上均线条件，等强弱进入前 {k_top}" if trend["rule_on"] else
+                             f"收盘站上 {trend['buy_level']:.0f}（MA{tr_c['ma']}×{1 + tr_c['band']:.2f}，距今 {trend['buy_level'] / cl - 1:+.1%}）则次日开盘买入"))
     # 抄底仓
     w_open = sim["open"]["washout"]
     wash = {"holding": w_open is not None, "enter_below": wo["enter_below"], "exit_above": wo["exit_above"], "b20": b_now}
@@ -307,8 +339,13 @@ def analyze_index(conn, item: dict, br: pd.DataFrame) -> dict | None:
         tmr.append({"when": "明天开盘", "level": "高开 / 低开多少都一样", "then": "不操作：规则只看收盘，开盘跳空不改变信号"})
     if t_open:
         tmr.append({"when": "明天收盘", "level": f"< {exit_close:.0f}（较今收 {exit_close / cl - 1:+.1%}）", "then": "趋势仓卖出信号 → 后天开盘卖"})
+        if k_top and rank_now:
+            tmr.append({"when": "明天收盘", "level": f"近 {tr_c.get('mom_days', 20)} 日涨幅掉出前 {k_top}（今天第 {rank_now}）", "then": "趋势仓卖出 → 后天开盘卖"})
     else:
-        tmr.append({"when": "明天收盘", "level": f"≥ {buy_close:.0f}（较今收 {buy_close / cl - 1:+.1%}）", "then": f"趋势仓买入信号 → 后天开盘买（{tr_c['weight']:.0%}）"})
+        cond = f"≥ {buy_close:.0f}（较今收 {buy_close / cl - 1:+.1%}）" if not trend["rule_on"] else "均线条件已满足"
+        if k_top and rank_now:
+            cond += f"，且近 {tr_c.get('mom_days', 20)} 日涨幅排前 {k_top}（今天第 {rank_now}）"
+        tmr.append({"when": "明天收盘", "level": cond, "then": f"趋势仓买入信号 → 后天开盘买（{tr_c['weight']:.0%}）"})
     if w_open:
         tmr.append({"when": "明天收盘", "level": f"< {w_open['stop']:.0f}（较今收 {w_open['stop'] / cl - 1:+.1%}）", "then": "抄底仓止损 → 后天开盘卖"})
         tmr.append({"when": "明天收盘", "level": f"全A站上20日线比例 > {wo['exit_above']:.0%}", "then": "抄底仓止盈 → 后天开盘卖"})
@@ -341,7 +378,45 @@ def analyze_index(conn, item: dict, br: pd.DataFrame) -> dict | None:
             "trend": trend, "washout": wash, "position": pos_now, "next_open": next_open,
             "position_text": {0.0: "规则仓位 0%：空仓等待", 0.5: "规则仓位 50%", 1.0: "规则仓位 100%（趋势仓 + 抄底仓）"}.get(round(pos_now, 2), f"规则仓位 {pos_now:.0%}"),
             "stats": stats, "recent_trades": sim["trades"][-6:][::-1],
-            "curve": _curve(r_rule, r_hold)}
+            "curve": _curve(r_rule, r_hold), "_r": (r_rule, r_hold)}
+
+
+def _portfolio_stats(series: list[tuple[pd.Series, pd.Series]]) -> dict:
+    """所有宽基等分资金的组合：规则 vs 一直持有（轮动是组合层面的决定，单个指数的成绩要放在组合里看）。"""
+    if not series:
+        return {}
+    rule = pd.concat([a for a, _ in series], axis=1).sort_index().dropna(how="all").fillna(0).mean(axis=1)
+    hold = pd.concat([b for _, b in series], axis=1).sort_index().reindex(rule.index).fillna(0).mean(axis=1)
+    cut = rule.index[int(len(rule) * 0.6)]
+    out = {"n": len(series)}
+    for part, m in (("all", slice(None)), ("is", rule.index < cut), ("oos", rule.index >= cut)):
+        out[part] = {"rule": perf(rule[m]), "hold": perf(hold[m])}
+    out["curve"] = _curve(rule, hold, step=5)
+    # 分年度（压力测试：熊市少亏多少、牛市少赚多少）
+    years = []
+    for y in sorted({d[:4] for d in rule.index}):
+        a, b = rule[rule.index.str.startswith(y)], hold[hold.index.str.startswith(y)]
+        if len(a) < 20:
+            continue
+        ea, eb = (1 + a).cumprod(), (1 + b).cumprod()
+        years.append({"year": y, "rule": round(float(ea.iloc[-1] - 1), 4), "rule_dd": round(float((ea / ea.cummax() - 1).min()), 4),
+                      "hold": round(float(eb.iloc[-1] - 1), 4), "hold_dd": round(float((eb / eb.cummax() - 1).min()), 4),
+                      "partial": len(a) < 200})
+    out["by_year"] = years
+    # 策略健康度：当前回撤与 10 年回测里最大的回撤比较。超过历史最大 = 出现了回测里没见过的情况，规则可能在失效
+    eq = (1 + rule).cumprod()
+    dd = eq / eq.cummax() - 1
+    cur, worst = float(dd.iloc[-1]), float(dd.min())
+    ratio = cur / worst if worst < 0 else 0.0
+    if cur <= worst * 1.0001 and cur < 0:
+        status, text = "警告", "当前回撤已达到或超过 10 年回测里的最大回撤：出现了没见过的情况，建议暂停新开仓、复查规则"
+    elif ratio >= 0.6:
+        status, text = "注意", "当前回撤已接近历史最大回撤的六成以上：属于回测里出现过的范围，按规则执行，但别加大投入"
+    else:
+        status, text = "正常", "当前回撤在历史正常范围内"
+    out["health"] = {"status": status, "text": text, "current_dd": round(cur, 4), "max_dd": round(worst, 4), "max_dd_date": dd.idxmin(),
+                     "peak_date": eq.idxmax()}
+    return out
 
 
 def _curve(r_rule: pd.Series, r_hold: pd.Series, step: int = 5) -> list[dict]:
@@ -438,9 +513,11 @@ def build(market: str) -> dict:
                 return {"status": "computing", "message": "正在计算全市场宽度历史（首次约 1~2 分钟），请稍后刷新"}
         br = load_breadth(conn)
         ev = zone_evidence(conn, br, market)
-        items = [x for x in (analyze_index(conn, it, br) for it in index_list(market)) if x]
+        ranks = rotation_ranks(conn, index_list(market), mv_cfg()["index_rule"])
+        items = [x for x in (analyze_index(conn, it, br, ranks) for it in index_list(market)) if x]
+        portfolio = _portfolio_stats([x.pop("_r") for x in items])
         data = {"status": "ok", "date": br.index[-1], "data_asof": asof, "thermometer": thermometer(br, ev), "evidence": ev,
-                "indices": items, "rotation": rotation(items), "rule": mv_cfg()["index_rule"],
+                "indices": items, "portfolio": portfolio, "rotation": rotation(items), "rule": mv_cfg()["index_rule"],
                 "computed_at": datetime.now().isoformat(timespec="seconds"),
                 "note": "规则输出，不是投资建议。阈值来自 A 股 2016~2026 年数据的样本内选参、样本外检验；样本外抄底交易笔数少，统计不确定性大。"
                         + ("美股使用同一套阈值，未经美股数据单独验证。" if market == "US" else "")}

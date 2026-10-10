@@ -68,7 +68,13 @@ TP_VARIANTS = [
     ("止盈：3R 全部卖出", {"exits": {"take_profit_r": 3.0}}),
     ("止盈：+10% 全部卖出", {"exits": {"take_profit_pct": 0.10}}),
 ]
-GROUPS = {"default": VARIANTS, "oversold": OVERSOLD_VARIANTS, "gap": GAP_VARIANTS, "tp": TP_VARIANTS}
+# 第五组：候选排序方式
+SCORE_VARIANTS = [
+    ("排序：低换手 + 低波动（新）", {"funnel": {"score_method": "lowrisk"}}),
+    ("排序：RPS + 行业强弱（旧）", {"funnel": {"score_method": "momentum"}}),
+    ("排序：不排序（按信号先后）", {"funnel": {"rps_score": False, "industry_score": False}}),
+]
+GROUPS = {"score": SCORE_VARIANTS, "default": VARIANTS, "oversold": OVERSOLD_VARIANTS, "gap": GAP_VARIANTS, "tp": TP_VARIANTS}
 KEYS = ("n", "expectancy_r", "win_rate", "payoff", "total_return", "cagr", "max_drawdown", "sharpe", "avg_hold_days")
 
 

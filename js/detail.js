@@ -114,7 +114,9 @@ export async function showDetail(ctx, symbol, meta = {}) {
 function adjLabel(k) { return `前复权 · ${k.period === 'W' ? '周线' : '日线'} · 数据截止 ${k.data_asof || k.asof_bar}`; }
 
 function topBar(ctx) {
-  return h('div', { class: 'mobile-top' }, h('button', { class: 'btn sm', onclick: () => ctx.setMobileDetail(false) }, '← 返回'));
+  return h('div', {},
+    h('div', { class: 'mobile-top' }, h('button', { class: 'btn sm', onclick: () => ctx.setMobileDetail(false) }, '← 返回')),
+    ctx.showOverview ? h('div', { class: 'desk-top' }, h('button', { class: 'btn sm ghost', onclick: () => ctx.showOverview() }, '← 市场概览')) : null);
 }
 
 function kv(k, v, cls = '') { return h('div', { class: 'kv' }, h('span', { class: 'k' }, k), h('span', { class: 'v num ' + cls }, v)); }

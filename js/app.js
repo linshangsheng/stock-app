@@ -145,13 +145,21 @@ setInterval(checkAlerts, 60000);
 
 // ---------- 软件更新提示：后端重启后若代码 / 配置变了，顶部出现「点这里刷新」（不必 Ctrl+F5）----------
 let _build = null;
-const updBar = h('div', { class: 'alert info', id: 'update-bar', hidden: true, style: 'position:fixed;left:50%;top:8px;transform:translateX(-50%);z-index:71;box-shadow:var(--shadow);display:flex;gap:10px;align-items:center' },
-  h('span', {}, '软件已更新'), h('button', { class: 'btn sm primary', onclick: () => location.reload() }, '点这里刷新'));
+const updMsg = h('span', {}, '软件已更新');
+const updBtn = h('button', { class: 'btn sm primary', onclick: () => location.reload() }, '点这里刷新');
+const updBar = h('div', { class: 'alert info', id: 'update-bar', hidden: true, style: 'position:fixed;left:50%;top:8px;transform:translateX(-50%);z-index:71;box-shadow:var(--shadow);display:flex;gap:10px;align-items:center;max-width:92vw' },
+  updMsg, updBtn);
 document.body.append(updBar);
 async function checkUpdate() {
   try {
     const p = await api('/ping', { market: false, cache: false });
-    if (_build && p.build && p.build !== _build) updBar.hidden = false;
+    if (p.disk_build && p.build && p.disk_build !== p.build) {
+      // 磁盘上的代码比正在运行的后端新：只刷新页面不够，必须重启后端
+      updMsg.textContent = '软件文件已更新，需要重启后端才生效：任务管理器结束 Python，再双击「Stock App」';
+      updBtn.hidden = true; updBar.hidden = false;
+    } else if (_build && p.build && p.build !== _build) {
+      updMsg.textContent = '软件已更新'; updBtn.hidden = false; updBar.hidden = false;
+    }
     _build = _build || p.build;
   } catch { /* 后端未启动 */ }
 }
@@ -198,6 +206,7 @@ if (fsSupported) {
     const p = await api('/ping', { market: false, cache: false });
     _build = p.build || null;
     _demo = p.demo || {};
+    checkUpdate();
     refreshDemoBadge();
   } catch { /* 后端未启动：api.js 已触发离线提示 */ }
   await ctx.reloadWatch();
