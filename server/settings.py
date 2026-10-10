@@ -20,7 +20,7 @@ _cache: dict | None = None
 # 设置页允许修改的配置路径（白名单）；其余参数请直接编辑 config.yaml
 USER_EDITABLE = {
     "costs": None, "execution": None, "exits": None, "portfolio": None, "funnel": None, "setups": None,
-    "universe": None, "gate": None, "regime": None, "backup": None, "jobs": None, "features": None, "markets": None, "init": None, "market_view": None, "allocation": None,
+    "universe": None, "gate": None, "regime": None, "backup": None, "jobs": None, "features": None, "markets": None, "init": None, "market_view": None, "allocation": None, "factor_portfolio": None,
 }
 
 

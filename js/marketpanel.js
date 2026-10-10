@@ -58,7 +58,8 @@ export function marketBrief(d) {
   const al = d.allocation;
   const allocLine = al ? h('div', { class: 'tiny mt-s' }, h('b', {}, '资金方案：'),
     `总资金 ${money(al.equity)} → 宽基 ETF ${money(al.etf_amount)}（${d.indices.length} 个指数各 ${money(al.per_index)}：趋势仓 ${money(al.trend_amount)} + 抄底仓 ${money(al.washout_amount)}）；`,
-    `个股 ${money(al.stock_amount)}（最多同时 ${al.stock_max_positions} 只，每笔最多亏 ${money(al.equity * al.stock_risk_per_trade)}）`) : null;
+    al.factor_amount ? `低风险组合 ${money(al.factor_amount)}（${al.factor_n} 只）；` : '',
+    al.stock_amount ? `个股波段 ${money(al.stock_amount)}（最多同时 ${al.stock_max_positions} 只，每笔最多亏 ${money(al.equity * al.stock_risk_per_trade)}）` : '个股波段不分钱（只观察）') : null;
   return h('div', { class: 'mkt-brief' },
     h('div', { class: 'row between' },
       h('div', { class: 'row', style: 'gap:8px' }, h('span', { class: 'k' }, '市场温度'), zonePill(t.zone, t.zone_name),
@@ -121,7 +122,9 @@ export function marketFull(d) {
       h('br'), `③ 短期止盈：趋势仓的离场位（MA${tw.ma}×${(1 - tw.band).toFixed(2)}）会随均线上移，本身就是移动止盈；抄底仓表格里给出 +5% / +10% 的「参考止盈位」——回测中给抄底仓加固定止盈反而少赚（恐慌后的反弹常走得更远），所以规则不采用，想落袋为安时再参考。`,
       h('br'), h('b', {}, '④ 高开 / 低开怎么办：'), '指数规则所有判断都在收盘时做（站上 / 跌破均线、宽度、止损都看收盘价）。所以：今天收盘出了买入 / 卖出信号，明天就在开盘时买 / 卖，不论高开还是低开（回测就是按次日开盘价执行的）；没有信号，明天不论怎么开盘都不用操作；盘中跌破止损价也先不卖，等收盘确认，收盘仍在止损价下方才在下一个交易日开盘卖。宽基指数开盘跳空通常很小（近两年中位数约 0.2%~0.4%）。',
       h('br'), h('span', { class: 'muted' }, '规则仓位是「计划投入这个指数的资金」的比例，不是总资产比例。规则输出，不构成投资建议。'),
-      d.allocation ? h('div', { class: 'mt-s' }, h('b', {}, '按你的资金：'), `宽基 ETF 一共 ${money(d.allocation.etf_amount)}，每个指数 ${money(d.allocation.per_index)}（趋势仓 ${money(d.allocation.trend_amount)}、抄底仓 ${money(d.allocation.washout_amount)}）；个股 ${money(d.allocation.stock_amount)}，最多同时 ${d.allocation.stock_max_positions} 只。`) : null),
+      d.allocation ? h('div', { class: 'mt-s' }, h('b', {}, '按你的资金：'), `宽基 ETF 一共 ${money(d.allocation.etf_amount)}，每个指数 ${money(d.allocation.per_index)}（趋势仓 ${money(d.allocation.trend_amount)}、抄底仓 ${money(d.allocation.washout_amount)}）；`,
+        d.allocation.factor_amount ? `低风险组合 ${money(d.allocation.factor_amount)}（${d.allocation.factor_n} 只，见「选股 → 低风险组合」）；` : '',
+        d.allocation.stock_amount ? `个股波段 ${money(d.allocation.stock_amount)}，最多同时 ${d.allocation.stock_max_positions} 只。` : '个股波段默认不分钱（只观察）。') : null),
     d.portfolio?.oos ? h('div', { class: 'alert ok mt-s small' }, h('b', {}, `${d.portfolio.n} 个宽基等分资金的组合（规则要整体看）：`),
       `样本外 ${d.portfolio.oos.rule.from} ~ ${d.portfolio.oos.rule.to}：规则 年化 ${fmtPct(d.portfolio.oos.rule.cagr, 1)}、最大回撤 ${fmtPct(d.portfolio.oos.rule.mdd, 1)}、Sharpe ${d.portfolio.oos.rule.sharpe}；`,
       `一直持有 ${fmtPct(d.portfolio.oos.hold.cagr, 1)}、${fmtPct(d.portfolio.oos.hold.mdd, 1)}、${d.portfolio.oos.hold.sharpe}。单个指数的成绩受轮动影响，参考意义有限。`) : null,

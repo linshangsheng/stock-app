@@ -219,6 +219,13 @@ class JobManager:
                 h = portfolio.health(market, day)
                 res["health"] = h.get("summary", {}).get("levels")
                 res["outcomes"] = scanner.backfill_outcomes(market)
+                if market == "CN":
+                    self._set(message="低风险组合：更新回测证据")
+                    try:
+                        from . import factor_portfolio as fpm
+                        res["factor_summary"] = fpm.refresh_summary(market)
+                    except Exception as e:  # noqa: BLE001 - 不影响主链
+                        res["factor_summary_error"] = str(e)[:200]
                 self._set(message="事件 / 公告 / 新闻（候选 + 持仓，缓存 6 小时）")
                 res["events"] = self._events_for_candidates(market, scan, h)
                 self._set(message="备份")

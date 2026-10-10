@@ -6,8 +6,8 @@ import { showDetail } from './detail.js';
 import { parseTrades, fileToText } from './parse.js';
 import { toCSV } from './parse.js';
 
-const SETUPS = [['', '未标注'], ['breakout', '突破'], ['pullback', '回踩'], ['vcp', '波动收缩突破'], ['oversold', '强势超跌']];
-const EXIT_REASONS = ['止损', '移动止盈', '时间退出', '信号反转', '事件', '主观'];
+const SETUPS = [['', '未标注'], ['factor', '低风险组合（不设止损）'], ['vcp', '波动收缩突破'], ['breakout', '突破'], ['pullback', '回踩'], ['oversold', '强势超跌']];
+const EXIT_REASONS = ['止损', '止盈', '移动止盈', '时间退出', '信号反转', '事件', '调仓', '主观'];
 const LEVEL = { must: ['必须处理', 'bad'], watch: ['关注', 'warn'], ok: ['正常', 'ok'] };
 const REGIME = { NORMAL: '正常', CAUTION: '谨慎', DEFENSIVE: '防守', UNKNOWN: '未知' };
 
@@ -36,7 +36,12 @@ export function openTradeForm(pre = {}) {
   const exitLabel = h('label', { class: 'f' }, '出场原因（必选）', h('select', { onchange: e => { f.exit_reason = e.target.value; } },
     [['', '请选择'], ...EXIT_REASONS.map(x => [x, x])].map(([v, l]) => h('option', { value: v, selected: f.exit_reason === v ? true : null }, l))));
   const sideSel = h('select', { onchange: e => { f.side = e.target.value; sync(); } }, [['buy', '买入'], ['sell', '卖出']].map(([v, l]) => h('option', { value: v, selected: f.side === v ? true : null }, l)));
-  function sync() { stopLabel.style.display = f.side === 'buy' ? '' : 'none'; exitLabel.style.display = f.side === 'sell' ? '' : 'none'; }
+  const fpNote = h('div', { class: 'alert info small', style: 'grid-column:1/-1' }, '低风险组合：不设止损止盈，调仓日按名单买卖（卖出原因选「调仓」）。');
+  function sync() {
+    const fac = f.setup === 'factor';
+    stopLabel.style.display = f.side === 'buy' && !fac ? '' : 'none'; exitLabel.style.display = f.side === 'sell' ? '' : 'none';
+    fpNote.style.display = fac ? '' : 'none';
+  }
   const body = h('div', {}, err,
     pre.name ? h('p', { class: 'hint' }, `${pre.name}（${code(pre.symbol)}）` + (pre.signal_run_id ? ` · 来自观察清单 ${pre.signal_run_id.slice(-10)}` : '')) : null,
     h('div', { class: 'form-grid' },
@@ -44,8 +49,8 @@ export function openTradeForm(pre = {}) {
       inp('symbol', '股票代码', 'text', { ph: state.market === 'US' ? 'AAPL' : '600519 / sh.600519', attrs: pre.symbol ? { readonly: true } : {} }), inp('price', '成交价', 'number'),
       inp('qty', state.market === 'US' ? '数量（股，整股）' : '数量（股）', 'number'), inp('fee', '费用（留空按配置费率估算）', 'number'),
       stopLabel, exitLabel,
-      h('label', { class: 'f' }, '形态标签', h('select', { onchange: e => { f.setup = e.target.value; } }, SETUPS.map(([v, l]) => h('option', { value: v, selected: f.setup === v ? true : null }, l)))),
-      inp('note', '备注（出场原因选「主观」须写）', 'text'), sizeHint));
+      h('label', { class: 'f' }, '类型 / 形态', h('select', { onchange: e => { f.setup = e.target.value; sync(); } }, SETUPS.map(([v, l]) => h('option', { value: v, selected: f.setup === v ? true : null }, l)))),
+      inp('note', '备注（出场原因选「主观」须写）', 'text'), fpNote, sizeHint));
   sync(); riskHint();
   const m = modal(f.side === 'buy' ? '记录买入' : '记录卖出', body, [{ label: '取消' }, { label: '保存', primary: true, onclick: async () => {
     err.hidden = true;
@@ -55,7 +60,7 @@ export function openTradeForm(pre = {}) {
       if (!sym) throw new Error('股票代码无法识别');
       const payload = { symbol: sym, date: f.date, side: f.side, price: +f.price, qty: +f.qty, setup: f.setup || null, note: f.note || null };
       if (f.fee !== '') payload.fee = +f.fee;
-      if (f.side === 'buy') { if (f.initial_stop !== '') payload.initial_stop = +f.initial_stop; payload.signal_run_id = pre.signal_run_id; payload.planned_trigger = pre.planned_trigger; payload.regime = pre.regime; }
+      if (f.side === 'buy') { if (f.initial_stop !== '' && f.setup !== 'factor') payload.initial_stop = +f.initial_stop; payload.signal_run_id = pre.signal_run_id; payload.planned_trigger = pre.planned_trigger; payload.regime = pre.regime; }
       else payload.exit_reason = f.exit_reason;
       await post('/trades', payload);
       toast('已记录', 'ok'); pre.onDone?.(); return true;
@@ -102,16 +107,20 @@ export const portfolio = {
       if (!ps.length) { el.append(h('div', { class: 'empty' }, h('div', { class: 'big' }, '当前没有持仓'), h('div', {}, '在「选股」页点「成交了」或点上方「录入交易」登记买入；也可 CSV 批量导入历史交易。'))); return; }
       for (const p of ps) {
         const [lt, lc] = LEVEL[p.level];
+        const fac = p.setup === 'factor';
         el.append(h('button', { class: 'list-item level-' + p.level, onclick: () => { [...el.querySelectorAll('.list-item')].forEach(x => x.classList.remove('sel')); showDetail(ctx, p.symbol); } },
-          h('div', { class: 't1' }, h('span', { class: 'name' }, p.name), h('span', { class: 'code num' }, code(p.symbol)), h('span', { class: 'badge ' + lc }, lt), h('span', { class: 'grow' }),
+          h('div', { class: 't1' }, h('span', { class: 'name' }, p.name), h('span', { class: 'code num' }, code(p.symbol)),
+            h('span', { class: 'badge ' + (fac ? 'accent' : 'gray'), title: fac ? '低风险组合：不设止损止盈，调仓日按名单处理' : '个股波段：按止损 / 止盈执行' }, fac ? '组合' : '波段'),
+            h('span', { class: 'badge ' + lc }, lt), h('span', { class: 'grow' }),
             h('span', { class: 'num', style: 'font-weight:600' }, fmtPrice(p.price)), h('span', { class: 'num ' + dirClass(p.pnl_pct), style: 'min-width:62px;text-align:right;font-weight:600' }, fmtPct(p.pnl_pct))),
+          fac ? h('div', { class: 't2 num' }, h('span', {}, `${p.qty} 股 · 成本 ${fmtPrice(p.avg_cost)}`), h('span', {}, `持有 ${p.hold_days ?? '—'} 日`), h('span', { class: 'muted' }, '不设止损止盈，调仓日按名单处理')) :
           h('div', { class: 't2 num' }, h('span', {}, `${p.qty} 股 · 成本 ${fmtPrice(p.avg_cost)}`), h('span', { class: dirClass(p.r_multiple) }, p.r_multiple != null ? `${fmtSigned(p.r_multiple, 2)}R` : ''),
             h('span', {}, `持有 ${p.hold_days ?? '—'} 日`), h('span', {}, `止损 ${fmtPrice(p.current_stop)}${p.stop_dist_atr != null ? `（${fmtNum(p.stop_dist_atr, 1)} ATR）` : ''}`),
             p.take_profit ? h('span', { title: '短期止盈：买入价 × 1.10，盘中涨到即全部卖出（挂条件单）' }, `止盈 ${fmtPrice(p.take_profit)}${p.take_profit_dist != null ? `（还差 ${fmtPct(p.take_profit_dist, 1)}）` : ''}`) : null),
           (p.reasons || []).length ? h('div', { class: 'small', style: 'margin-top:3px;color:' + (p.level === 'must' ? 'var(--red)' : 'var(--warn)') }, p.reasons.join('；')) : null,
           p.level !== 'ok' || p.new_stop ? h('div', { class: 'small', style: 'margin-top:2px' }, '▸ ' + p.action) : null,
           (p.flags || []).length ? h('div', { class: 'small muted' }, p.flags.join('；')) : null,
-          h('div', { class: 'row', style: 'margin-top:4px' }, h('span', { class: 'btn sm', onclick: e => { e.stopPropagation(); openTradeForm({ symbol: p.symbol, name: p.name, side: 'sell', price: p.price, qty: p.qty, onDone: load }); } }, '记录卖出'))));
+          h('div', { class: 'row', style: 'margin-top:4px' }, h('span', { class: 'btn sm', onclick: e => { e.stopPropagation(); openTradeForm({ symbol: p.symbol, name: p.name, side: 'sell', price: p.price, qty: p.qty, setup: p.setup || '', exit_reason: fac ? '调仓' : '', onDone: load }); } }, '记录卖出'))));
       }
     }
 
@@ -138,9 +147,9 @@ export const portfolio = {
       box.append(body);
       if (sm) {
         body.append(h('h2', { style: 'margin-bottom:8px' }, '组合概览'), h('div', { class: 'grid c4' },
-          kv('总市值', fmtMoney(sm.market_value)), kv('组合风险占用', sm.risk_cap ? `${fmtMoney(sm.risk_to_stop)} / ${fmtMoney(sm.risk_cap)}` : fmtMoney(sm.risk_to_stop)),
-          kv('剩余空位', `${sm.slots_free} / ${sm.max_positions}`), kv('市场环境', REGIME[sm.regime] || sm.regime)),
-          h('p', { class: 'hint mt-s' }, sm.regime_note + (sm.risk_used_pct != null ? `　· 风险占用 ${fmtPct(sm.risk_used_pct, 0, false)}` : '')),
+          kv('总市值', fmtMoney(sm.market_value)), kv('波段风险占用', sm.risk_cap ? `${fmtMoney(sm.risk_to_stop)} / ${fmtMoney(sm.risk_cap)}` : fmtMoney(sm.risk_to_stop)),
+          kv('波段剩余空位', `${sm.slots_free} / ${sm.max_positions}`), kv('低风险组合', sm.factor_count ? `${fmtMoney(sm.factor_value)}（${sm.factor_count} 只）` : '未建仓')),
+          h('p', { class: 'hint mt-s' }, `个股开仓闸门：${REGIME[sm.regime] || sm.regime}（${sm.regime_note}）` + (sm.risk_used_pct != null ? `　· 波段风险占用 ${fmtPct(sm.risk_used_pct, 0, false)}` : '') + '。组合持仓不占风险额度，也不受闸门影响。'),
           Object.keys(sm.industry_share || {}).length ? h('div', { class: 'row wrap mt-s' }, Object.entries(sm.industry_share).map(([k, v]) => h('span', { class: 'tag gray' }, `${k} ${fmtPct(v, 0, false)}`))) : null);
         const np = S.health.next_day_params || [];
         body.append(h('div', { class: 'card mt' }, h('div', { class: 'card-title' }, h('h3', {}, '次日执行参数（在券商端设置条件单）'),

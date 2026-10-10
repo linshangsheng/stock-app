@@ -64,7 +64,12 @@ def delete_position(market: str, pid: int) -> None:
         p.execute("DELETE FROM positions WHERE id=? AND market=?", (pid, market))
 
 
-EXIT_REASONS = ("止损", "止盈", "移动止盈", "时间退出", "信号反转", "事件", "主观")
+EXIT_REASONS = ("止损", "止盈", "移动止盈", "时间退出", "信号反转", "事件", "调仓", "主观")
+FACTOR = "factor"            # 低风险组合的持仓（setup 标记）：不设止损止盈，调仓日按名单买卖
+
+
+def is_factor(p: dict) -> bool:
+    return (p.get("setup") or "") == FACTOR
 
 
 def record_trade(market: str, t: dict) -> dict:
@@ -93,12 +98,12 @@ def record_trade(market: str, t: dict) -> dict:
                           "entry_value=COALESCE(entry_value,0)+? WHERE id=?", (nq, avg, qty, fee, price * qty, pos["id"]))
                 pid = pos["id"]
             else:
-                if t.get("initial_stop") in (None, ""):
-                    raise ValueError("买入请填写初始止损价（用于计算 R 倍数）")
+                if t.get("initial_stop") in (None, "") and t.get("setup") != FACTOR:
+                    raise ValueError("买入请填写初始止损价（用于计算 R 倍数）；低风险组合的买入请把类型选为「低风险组合」（不设止损）")
                 cur = p.execute(
                     "INSERT INTO positions(market,symbol,open_date,qty,avg_cost,initial_stop,current_stop,setup,init_qty,fees,"
                     "signal_run_id,regime,planned_trigger,entry_value,note) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (market, sym, d, qty, price, t["initial_stop"], t["initial_stop"], t.get("setup"), qty, fee,
+                    (market, sym, d, qty, price, t.get("initial_stop") or None, t.get("initial_stop") or None, t.get("setup"), qty, fee,
                      t.get("signal_run_id"), t.get("regime"), t.get("planned_trigger"), price * qty, t.get("note")))
                 pid = cur.lastrowid
         else:
@@ -178,7 +183,7 @@ def _health(market: str, day: str | None, save: bool) -> dict:
             _sc._ensure_earnings_safe(conn, syms, market)                      # 持仓的财报日历按需补齐
             earn = _sc._earnings_blocked(conn, day, 5, cfg["funnel"]["risk_exclusion"].get("projection_margin_days", 0)) if nxt_days else set()
             for p in positions:
-                out_pos.append(_health_one(conn, p, day, panel, F, imap, earn, ex))
+                out_pos.append(_health_factor(conn, p, day, panel, imap, earn) if is_factor(p) else _health_one(conn, p, day, panel, F, imap, earn, ex))
             for o in out_pos:
                 if o.get("price"):
                     mv_total += o["market_value"]
@@ -193,6 +198,8 @@ def _health(market: str, day: str | None, save: bool) -> dict:
     factor = 1.0 if regime == "NORMAL" else (0.0 if regime == "DEFENSIVE" else pcfg["caution_position_factor"])
     risk_cap = equity * pcfg["max_total_risk"] * (factor if factor else 1) if equity else None
     max_pos = max(1, int(round(pcfg["max_positions"] * (factor or 1))))
+    swing = [p for p in positions if not is_factor(p)]
+    fac_rows = [o for o in out_pos if o.get("setup") == FACTOR]
     levels = {"must": 0, "watch": 0, "ok": 0}
     for o in out_pos:
         levels[o["level"]] += 1
@@ -200,7 +207,8 @@ def _health(market: str, day: str | None, save: bool) -> dict:
         "market_value": round(mv_total, 2), "risk_to_stop": round(risk_total, 2), "risk_cap": None if risk_cap is None else round(risk_cap, 2),
         "risk_used_pct": None if not risk_cap else round(risk_total / risk_cap, 3),
         "industry_share": {k: round(v / mv_total, 3) for k, v in ind_value.items()} if mv_total else {},
-        "slots_free": max(0, max_pos - len(positions)), "max_positions": max_pos, "regime": regime,
+        "slots_free": max(0, max_pos - len(swing)), "max_positions": max_pos, "regime": regime,
+        "swing_count": len(swing), "factor_count": len(fac_rows), "factor_value": round(sum(o.get("market_value") or 0 for o in fac_rows), 2),
         "regime_note": {"NORMAL": "正常开仓", "CAUTION": "谨慎：仓位上限减半，只做最强候选", "DEFENSIVE": "防守：不开新仓",
                         "UNKNOWN": "基准数据缺失：按谨慎处理"}.get(regime, ""),
         "levels": levels,
@@ -211,6 +219,30 @@ def _health(market: str, day: str | None, save: bool) -> dict:
     out_pos.sort(key=lambda o: rank[o["level"]])
     return {"market": market, "date": day, "data_asof": day, "positions": out_pos, "summary": summary,
             "next_day_params": exec_list, "account": acct}
+
+
+def _health_factor(conn, p: dict, day: str, panel, imap, earn: set) -> dict:
+    """低风险组合的持仓：只估值，不做止损 / 止盈 / 时间退出（规则就是调仓日按名单买卖，回测也是这样验证的）。"""
+    sym = p["symbol"]
+    name = (conn.execute("SELECT name FROM securities WHERE symbol=?", (sym,)).fetchone() or [sym])[0]
+    o = {"id": p["id"], "symbol": sym, "name": name, "qty": p["qty"], "avg_cost": p["avg_cost"], "setup": FACTOR,
+         "open_date": p["open_date"], "industry": imap.get(sym) if len(imap) else None, "initial_stop": None, "current_stop": None,
+         "reasons": [], "flags": [], "level": "ok", "action": "低风险组合：不设止损止盈，调仓日按名单处理", "new_stop": None,
+         "risk_to_stop": 0.0, "take_profit": None}
+    if sym not in panel.symbols or day not in panel.dates:
+        o.update(level="watch", flags=["无行情数据"], action="检查数据 / 是否停牌或退市")
+        return o
+    i = panel.dates.get_loc(day)
+    price = float(panel.raw["close"][sym].iloc[i])
+    if int(panel.status[sym].iloc[i]) == 0 or price != price:
+        o.update(level="watch", flags=["停牌"], action="停牌中：复牌后再按名单处理（回测里卖不出就顺延）")
+        return o
+    held = int(panel.dates[(panel.dates >= p["open_date"]) & (panel.dates <= day)].size) - 1 if p["open_date"] else 0
+    o.update(price=round(price, 2), market_value=round(price * p["qty"], 2), pnl=round((price - p["avg_cost"]) * p["qty"], 2),
+             pnl_pct=round(price / p["avg_cost"] - 1, 4) if p["avg_cost"] else None, hold_days=held)
+    if sym in earn:
+        o["flags"].append("未来 5 个交易日内有财报披露（组合不因此操作）")
+    return o
 
 
 def _health_one(conn, p: dict, day: str, panel, F: dict, imap, earn: set, ex: dict) -> dict:

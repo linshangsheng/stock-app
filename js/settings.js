@@ -12,8 +12,8 @@ export const settingsView = {
     const el = ctx.pageEl; clear(el); stopPoll();
     const wrap = h('div', { class: 'pane-body page' });
     el.append(wrap);
-    const secData = h('div', { class: 'card' }), secPool = h('div', { class: 'card mt' }), secCost = h('div', { class: 'card mt' }), secLook = h('div', { class: 'card mt' }), secBackup = h('div', { class: 'card mt' }), secStorage = h('div', { class: 'card mt' }), secAbout = h('div', { class: 'card soft mt' });
-    wrap.append(h('h1', { class: 'mb' }, '设置'), secData, secPool, secCost, secLook, secBackup, secStorage, secAbout);
+    const secData = h('div', { class: 'card' }), secAlloc = h('div', { class: 'card mt' }), secPool = h('div', { class: 'card mt' }), secCost = h('div', { class: 'card mt' }), secLook = h('div', { class: 'card mt' }), secBackup = h('div', { class: 'card mt' }), secStorage = h('div', { class: 'card mt' }), secAbout = h('div', { class: 'card soft mt' });
+    wrap.append(h('h1', { class: 'mb' }, '设置'), secData, secAlloc, secPool, secCost, secLook, secBackup, secStorage, secAbout);
 
     let cfg = {};
     try { cfg = await get('/settings', {}, { cache: false }); } catch (e) { wrap.append(h('div', { class: 'alert bad' }, e.message)); return; }
@@ -140,6 +140,35 @@ export const settingsView = {
         } }, '保存')));
     }
 
+    // ---------- 资金方案（A 股）：宽基 ETF / 低风险组合 / 个股波段 ----------
+    function renderAlloc() {
+      clear(secAlloc);
+      if (state.market !== 'CN') { secAlloc.hidden = true; return; }
+      secAlloc.hidden = false;
+      const al = cfg.allocation || {}, fpc = cfg.factor_portfolio || {};
+      const F = { etf: Math.round((al.etf ?? 0.7) * 100), factor: Math.round((al.factor ?? 0.3) * 100), n: fpc.n ?? 10 };
+      const swingEl = h('span', { class: 'v num' });
+      const upd = () => { const sw = 100 - F.etf - F.factor; swingEl.textContent = sw >= 0 ? sw + '%' : '超过 100%'; swingEl.style.color = sw < 0 ? 'var(--red)' : ''; };
+      const inp = (k, label, hint, step = 5) => h('label', { class: 'f' }, label, h('input', { type: 'number', min: 0, max: k === 'n' ? 50 : 100, step, value: F[k], oninput: e => { F[k] = +e.target.value; upd(); } }), hint ? h('span', { class: 'tiny faint' }, hint) : null);
+      secAlloc.append(h('div', { class: 'card-title' }, h('h2', {}, '资金方案'), h('span', { class: 'hint' }, '总资金在「持仓」页填写')),
+        h('div', { class: 'alert info mb small' }, h('b', {}, '默认：宽基 ETF 70% + 低风险组合 30%，个股波段 0。'),
+          '10 万资金按 2018~2026 回测（整手、最低 5 元佣金都算上）：全程年化约 5.1%、最大回撤约 -12.5%，几个方案里 Sharpe 最高、回撤最小。',
+          'ETF 比例在 30%~70% 之间 Sharpe 差不多——能忍更大回撤、想多赚，可以多给组合（全部给组合：年化约 6.6%、回撤约 -23%）。',
+          '把个股波段加进来（1 只或 2 只）在各时段都没有更好，所以默认不分钱；想练手就把组合调小一点，剩下的就是波段的。'),
+        h('div', { class: 'grid c4' }, inp('etf', '宽基 ETF（%）', '择时规则，熊市自动空仓'), inp('factor', '低风险组合（%）', '每月调仓一次，不设止损'),
+          h('div', { class: 'kv' }, h('span', { class: 'k' }, '个股波段（剩下的）'), swingEl, h('span', { class: 'tiny faint' }, 'VCP 信号，按止损 / 止盈做')),
+          inp('n', '组合持有只数', '默认 10；组合资金 20 万以上可改 20', 1)),
+        h('div', { class: 'row mt' }, h('button', { class: 'btn primary', onclick: async () => {
+          if (F.etf < 0 || F.factor < 0 || F.etf + F.factor > 100) { toast('ETF 和组合合计不能超过 100%', 'bad'); return; }
+          if (!(F.n >= 3 && F.n <= 50)) { toast('组合只数请填 3~50', 'bad'); return; }
+          try {
+            cfg = await put('/settings', { allocation: { etf: F.etf / 100, factor: F.factor / 100 }, factor_portfolio: { n: Math.round(F.n) } });
+            toast('已保存：回到「选股」页即按新方案计算', 'ok'); renderAlloc();
+          } catch (e) { toast(e.message, 'bad'); }
+        } }, '保存'), h('span', { class: 'hint' }, '改只数后，组合的回测证据会在后台重算（约 1~2 分钟）。')));
+      upd();
+    }
+
     // ---------- 外观 / 口令 ----------
     function renderLook() {
       clear(secLook);
@@ -208,7 +237,7 @@ export const settingsView = {
           : h('p', { class: 'hint' }, 'L1 入库粗筛基于入库当天的快照，可能把「过去正常、如今已跌成低价」的股票筛掉，使回测偏乐观。全量初始化完成后运行：python -m server.cli l1-bias --sample 100（在数据库副本上抽样补拉被剔除股票的历史，比较含 / 不含的回测差异）。')));
     }
 
-    renderData(); renderPool().then(renderBias); renderCost(); renderLook(); renderBackup(); renderStorage();
+    renderData(); renderAlloc(); renderPool().then(renderBias); renderCost(); renderLook(); renderBackup(); renderStorage();
   },
   cleanup() { stopPoll(); },
 };

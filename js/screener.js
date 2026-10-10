@@ -1,10 +1,12 @@
 // 选股（默认首页，4.5.3）：状态条（数据完整性 / 市场环境 / run_id 与清单有效期 / 持仓告警）+ 今日观察清单（按形态分组）
-// + 次日执行清单（可复制到券商端设置条件单）+ 条件筛选面板 + 历史扫描回看。清单来自后端存档，前端不做任何计算。
+// + 低风险组合（定期调仓的名单与操作）+ 次日执行清单（可复制到券商端设置条件单）+ 条件筛选面板 + 历史扫描回看。
+// 清单来自后端存档，前端不做任何计算。
 import { get, post, put, state } from './api.js';
 import { h, clear, fmtPrice, fmtPct, fmtNum, fmtMoney, dirClass, code, toast, copyText, esc, shortDate, lotName } from './util.js';
 import { showDetail } from './detail.js';
 import { openTradeForm } from './portfolio.js';
 import { loadMarketView, marketBrief } from './marketpanel.js';
+import { loadFactorPlan, factorTab, factorLine, factorEvidenceBlock } from './factor.js';
 
 const REGIME = { NORMAL: ['正常', '正常开仓'], CAUTION: ['谨慎', '仓位上限减半，只做最强候选'], DEFENSIVE: ['防守', '不开新仓'], UNKNOWN: ['未知', '基准数据缺失，按谨慎处理'] };
 const SETUP_ORDER = ['oversold', 'vcp', 'breakout', 'pullback'];
@@ -31,6 +33,18 @@ export const screener = {
       } catch (e) { clear(el); el.append(h('div', { class: 'empty' }, h('div', { class: 'big' }, '无法加载'), e.message)); return; }
       S.data = d; S.jobs = jobs; S.health = health;
       render();
+      loadFp();
+    }
+
+    // 低风险组合：单独加载，不阻塞观察清单；回测证据在后台计算时每 20 秒刷新一次（最多 2 分钟多）
+    let fpTimer = null, fpTries = 0;
+    async function loadFp() {
+      clearTimeout(fpTimer);
+      try { S.fp = await loadFactorPlan(); } catch (e) { S.fp = { status: 'error', message: e.message }; }
+      if (S.data && document.body.contains(el)) render();
+      if (S.tab === 'factor' && !ctx.currentSymbol && document.body.contains(el)) showFpEvidence();
+      if (S.fp?.backtest?.status === 'computing' && fpTries++ < 8) fpTimer = setTimeout(() => { if (document.body.contains(el)) loadFp(); }, 20000);
+      else fpTries = 0;
     }
 
     // 市场温度 + 宽基指数规则：单独加载，不阻塞观察清单。
@@ -41,6 +55,7 @@ export const screener = {
       if (!wide()) return;
       ctx.currentSymbol = null; S.sel = null;
       [...el.querySelectorAll('.list-item.sel')].forEach(x => x.classList.remove('sel'));
+      S.rightEv?.destroy(); S.rightEv = null; S.right = 'overview';
       clear(ctx.detailEl);
       ctx.detailEl.append(h('div', { class: 'pane-body overview' },
         h('div', { class: 'row between mb' }, h('h2', {}, '市场概览'), h('a', { href: '#/market', class: 'small' }, '完整版（行情页）→')),
@@ -51,12 +66,25 @@ export const screener = {
           h('a', { href: '#/market' }, '分年度表现 →')) : null,
         h('p', { class: 'hint mt' }, '点左侧清单里的股票，这里会换成它的详情和「明天怎么操作」；点详情顶部的「← 市场概览」回到这里。')));
     }
-    ctx.showOverview = showOverview;
+    // 右侧（宽屏、没点开股票时）：「低风险组合」标签下显示组合的回测证据，其余标签显示市场概览
+    function showFpEvidence() {
+      if (!wide()) return;
+      ctx.currentSymbol = null; S.sel = null;
+      S.rightEv?.destroy();
+      clear(ctx.detailEl);
+      const b = factorEvidenceBlock(S.fp);
+      ctx.detailEl.append(h('div', { class: 'pane-body overview' },
+        h('div', { class: 'row between mb' }, h('h2', {}, '低风险组合 · 回测证据'), h('a', { href: '#', class: 'small', onclick: e => { e.preventDefault(); showOverview(); } }, '市场概览 →')), b.el));
+      requestAnimationFrame(() => b.init());
+      S.rightEv = b; S.right = 'factor';
+    }
+    const showRight = () => (S.tab === 'factor' && S.fp?.status === 'ok' ? showFpEvidence() : showOverview());
+    ctx.showOverview = showRight;
     (async () => {
       try { S.mv = await loadMarketView(); } catch (e) { S.mv = { status: 'error', message: e.message }; }
       clear(brief); brief.append(marketBrief(S.mv));
       if (S.data) render();
-      if (!ctx.currentSymbol) showOverview();
+      if (!ctx.currentSymbol && S.right !== 'factor') showRight();
     })();
 
     /** 「明天要做什么」：把宽基 ETF、个股、持仓三件事汇总成一张卡（数据都来自后端，前端只汇总展示）。 */
@@ -66,6 +94,8 @@ export const screener = {
       const etfActs = mv?.status === 'ok' ? mv.indices.filter(i => i.next_open?.actions?.length).map(i => `${i.name}：${i.next_open.actions.join('、')}`) : null;
       const buys = (d.candidates || []).filter(c => c.fit !== false && run?.official && !run?.is_stale);
       const must = S.health?.summary?.levels?.must ?? 0;
+      const fl = factorLine(S.fp), al = S.fp?.allocation;
+      const swing0 = al && al.swing === 0;
       const line = (icon, title, body, onclick) => h('div', { class: 'act-line' + (onclick ? ' link' : ''), onclick },
         h('span', { class: 'act-ico' }, icon), h('div', {}, h('div', { class: 'act-t' }, title), h('div', { class: 'act-b' }, body)));
       return h('div', { class: 'act-card' },
@@ -73,8 +103,9 @@ export const screener = {
         mv?.portfolio?.health?.status === '警告' ? h('div', { class: 'alert bad small mt-s' }, '⚠ ETF 规则：', mv.portfolio.health.text) : null,
         line('📊', '宽基 ETF', etfActs == null ? '市场温度计算中…' : etfActs.length ? etfActs.join('；') + '（开盘按市价成交，高开低开都一样）' : '5 个指数都没有买卖信号，不操作',
           () => { location.hash = '#/market'; }),
-        line('📈', '个股', buys.length ? buys.map(c => `${c.name} 开盘买${c.op?.planned_shares ? ' ' + c.op.planned_shares + ' 股' : ''}（止损 ${fmtPrice(c.stop_price)}）`).join('；') + ' —— 点这里看高开 / 低开各买多少'
-          : (run?.is_stale ? '这份清单已过期，等今天收盘后的新清单' : '今天没有符合条件的股票，不买'),
+        line('🧺', '低风险组合' + (al?.sleeve ? `（${fmtMoney(al.sleeve)}，${S.fp.params.n} 只）` : ''), fl.body, () => { S.tab = 'factor'; render(); if (!ctx.currentSymbol) showRight(); }),
+        line('📈', swing0 ? '个股波段（默认不分钱，只观察）' : '个股波段', buys.length ? buys.map(c => `${c.name}${swing0 ? '' : ' 开盘买' + (c.op?.planned_shares ? ' ' + c.op.planned_shares + ' 股' : '')}（止损 ${fmtPrice(c.stop_price)}）`).join('；') + (swing0 ? ' —— 想练手再看，点这里' : ' —— 点这里看高开 / 低开各买多少')
+          : (run?.is_stale ? '这份清单已过期，等今天收盘后的新清单' : '今天没有符合条件的股票'),
           buys.length ? () => { S.sel = buys[0].symbol; showDetail(ctx, buys[0].symbol); } : null),
         line('💼', '持仓', must ? `${must} 只需要处理（止损 / 止盈 / 上移止损）—— 点这里看` : '没有需要处理的持仓', () => { location.hash = '#/portfolio'; }),
         d.account?.equity ? null : h('div', { class: 'tiny', style: 'margin-top:6px;color:var(--warn)' }, '还没填账户资金：在下方清单上方填一次，就能算出具体股数'));
@@ -86,16 +117,24 @@ export const screener = {
       if (!brief.firstChild) brief.append(S.mv ? marketBrief(S.mv) : h('div', { class: 'mkt-brief hint' }, h('span', { class: 'spinner' }), ' 市场温度…'));
       el.append(actionCard(d), wide() ? null : brief, statusBar(d, S.jobs, S.health, ctx, recompute), tabsBar());
       if (d._stale) el.append(h('div', { class: 'alert warn', style: 'margin:10px 16px' }, '后端未连接：显示的是最近一次缓存快照（数据延迟）'));
+      S.fpView?.destroy(); S.fpView = null;
       if (S.tab === 'list') renderList(d);
+      else if (S.tab === 'factor') renderFactor();
       else if (S.tab === 'exec') renderExec(d);
       else if (S.tab === 'filter') renderFilter();
       else renderHistory();
     }
 
+    function renderFactor() {
+      const v = factorTab(S.fp, { onPick: sym => { S.sel = sym; S.rightEv?.destroy(); S.rightEv = null; S.right = 'detail'; showDetail(ctx, sym); }, reload: load, noEvidence: wide() });
+      S.fpView = v;
+      el.append(h('div', { style: 'padding:4px 12px 16px' }, v.el));
+    }
+
     function tabsBar() {
-      const tabs = [['list', '观察清单'], ['exec', '次日执行'], ['filter', '条件筛选'], ['hist', '历史回看']];
+      const tabs = [['list', '观察清单'], ['factor', '低风险组合'], ['exec', '次日执行'], ['filter', '条件筛选'], ['hist', '历史回看']];
       return h('div', { class: 'tabs', style: 'padding:0 8px;margin:0;align-items:center' }, ...tabs.map(([k, l]) =>
-        h('button', { class: S.tab === k ? 'on' : '', onclick: () => { S.tab = k; render(); } }, l)),
+        h('button', { class: S.tab === k ? 'on' : '', onclick: () => { const was = S.tab; S.tab = k; render(); if (!ctx.currentSymbol && (was === 'factor') !== (k === 'factor')) showRight(); } }, l)),
         null);
     }
 
@@ -133,12 +172,12 @@ export const screener = {
       if (!cands.length) {
         el.append(h('div', { class: 'empty' }, h('div', { class: 'big' }, '今日没有符合条件的候选'),
           h('div', {}, `交易池 ${sum.universe_l2 ?? '—'} 只，形态信号 ${sum.signals_today ?? 0} 个，风险剔除后 ${sum.n_after_exclusion ?? 0} 个。`), funnelNote(sum)),
-          evidenceNote(sum));
+          evidenceNote(sum, S.fp?.allocation));
         return;
       }
       el.append(accountBox(d), h('div', { class: 'small muted', style: 'padding:8px 16px' },
         `交易池 ${sum.universe_l2} 只 → 形态信号 ${sum.signals_today} → 风险剔除后 ${sum.n_after_exclusion} → 入选 ${cands.length}`));
-      el.append(evidenceNote(sum));
+      el.append(evidenceNote(sum, S.fp?.allocation));
       const groups = {};
       for (const c of cands) (groups[c.setup] ||= []).push(c);
       for (const g of SETUP_ORDER.filter(k => groups[k])) {
@@ -292,7 +331,7 @@ export const screener = {
     }
 
     await load();
-    if (!ctx.currentSymbol) showOverview();
+    if (!ctx.currentSymbol) showRight();
     ctx.onEnter = load;
   },
 };
@@ -321,13 +360,15 @@ function emptyNoRun(d, ctx, reload, jobs) {
 
 const RISK_NOTE = { breakout: '「突破」显著差于同日随机买入', pullback: '「回踩」显著差于同日随机买入', oversold: '「强势超跌」在完整成交规则下样本外为负' };
 /** 个股形态的回测证据（tools/calibrate.py，A 股 2018~2026 抽样）：让新手知道清单的可信度。 */
-function evidenceNote(sum) {
+function evidenceNote(sum, al) {
   const on = Object.keys(sum.by_setup || {});
   const risky = on.filter(k => k === 'breakout' || k === 'pullback' || k === 'oversold');
   return h('div', { class: 'alert ' + (risky.length ? 'warn' : 'info'), style: 'margin:6px 16px 10px;font-size:12px' },
     risky.length
       ? `注意：这份清单含「${risky.map(k => SETUP_LABEL[k]).join('、')}」。A 股回测（2018~2026 抽样）里，${risky.map(k => RISK_NOTE[k]).join('；')}——只建议观察，不建议照单下单。`
-      : '个股清单默认只用「波动收缩突破」：A 股 2018~2026 抽样回测里，样本内外的期望值都为正，但幅度小、未达统计显著。仓位宜小，严格按止损执行；新手可以优先参考上方的宽基 ETF 规则。');
+      : '个股清单默认只用「波动收缩突破」：A 股 2018~2026 抽样回测里，样本内外的期望值都为正，但幅度小、未达统计显著。仓位宜小，严格按止损执行。',
+    al && al.swing === 0 ? h('div', { style: 'margin-top:4px' }, h('b', {}, '默认资金方案不给个股波段分钱'),
+      `（宽基 ETF ${Math.round(al.etf * 100)}% + 低风险组合 ${Math.round(al.factor * 100)}%）：回测里把这部分钱放进「低风险组合」比做波段更好。这份清单只供观察、练手；想做的话到「设置 → 资金方案」给波段留一部分。`) : null);
 }
 
 function statusBar(d, jobs, health, ctx, recompute) {

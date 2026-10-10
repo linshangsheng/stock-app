@@ -43,8 +43,9 @@ class Panel:
                      dict(self.meta))
 
 
-def load_panel(conn, start: str | None = None, end: str | None = None, symbols: list[str] | None = None,
-               only_l1: bool = True, float32: bool = True, market: str = "CN") -> Panel:
+def load_frame(conn, start: str | None = None, end: str | None = None, symbols: list[str] | None = None,
+               only_l1: bool = True) -> pd.DataFrame:
+    """daily_bar 的长表（load_panel 与分块加载共用同一查询口径）。"""
     q = "SELECT symbol,date,open,high,low,close,volume,amount,turnover,adj_factor,trade_status,is_st,is_temp FROM daily_bar"
     conds, args = [], []
     if start:
@@ -61,7 +62,12 @@ def load_panel(conn, start: str | None = None, end: str | None = None, symbols: 
         args += symbols
     if conds:
         q += " WHERE " + " AND ".join(conds)
-    df = pd.read_sql_query(q, conn, params=args)
+    return pd.read_sql_query(q, conn, params=args)
+
+
+def load_panel(conn, start: str | None = None, end: str | None = None, symbols: list[str] | None = None,
+               only_l1: bool = True, float32: bool = True, market: str = "CN") -> Panel:
+    df = load_frame(conn, start, end, symbols, only_l1)
     splits = None
     if market == "US" and len(df):
         splits = pd.read_sql_query("SELECT symbol, ex_date, ratio_or_amount AS ratio FROM corp_actions WHERE type='split'", conn)

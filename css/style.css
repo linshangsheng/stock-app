@@ -242,3 +242,23 @@ details.card > summary::before { content: '▸ '; color: var(--muted); } details
   .nav a span { white-space: nowrap; font-size: 10.5px; }
   #fs-btn { display: none; }                      /* 手机上不需要全屏按钮 */
 }
+
+/* 低风险组合（选股页标签 + 回测页） */
+.fp-head .fp-headline { font-size: 14px; font-weight: 600; margin-top: 6px; line-height: 1.5; }
+.fp-kv .kv .v { font-size: 14px; }
+table.mini tr.link { cursor: pointer; } table.mini tr.link:hover td { background: var(--panel); }
+.fp-list td { vertical-align: middle; } .fp-list .fp-ind { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fp-op .link { cursor: pointer; } .fp-op .link:hover b { color: var(--accent); }
+.fp-rules summary { font-size: 13px; }
+.fp-ev .card-title { flex-wrap: wrap; gap: 2px 10px; }
+table.fp-cmp th[colspan] { text-align: center; border-bottom: 0; padding-bottom: 0; }
+table.fp-cmp td:first-child { white-space: nowrap; }
+.fp-ev.compact .grid.c2.mt { grid-template-columns: 1fr; }
+@media (max-width: 640px) {
+  .fp-kv { grid-template-columns: 1fr 1fr; }
+  .fp-ev .grid.c2 { grid-template-columns: 1fr; }
+}
+/* 选股页 5 个标签：收紧间距、隐藏横向滚动条（窄屏仍可左右滑） */
+.col-list .tabs { scrollbar-width: none; } .col-list .tabs::-webkit-scrollbar { display: none; }
+.col-list .tabs button { padding: 8px 9px; }
+@media (max-width: 640px) { .col-list .tabs button { padding: 8px 7px; font-size: 12.5px; } }

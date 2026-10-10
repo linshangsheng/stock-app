@@ -130,6 +130,20 @@ async def run(base: str, out: Path, width: int, height: int):
             await p.js("[...document.querySelectorAll('#col-list .tabs button')].find(b => b.innerText === '历史回看')?.click();", 2)
             await p.js("document.querySelector('#col-list .tabs')?.scrollIntoView({block:'start'});", 0.5)
             await p.shot(out / "09-历史回看.png", col)
+            # 低风险组合：左侧名单与操作、右侧回测证据（证据在后台算，最多等 3 分钟）。先重新加载，关掉上面点开的股票详情
+            await p.cmd("Page.reload", ignoreCache=True)
+            await asyncio.sleep(6)
+            await p.js("[...document.querySelectorAll('#col-list .tabs button')].find(b => b.innerText === '低风险组合')?.click();", 3)
+            for _ in range(36):
+                if await p.js("return !!document.querySelector('#col-detail .fp-ev');"):
+                    break
+                await asyncio.sleep(5)
+            await asyncio.sleep(2)
+            await p.js("document.querySelector('#col-list .tabs')?.scrollIntoView({block:'start'});", 0.5)
+            await p.shot(out / "21-低风险组合.png")
+            await p.tall_shot(out / "22-低风险组合-回测证据.png", "#col-detail .fp-ev", width, height)
+            await p.js("document.querySelector('#col-list .fp-list')?.scrollIntoView({block:'start'});", 0.5)
+            await p.shot(out / "23-低风险组合-目标名单.png", col)
             # 行情页
             await p.goto(base + "/#/market", 8)
             await p.shot(out / "10-行情-市场温度.png")
@@ -144,9 +158,14 @@ async def run(base: str, out: Path, width: int, height: int):
             await p.shot(out / "14-回测页.png")
             await p.goto(base + "/#/settings", 12)
             await p.shot(out / "15-设置-数据与更新.png")
-            r = await p.rect("#col-page .card:nth-of-type(3)")
-            if r:
-                await p.shot(out / "16-设置-费用与组合参数.png", r)
+            st = await p.js("const c = [...document.querySelectorAll('#col-page .card')].find(x => x.innerText.startsWith('资金方案')); "
+                            "if (!c) return null; c.id = 'shot-alloc'; return true;")
+            if st:
+                await p.shot(out / "24-设置-资金方案.png", await p.rect("#shot-alloc"))
+            st = await p.js("const c = [...document.querySelectorAll('#col-page .card')].find(x => x.innerText.startsWith('费用、滑点')); "
+                            "if (!c) return null; c.id = 'shot-cost'; return true;")
+            if st:
+                await p.shot(out / "16-设置-费用与组合参数.png", await p.rect("#shot-cost"))
             # 深色模式与手机（窄屏）
             await p.goto(base + "/#/screener", 2)
             await p.js("localStorage.setItem('sa.theme', JSON.stringify('dark'));")
@@ -162,6 +181,11 @@ async def run(base: str, out: Path, width: int, height: int):
             await p.js("document.querySelector('#col-list .list-item')?.click();", 5)
             r = await p.rect(".plan-card", pad=4)
             await p.shot(out / "20-手机-明天怎么操作.png", {"x": 0, "y": r["y"], "width": 390, "height": min(r["height"], 1400)} if r else None)
+            await p.cmd("Page.reload", ignoreCache=True)
+            await asyncio.sleep(6)
+            await p.js("[...document.querySelectorAll('#col-list .tabs button')].find(b => b.innerText === '低风险组合')?.click();", 4)
+            await p.js("document.querySelector('.fp-tab')?.scrollIntoView({block:'start'});", 1)
+            await p.shot(out / "25-手机-低风险组合.png")
             await p.cmd("Emulation.setDeviceMetricsOverride", width=width, height=height, deviceScaleFactor=1, mobile=False)
             await p.goto(base + "/#/settings", 8)
             st = await p.js("const c = [...document.querySelectorAll('#col-page .card')].find(x => x.innerText.startsWith('存储空间')); "

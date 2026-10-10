@@ -1,10 +1,11 @@
-// 回测页（4.5.6）：策略回测 / 单因子检验 / 形态事件研究 / 漏斗消融 / 参数网格。前端不做任何计算，只展示 POST /api/backtest 的结果。
+// 回测页（4.5.6）：策略回测 / 低风险组合 / 单因子检验 / 形态事件研究 / 漏斗消融 / 参数网格。前端不做任何计算，只展示 POST /api/backtest 的结果。
 // 每次结果显示 run_id、配置快照哈希与「试验次数」（6.6），避免只看最好看的一次。
 import { get, runBacktest, state } from './api.js';
 import { h, clear, fmtPct, fmtNum, fmtSigned, fmtMoney, dirClass, code, toast } from './util.js';
 import { lineChart, themeColors } from './chart.js';
+import { factorEvidence } from './factor.js';
 
-const KINDS = [['strategy', '策略回测'], ['single_factor', '单因子检验'], ['event_study', '形态事件研究'], ['ablation', '漏斗消融'], ['compare', '方案对比'], ['walk_forward', 'Walk-forward'], ['param_grid', '参数网格']];
+const KINDS = [['strategy', '策略回测'], ['factor', '低风险组合'], ['single_factor', '单因子检验'], ['event_study', '形态事件研究'], ['ablation', '漏斗消融'], ['compare', '方案对比'], ['walk_forward', 'Walk-forward'], ['param_grid', '参数网格']];
 const SETUP_LABEL = { breakout: '突破', pullback: '回踩', vcp: '波动收缩突破', oversold: '强势超跌' };
 const GRID_PRESETS = { breakout: [['vol_ratio_min', [1.2, 1.5, 1.8, 2.2]], ['close_pos_min', [0.6, 0.7, 0.8]], ['n', [20, 50, 252]]],
   pullback: [['rps60_min', [70, 80, 90]], ['vol_ratio_max', [0.6, 0.8, 1.0]], ['depth_atr_min', [-1, -0.5, 0]]],
@@ -20,6 +21,7 @@ export const backtestView = {
     const el = ctx.pageEl; clear(el); killCharts();
     const S = { kind: 'strategy', start: '', end: '', oos: '', entry_mode: 'next_open', slip: 0.1, cost_mult: 1, max_pos: 8, risk: 0.5,
       setups: { vcp: true, breakout: false, pullback: false, oversold: false }, f: { regime_gate: true, risk_exclusion: true, industry_score: true, rps_score: true },
+      fp_n: 10, fp_days: 20, fp_score: 'lowrisk', fp_equity: 30000, fp_buffer: 2, fp_oos: '2023-01-01',
       n_random: 200, grid_setup: 'vcp', grid_idx: 0, trail: 'atr', stop_k: 2, hold: 20, stop_mode: 'atr', tp_pct: 10, partial_r: 0, sizing: 'risk', wf_setup: 'vcp', wf_train: 3, wf_test: 6 };
     const out = h('div', { id: 'bt-out' });
     const form = h('div', { class: 'card' });
@@ -29,6 +31,7 @@ export const backtestView = {
 
     function renderForm() {
       clear(form);
+      if (S.kind === 'factor') { factorForm(); return; }
       form.append(h('div', { class: 'tabs' }, KINDS.map(([k, l]) => h('button', { class: S.kind === k ? 'on' : '', onclick: () => { S.kind = k; renderForm(); } }, l))),
         h('div', { class: 'grid c4' },
           h('label', { class: 'f' }, '开始日期（留空=最早）', h('input', { type: 'date', value: S.start, oninput: e => { S.start = e.target.value; } })),
@@ -55,6 +58,22 @@ export const backtestView = {
           h('span', { class: 'hint' }, '结果不是收益预测，是对历史规律的统计检验；参数请只用样本外结果确认。')));
     }
 
+    /** 低风险组合：定期调仓、等金额持有综合分前 N 名（与选股页「低风险组合」同一引擎、同一成交规则与费用）。 */
+    function factorForm() {
+      form.append(h('div', { class: 'tabs' }, KINDS.map(([k, l]) => h('button', { class: S.kind === k ? 'on' : '', onclick: () => { S.kind = k; renderForm(); } }, l))),
+        h('div', { class: 'grid c4' },
+          h('label', { class: 'f' }, '开始日期（留空 = 2018 起）', h('input', { type: 'date', value: S.start, oninput: e => { S.start = e.target.value; } })),
+          h('label', { class: 'f' }, '结束日期（留空 = 最新）', h('input', { type: 'date', value: S.end, oninput: e => { S.end = e.target.value; } })),
+          h('label', { class: 'f' }, '样本外起点', h('input', { type: 'date', value: S.fp_oos, oninput: e => { S.fp_oos = e.target.value; } })),
+          num('fp_equity', '起始资金（元）', '1000')),
+        h('div', { class: 'grid c4 mt-s' }, num('fp_n', '持有只数', '1'), num('fp_days', '每几个交易日调仓', '1'), num('fp_buffer', '换手缓冲（前 几×N 名不卖）', '0.5'),
+          h('label', { class: 'f' }, '综合分', h('select', { onchange: e => { S.fp_score = e.target.value; } },
+            [['lowrisk', '低换手 + 低波动（默认）'], ['lowrisk_rev', '再加短期反转（已否决，对照用）']].map(([v, l]) => h('option', { value: v, selected: S.fp_score === v ? true : null }, l))))),
+        h('p', { class: 'hint mt-s' }, '调仓日与实盘日历对齐（从 2018-01-02 起每 N 个交易日）；T 日收盘出名单、T+1 开盘成交，涨停开盘买不进、跌停开盘卖不出；佣金（最低 5 元）、印花税、过户费、滑点都计入。全市场 8 年约 1~2 分钟。'),
+        h('div', { class: 'row mt' }, h('button', { class: 'btn primary', id: 'bt-run', onclick: run }, '运行'),
+          h('span', { class: 'hint' }, '默认参数是按样本内选出来的；改参数后只看样本外，试验次数会被记录。')));
+    }
+
     function strategyOverride() {
       const f = { ...S.f };
       return {
@@ -73,6 +92,8 @@ export const backtestView = {
       try {
         const st = strategyOverride();
         let params = { strategy: st };
+        if (S.kind === 'factor') params = { factor: { start: S.start || null, end: S.end || null, oos_start: S.fp_oos || null, n: +S.fp_n, rebalance_days: +S.fp_days,
+          buffer: +S.fp_buffer, score: S.fp_score, equity: +S.fp_equity } };
         if (S.kind === 'single_factor') params = { strategy: { start: S.start || null, end: S.end || null } };
         if (S.kind === 'event_study') params = { strategy: st, n_random: +S.n_random, setups: st.setups };
         if (S.kind === 'compare') params = { strategy: st };
@@ -95,7 +116,7 @@ export const backtestView = {
       killCharts();
       out.append(header(r));
       if (r.error) { out.append(h('div', { class: 'alert bad' }, r.message || r.error)); return; }
-      ({ strategy: renderStrategy, single_factor: renderFactor, event_study: renderEvents, ablation: renderAblation, param_grid: renderGrid, compare: renderCompare, walk_forward: renderWF }[r.kind] || (() => {}))(r);
+      ({ strategy: renderStrategy, factor: renderFactorPortfolio, single_factor: renderFactor, event_study: renderEvents, ablation: renderAblation, param_grid: renderGrid, compare: renderCompare, walk_forward: renderWF }[r.kind] || (() => {}))(r);
       if (r.notes) out.append(h('details', { class: 'mt', open: true }, h('summary', {}, '已知偏差与局限（请务必阅读）'), h('ul', { class: 'small muted', style: 'margin:0;padding-left:18px' }, r.notes.map(n => h('li', {}, n)))));
       if (r.note || r.caveat) out.append(h('p', { class: 'hint mt-s' }, [r.note, r.caveat].filter(Boolean).join(' ')));
     }
@@ -134,6 +155,15 @@ export const backtestView = {
       out.append(h('details', { class: 'mt' }, h('summary', {}, `交易明细（最近 ${tr.length} 笔，共 ${(r.trades || []).length}）`), h('div', { class: 'tbl-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['股票', '形态', '入场', '出场', '入场价', '出场价', '股数', '盈亏', 'R', '持有', '原因'].map((t, i) => h('th', { class: i > 3 && i < 10 ? 'r' : '' }, t)))),
         h('tbody', {}, tr.map(t => h('tr', {}, h('td', {}, t.name || code(t.symbol)), h('td', {}, SETUP_LABEL[t.setup] || t.setup), h('td', { class: 'num' }, t.entry_date), h('td', { class: 'num' }, t.exit_date), h('td', { class: 'num' }, fmtNum(t.entry_px)), h('td', { class: 'num' }, fmtNum(t.exit_px)),
           h('td', { class: 'num' }, t.shares), h('td', { class: 'num ' + dirClass(t.pnl) }, fmtMoney(t.pnl)), h('td', { class: 'num ' + dirClass(t.r) }, t.r != null ? fmtSigned(t.r, 2) : '—'), h('td', { class: 'num' }, t.hold_days), h('td', {}, t.exit_reason))))))));
+    }
+
+    function renderFactorPortfolio(r) {
+      const p = r.params || {};
+      const e = factorEvidence(r, { title: `低风险组合：${p.n} 只 · 每 ${p.rebalance_days} 个交易日调仓 · ${p.score === 'lowrisk' ? '低换手 + 低波动' : '低换手 + 低波动 + 反转'}` });
+      out.append(e.el);
+      requestAnimationFrame(() => e.init());
+      charts.push(e);
+      if (r.final_holdings?.length) out.append(h('p', { class: 'hint mt-s' }, '回测期末持有：' + r.final_holdings.map(x => x.name).join('、')));
     }
 
     function renderFactor(r) {

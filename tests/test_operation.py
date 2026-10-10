@@ -115,7 +115,8 @@ def test_market_view_allocation_follows_account(demo_env):
     cl.put("/api/account", json={"equity": 100000, "cash": 100000, "risk_per_trade": 0.0075})
     d = cl.get("/api/market/view").json()
     al, n = d["allocation"], len(d["indices"])
-    assert al["etf_amount"] == 70000 and al["stock_amount"] == 30000 and al["stock_max_positions"] == 2
+    assert al["etf_amount"] == 70000 and al["factor_amount"] == 30000 and al["factor_n"] == 10       # 默认：ETF 70% + 低风险组合 30%
+    assert al["stock_amount"] == 0 and al["swing_pct"] == 0 and al["stock_max_positions"] == 2       # 个股波段默认不分钱
     assert al["per_index"] == round(70000 / n, 2) and al["trend_amount"] == al["washout_amount"] == round(70000 / n / 2, 2)
     assert all(i["hold_amount"] == round(al["per_index"] * i["position"], 2) for i in d["indices"])
 

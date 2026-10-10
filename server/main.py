@@ -28,7 +28,7 @@ from .jobs import manager
 from .panel import load_panel
 
 ROOT = settings.ROOT
-app = FastAPI(title="股票 App 本地后端", version="0.6.0")
+app = FastAPI(title="股票 App 本地后端", version="0.7.0")
 
 
 # ---- 工具 ---------------------------------------------------------------------
@@ -933,17 +933,39 @@ def market_view_get(market: str = "CN"):
     market = _need_cn(market)
     d = dict(market_view.build(market))
     acct = portfolio.get_account(market)
-    etf_pct = float(settings.cfg().get("allocation", {}).get("etf", 0) or 0)
+    from .factor_portfolio import allocation
+    al = allocation()
+    etf_pct = al["etf"]
     if d.get("status") == "ok" and acct.get("equity") and etf_pct and d.get("indices"):
         per_index = acct["equity"] * etf_pct / len(d["indices"])
         rule = d["rule"]
         d["allocation"] = {"equity": acct["equity"], "etf_pct": etf_pct, "etf_amount": round(acct["equity"] * etf_pct, 2),
-                           "stock_amount": round(acct["equity"] * (1 - etf_pct), 2), "per_index": round(per_index, 2),
+                           "factor_pct": al["factor"], "factor_amount": round(acct["equity"] * al["factor"], 2),
+                           "factor_n": settings.cfg()["factor_portfolio"]["n"], "swing_pct": al["swing"],
+                           "stock_amount": round(acct["equity"] * al["swing"], 2), "per_index": round(per_index, 2),
                            "trend_amount": round(per_index * rule["trend"]["weight"], 2), "washout_amount": round(per_index * rule["washout"]["weight"], 2),
                            "stock_max_positions": settings.cfg()["portfolio"]["max_positions"],
                            "stock_risk_per_trade": acct.get("risk_per_trade") or settings.cfg()["portfolio"]["risk_per_trade"]}
         d["indices"] = [{**i, "hold_amount": round(per_index * i["position"], 2)} for i in d["indices"]]
     return _wrap(market, **d)
+
+
+@app.get("/api/factor/plan")
+def factor_plan(market: str = "CN", summary: bool = True):
+    """低风险组合：今天的目标名单、与「组合」持仓比较后的卖 / 买、调仓日历、资金分配；summary=1 时附回测证据（后台缓存）。"""
+    from . import factor_portfolio as fpm
+    market = _need_cn(market)
+    if market != "CN":
+        return _wrap(market, status="unsupported", message="低风险组合只在 A 股做过验证（美股没有做同样的检验），暂不提供。")
+    ctx, day = _scan_ctx(market)
+    if not ctx:
+        return _wrap(market, status="no_data", message="尚无行情数据：请先初始化数据。")
+    acct = portfolio.get_account(market)
+    with db.market_db(market) as c:
+        plan = fpm.live_plan(c, ctx, acct, portfolio.list_positions(market), market)
+    if summary:
+        plan["backtest"] = fpm.get_summary(market, day, plan["allocation"]["sleeve"])
+    return _wrap(market, **plan)
 
 
 # ---- 基本面摘要（3.15）----------------------------------------------------------------
@@ -1086,7 +1108,7 @@ def backtest_run_get(run_id: str, market: str = "CN"):
 def settings_get():
     c = settings.cfg()
     return {k: c.get(k) for k in ("universe", "gate", "features", "regime", "funnel", "setups", "execution", "exits", "portfolio",
-                                  "costs", "limit_rules", "backup", "jobs", "history_years", "datasource", "throttle", "validation")} | \
+                                  "costs", "limit_rules", "backup", "jobs", "history_years", "datasource", "throttle", "validation", "allocation", "factor_portfolio")} | \
            {"server": {"host": c["server"]["host"], "port": c["server"]["port"], "token_set": bool(c["server"].get("token"))},
             "editable": list(settings.USER_EDITABLE)}
 
@@ -1166,6 +1188,9 @@ def _prewarm():
             r = scanner.rescan_if_config_changed(m)       # 参数变了（如升级后默认形态改变）：当天清单按新参数重扫
             if r:
                 log.info("rescanned %s %s with current config: %s candidates", m, r.get("scan_date"), len(r.get("candidates", [])))
+            if m == "CN":                                  # 低风险组合的回测证据：数据日 / 参数变了才在后台重算（约 1~2 分钟）
+                from . import factor_portfolio as fpm
+                fpm.refresh_summary(m, background=True)
         except Exception:  # noqa: BLE001 - 预热失败不影响服务，按需时再算
             log.exception("prewarm %s failed", m)
 

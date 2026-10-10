@@ -1056,10 +1056,36 @@ def save_run(conn, kind: str, market: str, strategy: dict, result: dict, data_as
     return run_id
 
 
+def _factor_job(conn, market: str, params: dict) -> dict:
+    """低风险组合回测（kind=factor）：参数 n / rebalance_days / score / buffer / equity / start / end / oos_start。"""
+    from . import factor_portfolio as fpm
+    if market != "CN":
+        raise ValueError("低风险组合只在 A 股做过验证，美股暂不提供")
+    p = {k: v for k, v in (params.get("factor") or {}).items() if v not in (None, "")}
+    sid = "factor-portfolio"
+    trials = count_trials(conn, market, sid) + 1
+    over = {k: p[k] for k in ("score", "n", "rebalance_days", "buffer") if k in p}
+    res = fpm.backtest(conn, market, over, p.get("start"), p.get("end"), p.get("oos_start"), float(p.get("equity") or 100000),
+                       align=bool(p.get("align", True)))
+    res["kind"] = "factor"
+    if res.get("error"):
+        return res
+    m = res["rows"][0]["all"]
+    res["metrics"] = {"total_return": m.get("total"), "cagr": m.get("cagr"), "max_drawdown": m.get("mdd"), "sharpe": m.get("sharpe")}
+    st = {"id": sid, **fpm.fp_cfg(), **p}
+    res["trial_count"] = trials
+    res["run_id"] = save_run(conn, "factor", market, st, res, res["data_asof"], trials)
+    res["config_hash"] = settings.config_hash(st)
+    res["code_version"] = settings.git_commit()
+    return res
+
+
 def run_job(market: str, kind: str, params: dict | None = None) -> dict:
-    """POST /api/backtest 的后端入口：kind = strategy | single_factor | event_study | ablation | param_grid。"""
+    """POST /api/backtest 的后端入口：kind = strategy | single_factor | event_study | ablation | param_grid | compare | walk_forward | factor。"""
     params = params or {}
     with settings.market_ctx(market), db.market_db(market) as conn:
+        if kind == "factor":                       # 低风险组合：自己的数据加载与回测引擎（不需要形态信号）
+            return _factor_job(conn, market, params)
         st = merge_strategy(params.get("strategy"))
         ctx = BtContext(conn, market, st["start"], st["end"])
         asof = ctx.data_asof
