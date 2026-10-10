@@ -14,3 +14,5 @@ requests
 # 测试
 pytest==9.1.1
 httpx==0.28.1
+# 工具（可选，软件运行不需要）：tools/make_icons.py、tools/screenshots.py 另需
+#   python -m pip install pillow websockets

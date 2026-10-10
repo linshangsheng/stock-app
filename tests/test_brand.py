@@ -12,7 +12,8 @@ def test_manifest_icons_exist_and_ico_has_all_sizes():
     for ic in m["icons"]:
         assert (ROOT / ic["src"]).exists(), ic["src"]
     assert any(ic.get("purpose") == "maskable" for ic in m["icons"])
-    from PIL import Image
+    import pytest
+    Image = pytest.importorskip("PIL.Image", reason="Pillow 只是生成图标的工具依赖，软件本身不需要")
     sizes = Image.open(ROOT / "app.ico").info["sizes"]
     assert {(n, n) for n in (16, 24, 32, 48, 64, 128, 256)} <= set(sizes)
 
@@ -53,3 +54,12 @@ def test_about_single_source(demo_env):
     from server import datasource_events
     assert server.EMAIL in datasource_events.SEC_UA
     assert f"v{server.__version__}" in (Path(__file__).resolve().parent.parent / "sw.js").read_text(encoding="utf-8")
+
+
+def test_installer_bat_is_gbk_crlf_and_covers_the_steps():
+    b = (ROOT / "安装.bat").read_bytes()
+    s = b.decode("gbk")                                    # 中文 Windows 命令行按 GBK 显示
+    assert b"\r\n" in b and b.count(b"\n") == b.count(b"\r\n")
+    assert "chcp 936" in s and "server\\requirements.txt" in s and "pypi.tuna.tsinghua.edu.cn" in s
+    assert "Add python.exe to PATH" in s and "启动股票.vbs" in s and "/quiet" in s
+
