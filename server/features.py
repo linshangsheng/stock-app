@@ -149,6 +149,8 @@ def compute_features(panel: Panel, l2: pd.DataFrame | None = None, bench_close: 
     box_hi, box_lo = F["hh10"], low.rolling(10, min_periods=_mp(10, vr)).min().shift(1)
     F["box_hi10"], F["box_lo10"] = box_hi, box_lo
     F["range10_atr"] = (box_hi - box_lo) / F["atr14"].shift(1)
+    F["ll5_incl"] = low.rolling(5, min_periods=3).min()                  # 含当日：回踩期间最低点（结构化止损）
+    F["struct_low_breakout"] = box_lo                                   # 突破前整理区（近 10 日，不含当日）低点
 
     # ---- 回踩质量 ----
     F["pb_depth_atr"] = (close - F["ma20"]) / F["atr14"]

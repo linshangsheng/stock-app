@@ -42,6 +42,7 @@ def default_strategy() -> dict:
         "id": "default", "market": "CN", "start": None, "end": None,
         "setups": list(c["setups"]["enabled"]), "setup_params": {},
         "entry_mode": c["execution"]["entry_mode"], "stop_entry_valid_days": c["execution"]["stop_entry_valid_days"],
+        "max_gap_atr": c["execution"].get("max_gap_atr", 0), "resize_on_fill": c["execution"].get("resize_on_fill", False),
         "slippage": c["execution"]["slippage"], "max_adv_pct": c["execution"]["max_adv_pct"],
         "exits": dict(c["exits"]), "portfolio": dict(c["portfolio"]),
         "funnel": {"risk_exclusion": True, "regime_gate": True, "industry_score": True, "rps_score": True,
@@ -57,7 +58,8 @@ def merge_strategy(over: dict | None) -> dict:
 class BtContext:
     """一次准备、多次运行（特征与基础信号只算一遍，供多个策略变体 / 消融 / 参数网格复用）。"""
 
-    def __init__(self, conn, market: str = "CN", start: str | None = None, end: str | None = None, warmup: int = 300):
+    def __init__(self, conn, market: str = "CN", start: str | None = None, end: str | None = None, warmup: int = 300,
+                 symbols: list[str] | None = None):
         self.market = market
         days_all = mc.trading_days(conn, None, end)
         data_last = conn.execute("SELECT MAX(date) FROM daily_bar").fetchone()[0]
@@ -71,7 +73,7 @@ class BtContext:
             i0 = 0
         load_from = days_all[i0] if days_all else None
         with settings.market_ctx(market):
-            self.panel = load_panel(conn, load_from, end, market=market)
+            self.panel = load_panel(conn, load_from, end, market=market, symbols=symbols)      # symbols：抽样回测（内存不够跑全市场时）
             P = self.panel
             self.boards, self.list_dates, self.names = universe.load_security_meta(conn)
             self.l2, self.cond, self.flags = universe.l2_mask(P, self.boards, self.list_dates, return_parts=True, market=market)
@@ -100,6 +102,7 @@ class BtContext:
         self.ma10, self.ma20 = a(F["ma10"]), a(F["ma20"])
         self.adv20 = a(F["amt_ma20"])
         self.rps20 = a(F["rps_20"])
+        self.ll5_incl, self.struct_low_b = a(F["ll5_incl"]), a(F["struct_low_breakout"])
         self.regime = self.feat.regime.reindex(P.dates).fillna("UNKNOWN").to_numpy()
         self.ind_arr = np.array([self.industry.get(s) if len(self.industry) else None for s in self.syms], dtype=object)
         self.board_arr = [self.boards.get(s) for s in self.syms]
@@ -160,6 +163,14 @@ class BtContext:
         mae, mfe = 0.0, 0.0
         stops: dict[int, float] = {}
         T = self.T
+        risk0 = fill - stop0
+        tp = None                                      # 固定目标位（仅作对照，5.6）
+        if ex.get("take_profit_pct"):
+            tp = fill * (1 + ex["take_profit_pct"])
+        elif ex.get("take_profit_r"):
+            tp = fill + ex["take_profit_r"] * risk0
+        ptarget = fill + ex["partial_r"] * risk0 if ex.get("partial_r") else None
+        partial = None                                 # (t, 价格(复权, 已含滑点), 比例)
         for t in range(e, T):
             if t > e or not self.t1:                   # A 股 T+1：买入日不可卖出；美股 T+0：买入日止损即时生效
                 if t > e and stat[t] == 0:             # 停牌：无价格行为
@@ -167,7 +178,7 @@ class BtContext:
                 if pending:
                     if self.ol_dn[t, j]:               # 跌停开盘卖不出：顺延
                         continue
-                    return self._exit(t, O[t] * (1 - slip), reason, fill, mae, mfe, e, stops if with_stops else None)
+                    return self._exit(t, O[t] * (1 - slip), reason, fill, mae, mfe, e, stops if with_stops else None, partial)
                 if L[t] <= stop:                       # 止损（5.5.1-3：止损与止盈同日取最坏——此处无固定止盈）
                     if self.ol_dn[t, j]:
                         pending, reason = True, "止损(跌停顺延)"
@@ -177,7 +188,18 @@ class BtContext:
                     tag = "止损(跳空)" if O[t] <= stop else "止损"
                     mae = min(mae, L[t] / fill - 1)
                     mfe = max(mfe, H[t] / fill - 1)
-                    return self._exit(t, px * (1 - slip), tag, fill, mae, mfe, e, stops if with_stops else None)
+                    return self._exit(t, px * (1 - slip), tag, fill, mae, mfe, e, stops if with_stops else None, partial)
+                # 止损优先于止盈：同日同时触及，日线无法判断先后，一律按最坏情形（先止损，5.5.1-3）——上面的止损判断已先行
+                if tp is not None and H[t] >= tp:
+                    px = O[t] if O[t] >= tp else tp
+                    mfe = max(mfe, H[t] / fill - 1)
+                    mae = min(mae, L[t] / fill - 1)
+                    return self._exit(t, px * (1 - slip), "固定止盈", fill, mae, mfe, e, stops if with_stops else None, partial)
+                if ptarget is not None and partial is None and H[t] >= ptarget:
+                    ppx = (O[t] if O[t] >= ptarget else ptarget) * (1 - slip)
+                    partial = (t, ppx, float(ex.get("partial_fraction", 0.5)))
+                    if ex.get("partial_move_stop_be"):
+                        stop = max(stop, fill)
             if stat[t] == 0:
                 continue
             mae = min(mae, L[t] / fill - 1)
@@ -201,10 +223,10 @@ class BtContext:
         while last > e and stat[last] == 0:
             last -= 1
         return {"exit_t": None, "exit_adj": C[last], "reason": "持仓中", "mae": mae, "mfe": mfe, "last_t": last,
-                "stops": stops if with_stops else None}
+                "stops": stops if with_stops else None, "partial": partial}
 
-    def _exit(self, t, px, reason, fill, mae, mfe, e, stops):
-        return {"exit_t": t, "exit_adj": px, "reason": reason, "mae": mae, "mfe": mfe, "last_t": t, "stops": stops}
+    def _exit(self, t, px, reason, fill, mae, mfe, e, stops, partial=None):
+        return {"exit_t": t, "exit_adj": px, "reason": reason, "mae": mae, "mfe": mfe, "last_t": t, "stops": stops, "partial": partial}
 
     # ---- 入场成交解析（5.5.1-1/2）----
     def resolve_entry(self, j: int, ts: int, trigger_raw: float, stop_adj: float, st: dict):
@@ -218,6 +240,9 @@ class BtContext:
                     continue                           # 停牌顺延
                 if self.ol_up[k, j]:
                     return None, None, "涨停开盘无法成交"
+                gap_k = st.get("max_gap_atr") or 0
+                if gap_k and self.atr[ts, j] == self.atr[ts, j] and self.O[k, j] > self.C[ts, j] + gap_k * self.atr[ts, j]:
+                    return None, None, "高开过多放弃"            # 开盘比信号日收盘高出 k×ATR 以上：不追
                 fill = self.O[k, j] * (1 + slip)
                 if fill <= stop_adj:
                     return None, None, "跳空跌破止损位"
@@ -268,6 +293,8 @@ class BtContext:
         abandoned: dict[str, int] = {}
         bump = lambda k: abandoned.__setitem__(k, abandoned.get(k, 0) + 1)  # noqa: E731
         last_px: dict[int, float] = {}
+        peak = float(st["initial_equity"])
+        ddc = (P.get("dd_cut") or {}) if isinstance(P.get("dd_cut"), dict) else {}
         for t in range(max(i0, 1), i1 + 1):
             # 1) 入场成交（先于当日退出，对资金保守）
             for od in pending.pop(t, []):
@@ -275,6 +302,13 @@ class BtContext:
                 j = od["j"]
                 fill_raw = od["fill"] * self.S[t, j]
                 shares = od["shares"]
+                if st.get("resize_on_fill"):                    # 高开：按实际成交价重算股数，单笔风险不超过计划（只减不加）
+                    per = fill_raw - od["stop_adj"] * self.S[t, j]
+                    if per > 0 and od["risk_amount"] > 0:
+                        shares = min(shares, execution.lot_round(self.board_arr[j], od["risk_amount"] / per))
+                    if shares <= 0:
+                        bump("高开后风险超预算，放弃")
+                        continue
                 fee_b = execution.trade_fees("buy", fill_raw, shares, costs, self.market)
                 while shares > 0 and shares * fill_raw + execution.trade_fees("buy", fill_raw, shares, costs, self.market) > cash:
                     shares = execution.lot_round(self.board_arr[j], shares - execution.lot_step(self.board_arr[j]))
@@ -284,18 +318,32 @@ class BtContext:
                 fee_b = execution.trade_fees("buy", fill_raw, shares, costs, self.market)
                 cash -= shares * fill_raw + fee_b
                 path = self.trade_path(j, t, od["fill"], od["stop_adj"], st, with_stops=True)
-                positions[j] = {**od, "e": t, "shares": shares, "s": self.S[t, j], "fee_b": fee_b, "path": path,
-                                "entry_raw": fill_raw, "planned_risk": (fill_raw - od["stop_adj"] * self.S[t, j]) * shares}
+                positions[j] = {**od, "e": t, "shares": shares, "init_shares": shares, "s": self.S[t, j], "fee_b": fee_b, "path": path,
+                                "entry_raw": fill_raw, "planned_risk": (fill_raw - od["stop_adj"] * self.S[t, j]) * shares,
+                                "realized": 0.0, "fees_partial": 0.0, "partial_done": False}
                 last_px[j] = od["fill"]
                 counters["filled"] += 1
-            # 2) 当日退出
+            # 2a) 分批止盈：卖出一部分（整手取整），其余继续持有
+            for j, p in positions.items():
+                pt = p["path"].get("partial")
+                if pt and pt[0] == t and not p["partial_done"] and p["path"]["exit_t"] != t:
+                    q = execution.lot_round(self.board_arr[j], p["shares"] * pt[2])
+                    if 0 < q < p["shares"]:
+                        px_raw = pt[1] * p["s"]
+                        fee_p = execution.trade_fees("sell", px_raw, q, costs, self.market)
+                        cash += q * px_raw - fee_p
+                        p["realized"] += (px_raw - p["entry_raw"]) * q
+                        p["fees_partial"] += fee_p
+                        p["shares"] -= q
+                    p["partial_done"] = True
+            # 2b) 当日退出
             for j in [j for j, p in positions.items() if p["path"]["exit_t"] == t]:
                 p = positions.pop(j)
                 px_raw = p["path"]["exit_adj"] * p["s"]
                 fee_s = execution.trade_fees("sell", px_raw, p["shares"], costs, self.market)
                 cash += p["shares"] * px_raw - fee_s
-                pnl = (px_raw - p["entry_raw"]) * p["shares"] - p["fee_b"] - fee_s
-                trades.append(self._trade_rec(p, t, px_raw, pnl, fee_s))
+                pnl = p["realized"] + (px_raw - p["entry_raw"]) * p["shares"] - p["fee_b"] - fee_s - p["fees_partial"]
+                trades.append(self._trade_rec(p, t, px_raw, pnl, fee_s + p["fees_partial"]))
             # 3) 盯市
             mv = 0.0
             for j, p in positions.items():
@@ -304,6 +352,7 @@ class BtContext:
                     last_px[j] = cj
                 mv += p["shares"] * last_px.get(j, p["fill"]) * p["s"]
             equity = cash + mv
+            peak = max(peak, equity)
             curve.append((self.dates[t], equity, mv, cash, str(self.regime[t])))
             # 4) 生成次日订单
             if t >= i1:
@@ -327,7 +376,8 @@ class BtContext:
                               "close": self.rC[t, j], "high": self.rH[t, j], "atr14": self.atr[t, j] * s_t,
                               "atr_pct": self.atr_pct[t, j], "adv20": self.adv20[t, j],
                               "score": None if score is None or score[t, j] != score[t, j] else float(score[t, j]),
-                              "setup": names[int(primary[t, j]) - 1]})
+                              "setup": names[int(primary[t, j]) - 1],
+                              "struct_low": self._struct_low(t, j, names[int(primary[t, j]) - 1])})
             counters["after_exclusion"] += len(cands)
             if not cands:
                 continue
@@ -356,9 +406,11 @@ class BtContext:
             if f["regime_gate"] and factor < 1:
                 ranked = ranked[:max(1, int(math.ceil(len(ranked) * factor)))]
             sel = selection.select_and_size(ranked, slots=max_pos - len(positions) - n_pending, held_ind=held_ind,
-                                            risk_used=risk_used, risk_cap=risk_cap, equity=equity, risk_pct=P["risk_per_trade"],
+                                            risk_used=risk_used, risk_cap=risk_cap, equity=equity, risk_pct=P["risk_per_trade"] * (ddc.get("factor", 1.0) if ddc.get("threshold") and equity <= peak * (1 - ddc["threshold"]) else 1.0),
                                             top_n=f["top_n"] or None, entry_mode=st["entry_mode"],
-                                            max_per_industry=P["max_per_industry"], max_adv_pct=st["max_adv_pct"], rank=False)
+                                            max_per_industry=P["max_per_industry"], max_adv_pct=st["max_adv_pct"], rank=False,
+                                            sizing=P.get("sizing", "risk"), max_positions=max_pos, stop_mode=st["exits"].get("stop_mode", "atr"),
+                                            exits=st["exits"])
             for r in sel:
                 if not r["fit"]:
                     bump(r["skip_reason"])
@@ -384,16 +436,23 @@ class BtContext:
         self.trials += 1
         return res
 
+    def _struct_low(self, t, j, setup):
+        """结构化止损所用的形态低点（原始价）：回踩 = 近 5 日最低（含当日）；突破 / 波动收缩 = 近 10 日整理区低点（不含当日）。"""
+        arr = self.ll5_incl if setup in ("pullback", "oversold") else self.struct_low_b
+        v = arr[t, j] * self.S[t, j]
+        return float(v) if v == v else None
+
     def _trade_rec(self, p, t, px_raw, pnl, fee_s):
         j = p["j"]
         risk = p["planned_risk"]
         return {"symbol": self.syms[j], "name": self.names.get(self.syms[j], ""), "setup": p["setup"], "regime": p["regime"],
                 "signal_date": self.dates[p["signal_t"]], "entry_date": self.dates[p["e"]], "exit_date": self.dates[t],
-                "entry_px": round(p["entry_raw"], 3), "exit_px": round(px_raw, 3), "shares": p["shares"],
+                "entry_px": round(p["entry_raw"], 3), "exit_px": round(px_raw, 3), "shares": p.get("init_shares", p["shares"]),
                 "pnl": round(pnl, 2), "fees": round(p["fee_b"] + fee_s, 2), "ret": round(px_raw / p["entry_raw"] - 1, 4),
                 "r": round(pnl / risk, 3) if risk > 0 else None, "hold_days": t - p["e"],
                 "mae": round(p["path"]["mae"], 4), "mfe": round(p["path"]["mfe"], 4), "exit_reason": p["path"]["reason"],
-                "notional": round(p["entry_raw"] * p["shares"], 2), "score": p.get("score")}
+                "notional": round(p["entry_raw"] * p.get("init_shares", p["shares"]), 2), "score": p.get("score"),
+                "partial": bool(p.get("partial_done"))}
 
     # ---- 汇总 ----
     def _summarize(self, st, curve, trades, counters, abandoned, i0, i1, open_pos) -> dict:
@@ -501,6 +560,8 @@ def perf_metrics(eq: pd.Series, mv: pd.Series, tr: pd.DataFrame, bench: pd.Serie
             m.update({"alpha": round(alpha, 4), "beta": round(beta, 2), "benchmark_return": round(btot, 4),
                       "excess_return": round(float(total - btot), 4)})
     m["sample"] = {**counters, "abandoned": abandoned, "abandoned_total": int(sum(abandoned.values()))}
+    if len(ret) > 30 and ret.std() > 0:                           # Deflated Sharpe 所需的收益分布矩（run_job 结合试验次数计算）
+        m["ret_moments"] = {"sr_daily": float(ret.mean() / ret.std()), "skew": float(ret.skew()), "kurt": float(ret.kurt() + 3), "T": int(len(ret))}
     return m
 
 
@@ -841,6 +902,139 @@ def param_grid(ctx: BtContext, setup: str, param: str, values: list, over: dict 
             "note": "参数小幅变化时结果不应剧烈波动（6.6）；每个网格点都计入试验次数。"}
 
 
+# ---- 方案对比（5.5.1 入场模式对比 / 5.6 移动止盈 vs 固定目标 / 5.7 止损形态 / 5.8 仓位方式 / 6.6 成本敏感性）----
+
+def compare_variants(ctx: BtContext, over: dict | None = None) -> dict:
+    """同一策略、同一数据下，逐项对比关键执行假设。每个变体都走同一套成交规则与成本，并计入试验次数。
+    用于回答：入场用次日开盘还是触发价？移动止盈是否优于固定目标？结构化止损是否优于 ATR 止损？风险预算是否优于等权？成本加倍后还成立吗？"""
+    base = settings.deep_merge(default_strategy(), over or {})
+    variants = [
+        ("基准（默认配置）", "基准", {}),
+        ("入场：次日开盘 next_open", "入场模式", {"entry_mode": "next_open"}),
+        ("入场：触发价 stop_entry", "入场模式", {"entry_mode": "stop_entry"}),
+        ("止盈：ATR 移动止盈（默认）", "止盈方式", {"exits": {"trail": "atr"}}),
+        ("止盈：跟踪 MA10", "止盈方式", {"exits": {"trail": "ma10"}}),
+        ("止盈：不移动止损", "止盈方式", {"exits": {"trail": "none"}}),
+        ("止盈：固定目标 +15%（对照）", "止盈方式", {"exits": {"trail": "none", "take_profit_pct": 0.15}}),
+        ("止盈：固定目标 2R（对照）", "止盈方式", {"exits": {"trail": "none", "take_profit_r": 2.0}}),
+        ("止盈：分批（1.5R 卖一半 + 移动止盈）", "止盈方式", {"exits": {"partial_r": 1.5, "partial_fraction": 0.5}}),
+        ("止损：ATR × 1.5", "止损", {"exits": {"stop_atr_k": 1.5}}),
+        ("止损：ATR × 2（默认）", "止损", {"exits": {"stop_atr_k": 2.0}}),
+        ("止损：ATR × 3", "止损", {"exits": {"stop_atr_k": 3.0}}),
+        ("止损：结构化（形态低点）", "止损", {"exits": {"stop_mode": "structure"}}),
+        ("仓位：风险预算（默认）", "仓位", {"portfolio": {"sizing": "risk"}}),
+        ("仓位：等权", "仓位", {"portfolio": {"sizing": "equal"}}),
+        ("仓位：固定比例 10%", "仓位", {"portfolio": {"sizing": "fixed_pct"}}),
+        ("仓位：波动率反比", "仓位", {"portfolio": {"sizing": "vol_inverse"}}),
+        ("候选：Top N", "候选取舍", {"funnel": {"top_n": settings.cfg()["funnel"]["top_n"]}}),
+        ("候选：全量候选", "候选取舍", {"funnel": {"top_n": 0}}),
+        ("成本：费用与滑点 ×2", "成本敏感性", {"cost_mult": 2.0, "slip_mult": 2.0}),
+        ("成本：费用与滑点 ×4", "成本敏感性", {"cost_mult": 4.0, "slip_mult": 4.0}),
+    ]
+    rows = []
+    for label, group, ov in variants:
+        r = ctx.run(settings.deep_merge(over or {}, ov))
+        m = r["metrics"]
+        rows.append({"group": group, "variant": label, "n": m.get("n", 0), "expectancy_r": m.get("expectancy_r"), "win_rate": m.get("win_rate"),
+                     "payoff": m.get("payoff"), "profit_factor": m.get("profit_factor"), "avg_hold": m.get("avg_hold_days"),
+                     "max_drawdown": m.get("max_drawdown"), "total_return": m.get("total_return"), "sharpe": m.get("sharpe"),
+                     "calmar": m.get("calmar"), "avg_mae": m.get("avg_mae"), "avg_mfe": m.get("avg_mfe")})
+    return {"kind": "compare", "rows": rows, "trials_added": len(variants),
+            "note": "各变体共用同一信号与成交规则；差异只来自被对比的那一项。固定目标位仅作对照（5.6：移动止盈为主）。"
+                    "差异不大时不要据此改参数——这些对比都在同一段历史上，只有样本外与前向收益能证明改动有效。"}
+
+
+# ---- Walk-forward 滚动前推 + 隔离期（6.6）----
+
+def walk_forward(ctx: BtContext, over: dict | None = None, setup: str = "breakout", grid: dict | None = None,
+                 train_years: float = 3.0, test_months: int = 6, embargo_days: int | None = None, min_trades: int = 30) -> dict:
+    """滚动前推：每个窗口在训练段内从参数网格里选期望值最高的一组（要求成交笔数 ≥ min_trades），
+    再在**隔离期之后**的测试段上用这组参数评估；训练段与测试段之间留出不少于持仓周期的隔离期（embargo），避免信息泄漏。
+    汇总所有测试段（样本外）的成绩，并报告「样本外 / 样本内」效率与参数稳定性。每个网格点 × 每个窗口都计入试验次数。"""
+    import itertools
+
+    st0 = merge_strategy(over)
+    grid = grid or default_wf_grid(setup)
+    names = list(grid)
+    combos = [dict(zip(names, vals)) for vals in itertools.product(*[grid[k] for k in names])]
+    if len(names) > 3:
+        raise ValueError("每个形态最多 3 个自由参数参与网格搜索（5.4.1）")
+    embargo = int(embargo_days if embargo_days is not None else max(st0["exits"]["max_hold_days"], 5))
+    dates = ctx.dates
+    i_start = int(np.searchsorted(np.array(dates), st0["start"] or ctx.start))
+    train_len = int(round(train_years * 252))
+    test_len = int(round(test_months * 21))
+    windows, trials = [], 0
+    ts = i_start
+    while ts + train_len + embargo + test_len <= ctx.T:
+        te = ts + train_len - 1
+        xs = te + 1 + embargo
+        xe = xs + test_len - 1
+        scores = []
+        for cmb in combos:
+            ov = settings.deep_merge(over or {}, {"setups": [setup], "setup_params": {setup: cmb}, "start": dates[ts], "end": dates[te]})
+            m = ctx.run(ov)["metrics"]
+            trials += 1
+            scores.append((m.get("expectancy_r") if (m.get("n", 0) >= min_trades and m.get("expectancy_r") is not None) else None, m.get("n", 0), cmb))
+        valid = [x for x in scores if x[0] is not None]
+        if not valid:
+            windows.append({"train": [dates[ts], dates[te]], "test": [dates[xs], dates[xe]], "chosen": None, "note": "训练段成交笔数不足，跳过"})
+        else:
+            best = max(valid, key=lambda x: x[0])
+            ov_t = settings.deep_merge(over or {}, {"setups": [setup], "setup_params": {setup: best[2]}, "start": dates[xs], "end": dates[xe]})
+            rt = ctx.run(ov_t)
+            trials += 1
+            windows.append({"train": [dates[ts], dates[te]], "embargo_days": embargo, "test": [dates[xs], dates[xe]], "chosen": best[2],
+                            "train_expectancy_r": round(best[0], 3), "train_n": best[1],
+                            "test_expectancy_r": rt["metrics"].get("expectancy_r"), "test_n": rt["metrics"].get("n", 0),
+                            "test_win_rate": rt["metrics"].get("win_rate"), "test_return": rt["metrics"].get("total_return"),
+                            "test_max_drawdown": rt["metrics"].get("max_drawdown"), "_trades": rt["trades"]})
+        ts += test_len
+    done = [w for w in windows if w.get("chosen")]
+    all_tr = [t for w in done for t in w.pop("_trades", [])]
+    for w in windows:
+        w.pop("_trades", None)
+    oos = trade_stats(pd.DataFrame(all_tr)) if all_tr else {"n": 0}
+    is_vals = [w["train_expectancy_r"] for w in done]
+    oos_vals = [w["test_expectancy_r"] for w in done if w["test_expectancy_r"] is not None]
+    keyfun = lambda w: json.dumps(w["chosen"], sort_keys=True)  # noqa: E731
+    from collections import Counter
+    cnt = Counter(keyfun(w) for w in done)
+    most, mc_ = (cnt.most_common(1)[0] if cnt else (None, 0))
+    eff = (float(np.mean(oos_vals)) / float(np.mean(is_vals))) if is_vals and oos_vals and np.mean(is_vals) > 0 else None
+    return {"kind": "walk_forward", "setup": setup, "grid": grid, "embargo_days": embargo, "train_years": train_years, "test_months": test_months,
+            "windows": windows, "oos": oos, "n_windows": len(done), "positive_windows": sum(1 for v in oos_vals if v > 0),
+            "mean_is_expectancy_r": round(float(np.mean(is_vals)), 3) if is_vals else None,
+            "mean_oos_expectancy_r": round(float(np.mean(oos_vals)), 3) if oos_vals else None, "efficiency": None if eff is None else round(eff, 2),
+            "param_stability": None if not done else round(mc_ / len(done), 2), "most_chosen": None if most is None else json.loads(most),
+            "trials_added": trials,
+            "note": "只有测试段（样本外）的成绩才算数；样本内期望明显高于样本外 = 过拟合的典型特征。训练段与测试段之间留有不少于持仓周期的隔离期。"}
+
+
+def default_wf_grid(setup: str) -> dict:
+    return {"breakout": {"vol_ratio_min": [1.2, 1.5, 1.8], "close_pos_min": [0.6, 0.7]},
+            "pullback": {"rps60_min": [70, 80, 90], "vol_ratio_max": [0.7, 0.9]},
+            "vcp": {"atr_ratio_max": [0.7, 0.8, 0.9], "vol_ratio_min": [1.2, 1.5]},
+            "oversold": {"rps60_min": [60, 70, 80], "rsi_max": [30, 35, 40]}}[setup]
+
+
+def deflated_sharpe(moments: dict, trials: int) -> dict:
+    """Deflated Sharpe Ratio（Bailey & López de Prado）：在尝试过 N 次参数 / 规则后，观测到的最好 Sharpe 有多大概率只是运气。
+    返回 DSR（概率，越接近 1 越可信）与「期望最大 Sharpe 门槛」（日频）。试验次数为 1 时即概率性夏普（PSR，对 0 检验）。"""
+    from statistics import NormalDist
+    nd = NormalDist()
+    sr, skew, kurt, T = moments["sr_daily"], moments["skew"], moments["kurt"], moments["T"]
+    var_sr = (1 - skew * sr + (kurt - 1) / 4 * sr * sr) / max(T - 1, 1)
+    sd_sr = math.sqrt(max(var_sr, 1e-12))
+    gamma = 0.5772156649
+    sr0 = 0.0
+    if trials > 1:
+        sr0 = sd_sr * ((1 - gamma) * nd.inv_cdf(1 - 1 / trials) + gamma * nd.inv_cdf(1 - 1 / (trials * math.e)))
+    dsr = nd.cdf((sr - sr0) / sd_sr)
+    return {"dsr": round(dsr, 4), "sr_daily": round(sr, 5), "sr_annual": round(sr * math.sqrt(252), 2), "benchmark_sr_daily": round(sr0, 5),
+            "trials": trials, "interpretation": "≥0.95：扣除多次尝试的运气成分后仍显著；< 0.5：很可能只是运气 / 过拟合"}
+
+
 # ---- 入口 + 存档 --------------------------------------------------------------
 
 def count_trials(conn, market: str, strategy_id: str) -> int:
@@ -876,6 +1070,9 @@ def run_job(market: str, kind: str, params: dict | None = None) -> dict:
         if kind == "strategy":
             res = ctx.run(params.get("strategy"))
             res["kind"] = "strategy"
+            mom = res["metrics"].get("ret_moments")
+            if mom:
+                res["metrics"]["deflated_sharpe"] = deflated_sharpe(mom, trials)
         elif kind == "single_factor":
             res = single_factor_test(ctx, params.get("factors"), tuple(params.get("horizons", (5, 10, 20))),
                                      start=st["start"], end=st["end"])
@@ -887,6 +1084,13 @@ def run_job(market: str, kind: str, params: dict | None = None) -> dict:
         elif kind == "param_grid":
             res = param_grid(ctx, params["setup"], params["param"], params["values"], params.get("strategy"))
             trials += len(params["values"])
+        elif kind == "compare":
+            res = compare_variants(ctx, params.get("strategy"))
+            trials += res["trials_added"]
+        elif kind == "walk_forward":
+            res = walk_forward(ctx, params.get("strategy"), params.get("setup", "breakout"), params.get("grid"),
+                               float(params.get("train_years", 3)), int(params.get("test_months", 6)), params.get("embargo_days"))
+            trials += res["trials_added"]
         else:
             raise ValueError(f"unknown kind {kind}")
         res["market"], res["data_asof"] = market, asof
@@ -908,7 +1112,7 @@ def _in_market(fn):
     return wrapped
 
 
-for _n in ("single_factor_test", "event_study", "ablation", "param_grid"):
+for _n in ("single_factor_test", "event_study", "ablation", "param_grid", "compare_variants", "walk_forward"):
     globals()[_n] = _in_market(globals()[_n])
 _run_inner = BtContext.run
 BtContext.run = lambda self, *a, **k: _in_market(_run_inner)(self, *a, **k)

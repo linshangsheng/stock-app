@@ -5,6 +5,7 @@
   * 机制：SQLite 在线备份 API（WAL 下一致性快照）；保留策略默认 近 14 天日备 + 近 12 个月月备；目录可配置到网盘 / 外接盘。"""
 from __future__ import annotations
 
+import gzip
 import shutil
 import sqlite3
 from datetime import date, datetime, timedelta
@@ -43,6 +44,20 @@ def _online_backup(src_path: Path, dst_path: Path) -> None:
         src.close()
 
 
+def _gzip_file(src: Path, level: int = 1) -> Path:
+    """原地压缩为 .gz 并删除原文件（级别 1：速度约 100 MB/s，体积约原来的 31%）。"""
+    dst = src.with_name(src.name + ".gz")
+    with open(src, "rb") as fi, gzip.open(dst, "wb", compresslevel=level) as fo:
+        shutil.copyfileobj(fi, fo, length=8 * 1024 * 1024)
+    src.unlink()
+    return dst
+
+
+def _gunzip_to(src: Path, dst: Path) -> None:
+    with gzip.open(src, "rb") as fi, open(dst, "wb") as fo:
+        shutil.copyfileobj(fi, fo, length=8 * 1024 * 1024)
+
+
 def _essential(src_path: Path, dst_path: Path) -> dict:
     """行情库中不可重建的部分：扫描记录、回测记录、证券主表、拆股 / 除权事件、已退市股票历史。"""
     if dst_path.exists():
@@ -77,6 +92,7 @@ def run_backup(full: bool | None = None, day: str | None = None) -> dict:
         if not src.exists():
             continue
         info["files"][f"essential_{name}"] = _essential(src, root / f"essential_{name}")
+        _gzip_file(root / f"essential_{name}")
         if full is None:
             full_ = _need_weekly_full(name)
         else:
@@ -85,7 +101,8 @@ def run_backup(full: bool | None = None, day: str | None = None) -> dict:
             froot = full_dir() / day
             froot.mkdir(parents=True, exist_ok=True)
             _online_backup(src, froot / name)
-            info["files"][name] = f"full -> {froot}"
+            _gzip_file(froot / name)
+            info["files"][name] = f"full -> {froot}（gzip）"
     cfgp = settings.CONFIG_PATH
     if cfgp.exists():
         shutil.copy2(cfgp, root / "config.yaml")
@@ -95,7 +112,7 @@ def run_backup(full: bool | None = None, day: str | None = None) -> dict:
 
 def _need_weekly_full(name: str) -> bool:
     for d in sorted((p for p in full_dir().iterdir() if p.is_dir()), reverse=True):
-        if (d / name).exists():
+        if (d / name).exists() or (d / (name + ".gz")).exists():
             try:
                 return (date.today() - date.fromisoformat(d.name)).days >= 7
             except ValueError:
@@ -115,7 +132,7 @@ def prune() -> list[str]:
     """保留策略：最近 keep_daily 天的日备 + 最近 keep_monthly 个月每月最早的一份；全量备份目录同样处理（全量只保留最近 3 份）。"""
     cfg = settings.cfg()["backup"]
     removed = []
-    for root, daily, monthly in ((backup_dir(), cfg["keep_daily"], cfg["keep_monthly"]), (full_dir(), 3, 0)):
+    for root, daily, monthly in ((backup_dir(), cfg["keep_daily"], cfg["keep_monthly"]), (full_dir(), int(cfg.get("keep_full", 1)), 0)):
         dirs = []
         for p in root.iterdir():
             if p.is_dir():
@@ -137,6 +154,66 @@ def prune() -> list[str]:
                 shutil.rmtree(p, ignore_errors=True)
                 removed.append(p.name)
     return removed
+
+
+# ---- 存储空间：明细与（用户点按钮才执行的）清理 ----------------------------------------
+
+def _size(p: Path) -> int:
+    if p.is_file():
+        return p.stat().st_size
+    return sum(f.stat().st_size for f in p.rglob("*") if f.is_file()) if p.exists() else 0
+
+
+def storage_report() -> dict:
+    """数据目录各部分的大小与用途；cleanable = 可以安全清理（可重新生成 / 已被新位置取代）。"""
+    dd = settings.data_dir()
+    items = []
+
+    def add(key, path: Path, title, desc, cleanable=False, action=None):
+        if path.exists():
+            items.append({"key": key, "path": str(path), "title": title, "desc": desc, "bytes": _size(path),
+                          "cleanable": cleanable, "action": action})
+
+    add("ashare", dd / "ashare.db", "A 股行情库", "10 年日线、指数、扫描与回测记录。核心数据，删了要重新初始化（6~9 小时）")
+    add("us", dd / "us.db", "美股行情库", "不用美股可以不管它；删了要重新初始化")
+    add("portfolio", dd / "portfolio.db", "个人数据", "自选、持仓、交易日志、账户。最重要，每天自动备份")
+    fd = full_dir()
+    fulls = sorted((p for p in fd.iterdir() if p.is_dir()), reverse=True) if fd.exists() else []
+    for i, p in enumerate(fulls):
+        raw = [f.name for f in p.iterdir() if f.suffix == ".db"]
+        add(f"full:{p.name}", p, f"行情库全量备份 {p.name}", ("最新一份，留着应急" if i == 0 else "较早的一份，可以删") +
+            ("；未压缩，点「压缩」可缩到约 1/3" if raw else "（已压缩）"),
+            cleanable=i > 0, action="delete" if i > 0 else ("compress" if raw else None))
+    bd = backup_dir()
+    local = dd / "backups"
+    if local.exists() and local.resolve() != bd.resolve():
+        add("old_local_backups", local, "旧的本地日备份", f"每日备份已改存到 {bd}，这里是改之前留下的旧备份，可以删", cleanable=True, action="delete")
+    add("daily_backups", bd, "每日备份", f"位于 {bd}；保留近 {settings.cfg()['backup']['keep_daily']} 天 + 每月一份，自动清理")
+    add("demo", dd / "demo", "演示数据", "合成的假数据，只在「演示模式」用；删了需要时会自动重新生成", cleanable=True, action="delete")
+    add("log", dd / "server.log", "运行日志", "排查问题用；新版本不再逐条记录页面请求，增长很慢")
+    for f in dd.glob("*.before_restore"):
+        add(f"before_restore:{f.name}", f, f"恢复前的旧文件 {f.name}", "上次「恢复备份」前自动另存的旧文件，确认恢复无误后可删", cleanable=True, action="delete")
+    total = _size(dd) + (_size(bd) if not str(bd.resolve()).startswith(str(dd.resolve())) else 0)
+    return {"data_dir": str(dd), "items": items, "total_bytes": total}
+
+
+def storage_clean(key: str) -> dict:
+    """只允许清理 storage_report 标记为可清理 / 可压缩的项（防误删核心数据）。"""
+    rep = {i["key"]: i for i in storage_report()["items"]}
+    it = rep.get(key)
+    if not it or not it["action"]:
+        raise ValueError("这一项不能清理")
+    p = Path(it["path"])
+    before = it["bytes"]
+    if it["action"] == "compress":
+        for f in list(p.glob("*.db")):
+            _gzip_file(f)
+    else:
+        if p.is_dir():
+            shutil.rmtree(p)
+        else:
+            p.unlink()
+    return {"key": key, "freed_bytes": before - _size(p)}
 
 
 def list_backups() -> list[dict]:
@@ -164,13 +241,17 @@ def restore(day: str, what: str = "portfolio") -> dict:
     targets = {"portfolio": ["portfolio.db"], "ashare": ["ashare.db"], "us": ["us.db"]}[what]
     for name in targets:
         src = root / name
-        if not src.exists():
+        gz = root / (name + ".gz")
+        if not src.exists() and not gz.exists():
             raise FileNotFoundError(f"备份中没有 {name}（{src}）")
         dst = dd / name
         if dst.exists():
             shutil.copy2(dst, dd / (name + ".before_restore"))
         for ext in ("-wal", "-shm"):
             (dd / (name + ext)).unlink(missing_ok=True)
-        shutil.copy2(src, dst)
+        if src.exists():
+            shutil.copy2(src, dst)
+        else:
+            _gunzip_to(gz, dst)
         done[name] = _count_portfolio(dst) if name == "portfolio.db" else "restored"
     return done

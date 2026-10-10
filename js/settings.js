@@ -12,8 +12,8 @@ export const settingsView = {
     const el = ctx.pageEl; clear(el); stopPoll();
     const wrap = h('div', { class: 'pane-body page' });
     el.append(wrap);
-    const secData = h('div', { class: 'card' }), secPool = h('div', { class: 'card mt' }), secCost = h('div', { class: 'card mt' }), secLook = h('div', { class: 'card mt' }), secBackup = h('div', { class: 'card mt' }), secAbout = h('div', { class: 'card soft mt' });
-    wrap.append(h('h1', { class: 'mb' }, '设置'), secData, secPool, secCost, secLook, secBackup, secAbout);
+    const secData = h('div', { class: 'card' }), secPool = h('div', { class: 'card mt' }), secCost = h('div', { class: 'card mt' }), secLook = h('div', { class: 'card mt' }), secBackup = h('div', { class: 'card mt' }), secStorage = h('div', { class: 'card mt' }), secAbout = h('div', { class: 'card soft mt' });
+    wrap.append(h('h1', { class: 'mb' }, '设置'), secData, secPool, secCost, secLook, secBackup, secStorage, secAbout);
 
     let cfg = {};
     try { cfg = await get('/settings', {}, { cache: false }); } catch (e) { wrap.append(h('div', { class: 'alert bad' }, e.message)); return; }
@@ -27,13 +27,13 @@ export const settingsView = {
       const pr = j.job?.progress;
       secData.append(h('div', { class: 'card-title' }, h('h2', {}, '数据与更新状态'), h('span', { class: 'badge ' + (j.has_data ? 'ok' : 'warn') }, j.has_data ? '已有数据' : '尚未初始化')),
         h('div', { class: 'grid c4' }, kv('数据截止', j.data_asof || '—'), kv('最近已收盘交易日', j.last_closed_trading_day || '—'), kv('交易日历来源', j.calendar_source === 'fallback' ? '兜底（仅周末，节假日不识别！）' : j.calendar_source === 'source' ? '数据源' : '—', j.calendar_source === 'fallback' ? 'down' : ''),
-          kv('数据源', (cfg.datasource?.[state.market.toLowerCase()] === 'demo') ? '合成演示数据' : (state.market === 'US' ? 'yfinance + Nasdaq Trader' : 'BaoStock（+AkShare 可选）'))),
+          kv('初始化范围', j.init_sample ? `随机 ${j.init_sample.count} 只` : '全部'), kv('数据源', (cfg.datasource?.[state.market.toLowerCase()] === 'demo') ? '合成演示数据' : (state.market === 'US' ? 'yfinance + Nasdaq Trader' : 'BaoStock（日线）+ 东方财富（全市场快照）'))),
         j.calendar_source === 'fallback' ? h('div', { class: 'alert warn mt-s' }, '交易日历取自兜底（周一至周五），节假日会被当作交易日——完整性闸门可能误报缺失。请检查网络后重新初始化日历。') : null,
         run ? h('div', { class: 'mt' }, h('div', { class: 'row between small' }, h('span', {}, h('span', { class: 'spinner' }), ` 运行中：${run} ${j.job.message || ''}`), pr ? h('span', { class: 'num' }, `${pr.task} ${pr.done}/${pr.total}`) : null),
           pr ? h('div', { class: 'progress mt-s' }, h('div', { style: `width:${Math.round(100 * pr.done / Math.max(pr.total, 1))}%` })) : null,
           h('div', { class: 'row mt-s' }, h('button', { class: 'btn sm', onclick: async () => { await post('/jobs/stop', {}); toast('已请求停止（当前请求结束后中断，可续跑）'); } }, '停止（可续跑）'))) : null,
         h('div', { class: 'row wrap mt' },
-          h('button', { class: 'btn primary', disabled: run ? true : null, onclick: initDlg }, j.has_data ? '补全 / 继续初始化' : '初始化数据'),
+          h('button', { class: 'btn primary', disabled: run ? true : null, onclick: () => initDlg(j) }, j.has_data ? '补全 / 继续初始化' : '初始化数据'),
           h('button', { class: 'btn', disabled: run || !j.has_data ? true : null, onclick: async () => { const r = await post('/jobs/daily', {}); toast(r.message, r.ok ? 'ok' : 'bad'); startPoll(); } }, '运行盘后任务链'),
           h('button', { class: 'btn', disabled: run || !j.has_data ? true : null, onclick: async () => { const r = await post('/jobs/catch_up', {}); toast(r.message, r.ok ? 'ok' : 'bad'); startPoll(); } }, '补跑缺失交易日'),
           h('button', { class: 'btn', disabled: !j.has_data ? true : null, onclick: async () => { toast('扫描中…'); try { await post('/scan/run', {}, { timeout: 300000 }); toast('扫描完成', 'ok'); } catch (e) { toast(e.message, 'bad'); } } }, '仅选股扫描')));
@@ -47,14 +47,41 @@ export const settingsView = {
       if (run && !pollTimer) startPoll();
       if (!run && pollTimer) stopPoll();
     }
-    function startPoll() { if (pollTimer) return; pollTimer = setInterval(() => { if (!document.body.contains(wrap)) return stopPoll(); renderData(); renderPool(); }, 2500); renderData(); }
+    function startPoll() {
+      if (pollTimer) return;
+      let busy = false, tick = 0;              // 串行轮询：上一轮没返回就跳过；股票池（要构建全市场面板，较重）每约 30 秒才刷新一次
+      pollTimer = setInterval(async () => {
+        if (!document.body.contains(wrap)) return stopPoll();
+        if (busy || document.hidden) return;
+        busy = true;
+        try { await renderData(); if (++tick % 12 === 0) await renderPool(); } finally { busy = false; }
+      }, 2500);
+      renderData();
+    }
     ctx.pollJobs = startPoll;
 
-    function initDlg() {
-      const f = { limit: '' };
-      modal('初始化数据', h('div', {}, h('p', {}, cfg.datasource?.cn === 'demo' ? '当前是演示数据源：几秒钟即可生成合成数据（不代表真实行情）。' : '将拉取证券名单（含已退市）、应用 L1 过滤，并按限速拉取 10 年日线 + 复权因子。M0 实测 BaoStock 单只 10 年历史约 8~10 秒：系统先用近 45 天（0.3 秒/只）按价格 / 成交额预筛掉垃圾股，只对幸存者拉 10 年，全量约需半天以上（随机间隔防封 IP）。可随时停止、断点续跑；建议先「只拉前 N 只」试跑。'),
-        h('label', { class: 'f' }, '试跑：只拉前 N 只（留空 = 全部）', h('input', { type: 'number', placeholder: '例如 50', oninput: e => { f.limit = e.target.value; } }))),
-        [{ label: '取消' }, { label: '开始', primary: true, onclick: async () => { const r = await post('/jobs/init', f.limit ? { limit: +f.limit } : {}); toast(r.message, r.ok ? 'ok' : 'bad'); startPoll(); } }]);
+    function initDlg(j) {
+      const demo = cfg.datasource?.[state.market.toLowerCase()] === 'demo';
+      const US = state.market === 'US';
+      const hadSample = j?.init_sample;
+      const f = { mode: (j?.init_sample_default || 0) > 0 ? 'random' : 'all', n: (j?.init_sample_default || 100) || 100, remember: false, resample: false };
+      const nBox = h('input', { type: 'number', min: 1, value: f.n, style: 'width:100px', oninput: e => { f.n = +e.target.value; } });
+      const radio = (v, label, hint) => h('label', { class: 'chk', style: 'align-items:flex-start;margin-bottom:8px' }, h('input', { type: 'radio', name: 'init-mode', checked: f.mode === v ? true : null, onchange: () => { f.mode = v; sync(); } }),
+        h('span', {}, h('b', {}, label), h('div', { class: 'hint' }, hint)));
+      const rsBox = h('label', { class: 'chk small', style: 'margin-left:24px' }, h('input', { type: 'checkbox', onchange: e => { f.resample = e.target.checked; } }), '重新抽一批（默认沿用上次抽到的那批，续跑不重复下载）');
+      const sync = () => { nBox.disabled = f.mode !== 'random'; rsBox.style.display = f.mode === 'random' && hadSample ? '' : 'none'; };
+      const allHint = demo ? '演示数据源：几秒钟生成，范围选项不影响。' : US ? '名单约 5000 只 → 批量预筛 → 约 2850 只拉 10 年 → 逐股补行业。耗时约 2 小时。' : '全量约半天以上（BaoStock 单只 10 年约 8~10 秒），先按价格 / 成交额预筛。';
+      const body = h('div', {}, h('p', { class: 'hint' }, '默认全部拉取；只想试用或省流量，可以只随机拉一部分。'),
+        radio('all', '全部', allHint),
+        radio('random', '随机拉 N 只', '随机抽样模式不做全市场快照 / 预筛 / 已退市名单并集，流量与耗时都只有全部的零头（约 N × 每只一次请求）。之后想补全，选「全部」再点一次即可，已拉过的不会重复下载。'),
+        h('div', { class: 'row', style: 'margin:-2px 0 8px 24px' }, '只数：', nBox, hadSample ? h('span', { class: 'hint' }, `当前已抽样 ${j.init_sample.count} 只`) : null), rsBox,
+        h('label', { class: 'chk small' }, h('input', { type: 'checkbox', onchange: e => { f.remember = e.target.checked; } }), '记住这个选择（下次默认沿用）'));
+      sync();
+      modal('初始化数据', body, [{ label: '取消' }, { label: '开始', primary: true, onclick: async () => {
+        if (f.mode === 'random' && !(f.n >= 1)) { toast('请输入大于 0 的只数', 'bad'); return false; }
+        const r = await post('/jobs/init', { sample: f.mode === 'random' ? f.n : 0, resample: f.resample, remember: f.remember });
+        toast(r.message, r.ok ? 'ok' : 'bad'); startPoll();
+      } }]);
     }
 
     // ---------- 股票池 ----------
@@ -88,9 +115,17 @@ export const settingsView = {
         h('div', { class: 'grid c4' },
           ...(US ? [inp('commission_per_share', '佣金（美元 / 股）'), inp('sec_fee_sell', 'SEC 规费（卖出，按成交额）'), inp('finra_taf_per_share', 'FINRA TAF（美元 / 股）')]
                  : [inp('commission_rate', '佣金率（双向）', '如 0.00025 = 万 2.5'), inp('commission_min', '佣金最低（元）'), inp('stamp_duty_sell', '印花税（卖出）'), inp('transfer_fee', '过户费（双向）')]),
-          inp('slippage', '滑点', '0.001 = 0.1%'), inp('max_adv_pct', '单笔容量（占 20 日均额）'), inp('stop_atr_k', '初始止损 k×ATR'), inp('trail_atr_k', '移动止损 k×ATR'),
-          inp('max_positions', '最大持仓数'), inp('max_per_industry', '单行业上限（只）'), inp('risk_per_trade', '单笔风险（净值比例）'), inp('max_total_risk', '组合总风险上限'),
-          inp('max_hold_days', '最长持有（交易日）'), inp('hard_stop_pct', '硬止损（相对成本）')),
+          inp('slippage', '滑点', '成交价比理想价差多少。0.001 = 0.1%，小盘股可调大'),
+          inp('max_adv_pct', '单笔容量（占 20 日均额）', '一笔买入不超过该股日均成交额的这个比例，防止买不进 / 卖不出'),
+          inp('stop_atr_k', '初始止损 k×ATR', 'ATR = 一只股票平均每天波动多少。止损放在买入价下方 k 个 ATR：k 越小止损越紧、越容易被洗出'),
+          inp('trail_atr_k', '移动止损 k×ATR', '赚钱后止损跟着上移：最高价下方 k 个 ATR。k 越大拿得越久、回吐也越多'),
+          inp('max_positions', '最大持仓数', '同时最多持有几只。新手建议 3~6 只'),
+          inp('max_per_industry', '单行业上限（只）', '同一行业最多几只，避免一个行业跌就全军覆没'),
+          inp('risk_per_trade', '单笔风险（净值比例）', '每笔交易「打到止损」最多亏总资金的多少。默认 0.0075 = 0.75%（10 万资金回测校准：收益风险比最好、回撤可承受）'),
+          inp('max_total_risk', '组合总风险上限', '所有持仓同时打到止损时，合计最多亏多少。0.06 = 6%'),
+          inp('max_hold_days', '最长持有（交易日）', '买入后最多拿几天还没走出来就卖（时间止损），避免资金长期被套'),
+          inp('hard_stop_pct', '硬止损（相对成本）', '不管 ATR 怎么算，亏到这个比例一定卖。0.08 = 跌 8% 必走')),
+        h('p', { class: 'hint mt-s' }, '不懂就别改：默认值都经过回测校准（tools/calibrate.py，样本内选、样本外验）。改动后先到「回测」页跑一遍再用，试验次数会被记录。'),
         h('div', { class: 'row mt' }, h('button', { class: 'btn primary', onclick: async () => {
           try {
             const costs = US ? { us: { commission_per_share: F.commission_per_share, sec_fee_sell: F.sec_fee_sell, finra_taf_per_share: F.finra_taf_per_share } }
@@ -114,8 +149,32 @@ export const settingsView = {
         h('div', { class: 'row between wrap mb' }, h('div', {}, h('div', {}, '涨跌配色'), h('div', { class: 'hint' }, '默认随市场自适应：A股 红涨绿跌、美股 绿涨红跌。只改颜色映射，不影响数据与符号。')),
           seg([['auto', '随市场自适应'], ['red', '全局红涨绿跌'], ['green', '全局绿涨红跌']], mode, v => { prefs.set('colorMode', v); ctx.applyColors(); })),
         h('div', { class: 'row between wrap mb' }, h('div', {}, '主题'), seg([['auto', '跟随系统'], ['light', '浅色'], ['dark', '深色']], theme, v => { prefs.set('theme', v); ctx.applyTheme(); })),
+        h('div', { class: 'row between wrap mb' }, h('div', {}, h('div', {}, '启动后自动全屏'), h('div', { class: 'hint' }, '浏览器只允许在你点击 / 按键之后进入全屏：打开后第一次点击即全屏，按 Esc 退出（本次不再自动进入）；左下角 ⛶ 随时切换。')),
+          seg([['on', '开'], ['off', '关']], prefs.get('autoFullscreen', true) ? 'on' : 'off', v => { prefs.set('autoFullscreen', v === 'on'); })),
         h('div', { class: 'row between wrap' }, h('div', {}, h('div', {}, '访问口令'), h('div', { class: 'hint' }, `后端 ${cfg.server.host}:${cfg.server.port}${cfg.server.token_set ? ' · 已设置口令' : ' · 仅本机访问，未设口令'}。开放局域网（host=0.0.0.0）时必须在 config.yaml 设置 server.token（系统含持仓数据）。`)),
           h('button', { class: 'btn sm', onclick: () => { const f = { t: prefs.get('token', '') }; modal('访问口令', h('label', { class: 'f' }, '与后端 server.token 一致', h('input', { type: 'password', value: f.t, oninput: e => { f.t = e.target.value; } })), [{ label: '取消' }, { label: '保存', primary: true, onclick: () => { prefs.set('token', f.t); toast('已保存', 'ok'); } }]); } }, '设置本机口令')));
+    }
+
+    // ---------- 存储空间：每部分多大、有没有用；可清理的项由用户点按钮确认后才执行 ----------
+    async function renderStorage() {
+      clear(secStorage);
+      let r = null; try { r = await get('/storage', {}, { market: false, cache: false }); } catch (e) { secStorage.append(h('div', { class: 'hint' }, e.message)); return; }
+      const mb = b => (b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB' : (b / 1e6).toFixed(b >= 1e7 ? 0 : 1) + ' MB');
+      const saving = r.items.filter(i => i.action).reduce((s, i) => s + (i.action === 'compress' ? i.bytes * 0.69 : i.bytes), 0);
+      secStorage.append(h('div', { class: 'card-title' }, h('h2', {}, '存储空间'), h('span', { class: 'hint' }, `合计约 ${mb(r.total_bytes)}`)),
+        h('p', { class: 'hint' }, `数据目录：${r.data_dir}。行情库每个交易日只增加约 1 MB，正常不会变大很多；占地方的主要是备份。`
+          + (saving > 5e7 ? ` 下面可清理 / 压缩的项合计约可省 ${mb(saving)}。` : '')),
+        h('table', { class: 'mini mt-s' }, h('thead', {}, h('tr', {}, h('th', {}, '内容'), h('th', { class: 'r' }, '大小'), h('th', {}, '说明'), h('th', {}, ''))),
+          h('tbody', {}, r.items.map(i => h('tr', {},
+            h('td', {}, h('b', {}, i.title)), h('td', { class: 'num r' }, mb(i.bytes)), h('td', { class: 'small muted' }, i.desc),
+            h('td', {}, i.action ? h('button', { class: 'btn sm' + (i.action === 'delete' ? '' : ' primary'), onclick: async e => {
+              const verb = i.action === 'compress' ? '压缩' : '删除';
+              if (!await confirmBox(`${verb}「${i.title}」（${mb(i.bytes)}）？${i.action === 'delete' ? '删除后不能恢复。' : '压缩约需 30 秒，压缩后仍可用于恢复。'}`)) return;
+              const b = e.currentTarget; b.disabled = true; b.textContent = verb + '中…';
+              try { const x = await post('/storage/clean', { key: i.key }, { market: false, timeout: 600000 }); toast(`已${verb}，腾出 ${mb(x.freed_bytes)}`, 'ok'); }
+              catch (err) { toast(err.message, 'bad'); }
+              renderStorage();
+            } }, i.action === 'compress' ? '压缩' : '删除') : null))))));
     }
 
     // ---------- 备份 ----------
@@ -149,7 +208,7 @@ export const settingsView = {
           : h('p', { class: 'hint' }, 'L1 入库粗筛基于入库当天的快照，可能把「过去正常、如今已跌成低价」的股票筛掉，使回测偏乐观。全量初始化完成后运行：python -m server.cli l1-bias --sample 100（在数据库副本上抽样补拉被剔除股票的历史，比较含 / 不含的回测差异）。')));
     }
 
-    renderData(); renderPool().then(renderBias); renderCost(); renderLook(); renderBackup();
+    renderData(); renderPool().then(renderBias); renderCost(); renderLook(); renderBackup(); renderStorage();
   },
   cleanup() { stopPoll(); },
 };

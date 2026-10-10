@@ -76,3 +76,26 @@ def test_alerts_trigger_on_latest_close(client):
     items = client.get("/api/alerts").json()["items"]
     by = {a["rule"].split(":")[0]: a["triggered"] for a in items}
     assert by == {"price_above": False, "price_below": True}
+
+
+def test_scan_ctx_built_once_under_concurrency(client, monkeypatch):
+    """多个请求同时到达（如设置页轮询）时，全市场面板只构建一次（回归：曾并发各建一份，内存耗尽、界面卡死）。"""
+    import threading
+    import time
+
+    from server import main, scanner
+
+    n = {"built": 0}
+    real = scanner.build_context
+
+    def slow(*a, **k):
+        n["built"] += 1
+        time.sleep(0.3)
+        return real(*a, **k)
+
+    main._ctx_cache.clear()
+    monkeypatch.setattr(scanner, "build_context", slow)
+    ts = [threading.Thread(target=main._scan_ctx, args=("CN",)) for _ in range(5)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert n["built"] == 1

@@ -6,6 +6,7 @@ from __future__ import annotations
 import functools
 import hmac
 import json
+import logging
 import os
 import threading
 import uuid
@@ -21,7 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import backup, backtest, datasource_events as ev_mod, db, ingest, markets, features as feats, market_calendar as mc, portfolio, quality, scanner, settings, \
-    throttle, universe
+    selection, throttle, universe
 from .datasource_cn import get_source
 from .jobs import manager
 from .panel import load_panel
@@ -107,14 +108,24 @@ async def auth(request: Request, call_next):
         if not hmac.compare_digest(got, token):
             return JSONResponse({"detail": "需要访问口令"}, status_code=401)
     resp = await call_next(request)
-    if request.url.path in ("/sw.js", "/", "/index.html", "/manifest.json"):
-        resp.headers["Cache-Control"] = "no-cache"
+    p = request.url.path
+    if p in ("/sw.js", "/", "/index.html", "/manifest.json") or p.startswith(("/js/", "/css/")):
+        resp.headers["Cache-Control"] = "no-cache"          # 每次向本机后端校验（ETag），更新代码后不会用到过期的前端文件
     return resp
+
+
+def _build_id() -> str:
+    """前端（js / css / index.html / sw.js）与后端代码、配置的最新修改时间：页面据此发现「软件已更新」并提示刷新（不必 Ctrl+F5）。"""
+    files = [*ROOT.glob("js/*.js"), *ROOT.glob("css/*.css"), ROOT / "index.html", ROOT / "sw.js", *ROOT.glob("server/*.py"), ROOT / "server" / "config.yaml"]
+    return str(int(max((f.stat().st_mtime for f in files if f.exists()), default=0)))
+
+
+BUILD_ID = _build_id()
 
 
 @app.get("/api/ping")
 def ping():
-    return {"ok": True, "version": app.version, "auth_required": bool(settings.cfg()["server"].get("token")),
+    return {"ok": True, "version": app.version, "build": BUILD_ID, "auth_required": bool(settings.cfg()["server"].get("token")),
             "datasource": settings.cfg()["datasource"], "demo": {"CN": markets.is_demo("CN"), "US": markets.is_demo("US")}}
 
 
@@ -232,13 +243,15 @@ def kline(symbol: str, market: str = "CN", period: str = "D", adj: str = "qfq", 
         out["asof_bar"] = lastd
         # 叠加物
         lv = {}
-        run = c.execute("SELECT run_id, scan_date FROM scan_runs WHERE market=? AND official=1 ORDER BY scan_date DESC, finished_at DESC LIMIT 1", (market,)).fetchone()
+        run = c.execute("SELECT run_id, scan_date FROM scan_runs WHERE market=? AND official=1 ORDER BY scan_date DESC, finished_at DESC, rowid DESC LIMIT 1", (market,)).fetchone()
         if run:
             r = c.execute("SELECT * FROM scan_results WHERE run_id=? AND symbol=?", (run["run_id"], symbol)).fetchone()
             if r:
                 lv["scan"] = {"run_id": run["run_id"], "scan_date": run["scan_date"], "setup": r["setup"], "score": r["score"],
                               "trigger_price": r["trigger_price"], "stop_price": r["stop_price"], "shares": r["shares"],
-                              "reasons": json.loads(r["reasons"] or "[]")}
+                              "risk_amount": r["risk_amount"], "reasons": json.loads(r["reasons"] or "[]"),
+                              **{k: v for k, v in json.loads(r["extra"] or "{}").items() if k in ("entry_ref", "close", "board", "adv20", "name")}}
+                _attach_plan(lv["scan"], market)                # 点开股票时展开「明天怎么操作」
         sig = db.rows(c.execute("SELECT r.scan_date, s.setup FROM scan_results s JOIN scan_runs r ON r.run_id=s.run_id "
                                 "WHERE s.symbol=? AND r.official=1 ORDER BY r.scan_date", (symbol,)))
         out["signals"] = sig
@@ -270,7 +283,11 @@ def indicators(symbol: str, names: str = "ma20,rsi14,macd_dif", market: str = "C
 
 # ---- 条件筛选（漏斗之外的手动补充）----------------------------------------------
 
+log = logging.getLogger("stock-app")
 _ctx_cache: dict = {}
+
+
+_ctx_lock = threading.Lock()
 
 
 def _scan_ctx(market: str):
@@ -279,11 +296,12 @@ def _scan_ctx(market: str):
         if not day:
             return None, None
         key = (market, day)
-        if _ctx_cache.get("key") != key:
-            _ctx_cache.clear()
-            _ctx_cache["key"] = key
-            _ctx_cache["ctx"] = scanner.build_context(c, day, market)
-        return _ctx_cache["ctx"], day
+        with _ctx_lock:                       # 单次构建：全市场面板约 2 GB / 40 秒，并发请求只能排队等同一份，不能各建一份（否则内存被吃光、界面卡死）
+            if _ctx_cache.get("key") != key:
+                _ctx_cache.clear()
+                _ctx_cache["ctx"] = scanner.build_context(c, day, market)
+                _ctx_cache["key"] = key
+            return _ctx_cache["ctx"], day
 
 
 @app.post("/api/analysis")
@@ -339,11 +357,33 @@ def _run_row(c, run_id: str) -> dict | None:
     r = dict(r)
     gate = json.loads(r.get("gate_detail") or "{}")
     reg = json.loads(r.get("regime_detail") or "{}")
-    return {"run_id": r["run_id"], "market": r["market"], "scan_date": r["scan_date"], "data_asof": r["data_asof"],
+    try:
+        entry_mode = json.loads(r.get("config") or "{}").get("execution", {}).get("entry_mode")
+    except ValueError:
+        entry_mode = None
+    return {"entry_mode": entry_mode or settings.cfg()["execution"]["entry_mode"], "run_id": r["run_id"], "market": r["market"], "scan_date": r["scan_date"], "data_asof": r["data_asof"],
             "config_hash": r["config_hash"], "official": bool(r["official"]), "started_at": r["started_at"], "finished_at": r["finished_at"],
             "gate": {"status": r["data_gate_status"], "checks": gate.get("checks", []), "reasons": gate.get("reasons", [])},
             "regime": reg or {"state": r["regime"]}, "summary": json.loads(r.get("summary") or "{}"),
             "valid_until": mc.next_trading_day(c, r["scan_date"]), "is_stale": scanner._is_stale(c, r["market"], r["scan_date"])}
+
+
+def _attach_plan(cd: dict, market: str, acct: dict | None = None) -> dict:
+    """明天的操作计算（按「当前」账户资金；录入资金晚于扫描时也能用）：买多少股、止损 / 止盈价、各种开盘价下怎么做。"""
+    acct = acct if acct is not None else portfolio.get_account(market)
+    ref = cd.get("entry_ref") or cd.get("close")
+    cd["op"] = None
+    if acct.get("equity"):
+        cd["op"] = selection.operation_plan(ref, cd.get("stop_price"), cd.get("board"), acct["equity"],
+                                            acct.get("risk_per_trade") or settings.cfg()["portfolio"]["risk_per_trade"],
+                                            cd.get("adv20"), settings.cfg()["execution"].get("max_adv_pct"))
+        if cd["op"] and cd.get("shares") is None:
+            cd["shares"], cd["risk_amount"] = cd["op"]["planned_shares"], cd["op"]["planned_loss"]
+    tp_pct = settings.cfg()["exits"].get("take_profit_pct") or 0
+    cd["take_profit_pct"], cd["take_profit"] = tp_pct, (round(ref * (1 + tp_pct), 2) if tp_pct and ref else None)
+    cd["open_plan"] = selection.open_plan(ref, cd.get("stop_price"), cd.get("board"), cd["op"], market)
+    cd["account"] = {k: acct.get(k) for k in ("equity", "risk_per_trade")}
+    return cd
 
 
 @app.get("/api/scan")
@@ -355,7 +395,7 @@ def scan_get(market: str = "CN", date: str | None = None, run_id: str | None = N
             rid = run_id
         else:
             q = "SELECT run_id FROM scan_runs WHERE market=?" + (" AND scan_date=?" if date else "") + \
-                " ORDER BY scan_date DESC, finished_at DESC LIMIT 1"
+                " ORDER BY scan_date DESC, finished_at DESC, rowid DESC LIMIT 1"
             row = c.execute(q, (market, date) if date else (market,)).fetchone()
             rid = row["run_id"] if row else None
         if not rid:
@@ -373,12 +413,14 @@ def scan_get(market: str = "CN", date: str | None = None, run_id: str | None = N
                 cd["outcome"] = outc.get(cd["symbol"])
         held = {r["symbol"] for r in portfolio.list_positions(market)}
         wl = {r["symbol"] for r in _watch_rows(market)}
+        acct = portfolio.get_account(market)
         for cd in cands:
             cd["held"], cd["watched"] = cd["symbol"] in held, cd["symbol"] in wl
+            _attach_plan(cd, market, acct)
     if not run["official"] and preview:
         res = scanner.run_scan(market, scan_date=run["scan_date"], persist=False)
         return _wrap(market, run={**run, "preview_only": True}, candidates=res.get("candidates", []), preview=True)
-    return _wrap(market, run=run, candidates=cands,
+    return _wrap(market, run=run, candidates=cands, account=portfolio.get_account(market),
                  message=None if run["official"] else "数据完整性闸门未通过：不生成观察清单。可选择「仅供参考」查看。")
 
 
@@ -399,7 +441,7 @@ def scan_history(market: str = "CN", limit: int = 60):
     market = _need_cn(market)
     with db.market_db(market) as c:
         runs = db.rows(c.execute("SELECT run_id, scan_date, data_gate_status, regime, n_candidates, official FROM scan_runs "
-                                 "WHERE market=? ORDER BY scan_date DESC, finished_at DESC LIMIT ?", (market, limit)))
+                                 "WHERE market=? ORDER BY scan_date DESC, finished_at DESC, rowid DESC LIMIT ?", (market, limit)))
         for r in runs:
             o = c.execute("SELECT COUNT(*) n, AVG(ret_1d) a1, AVG(ret_3d) a3, AVG(ret_5d) a5, AVG(ret_10d) a10, AVG(ret_20d) a20, "
                           "AVG(ret_5d>0) w5, AVG(ret_20d>0) w20 FROM scan_outcomes WHERE run_id=? AND filled=1", (r["run_id"],)).fetchone()
@@ -451,7 +493,7 @@ def jobs_get(market: str = "CN"):
     market = _need_cn(market)
     with db.market_db(market) as c:
         last_run = c.execute("SELECT run_id, scan_date, data_gate_status, gate_detail, regime, finished_at FROM scan_runs "
-                             "WHERE market=? ORDER BY scan_date DESC, finished_at DESC LIMIT 1", (market,)).fetchone()
+                             "WHERE market=? ORDER BY scan_date DESC, finished_at DESC, rowid DESC LIMIT 1", (market,)).fetchone()
         logs = db.rows(c.execute("SELECT ts, job, status, detail FROM job_log ORDER BY id DESC LIMIT 15"))
         gate = None
         asof = db.get_meta(c, "data_asof")
@@ -461,7 +503,10 @@ def jobs_get(market: str = "CN"):
         info = {"data_asof": asof, "calendar_source": db.get_meta(c, "calendar_source"),
                 "last_closed_trading_day": mc.last_closed_trading_day(c, market) if mc.trading_days(c) else None,
                 "industry_map_asof": db.get_meta(c, "industry_map_asof"),
-                "has_data": bool(c.execute("SELECT 1 FROM daily_bar LIMIT 1").fetchone())}
+                "has_data": bool(c.execute("SELECT 1 FROM daily_bar LIMIT 1").fetchone()),
+                "init_sample": (lambda d: {"n": d["n"], "count": len(d["symbols"]), "at": d.get("at")} if d else None)(json.loads(db.get_meta(c, "init_sample") or "null")),
+                "init_sample_default": int(settings.cfg().get("init", {}).get("sample_size", 0) or 0),
+                "data_ready_observed": ingest.ready_stats(c, market), "industry_history": ingest.industry_history_stats(c)}
     return _wrap(market, job=manager.snapshot(), gate=gate, last_run=dict(last_run) if last_run else None,
                  logs=logs, backup=backup.backup_status(), throttle=throttle.all_status(), **info)
 
@@ -474,7 +519,12 @@ def jobs_start(task: str, market: str = "CN", body: dict = Body(default={})):
         return {"ok": True}
     if task not in ("init", "daily", "catch_up", "backup"):
         raise HTTPException(404, "未知任务")
-    return manager.start(task, market=market, **({"limit": body.get("limit")} if task == "init" else {}))
+    kw = {}
+    if task == "init":
+        kw = {"limit": body.get("limit"), "sample": body.get("sample"), "resample": bool(body.get("resample"))}
+        if body.get("remember") and body.get("sample") is not None:          # 记住这次的选择（下次默认沿用）
+            settings.save_user_config({"init": {"sample_size": int(body["sample"] or 0)}})
+    return manager.start(task, market=market, **kw)
 
 
 # ---- 自选 / 持仓 / 账户 / 交易 ----------------------------------------------------
@@ -672,7 +722,7 @@ def _scope_symbols(conn, market: str, scope: str | None) -> list[str] | None:
     elif scope == "watch":
         syms = [r["symbol"] for r in _watch_rows(market)]
     elif scope == "candidates":
-        run = conn.execute("SELECT run_id FROM scan_runs WHERE market=? AND official=1 ORDER BY scan_date DESC, finished_at DESC LIMIT 1", (market,)).fetchone()
+        run = conn.execute("SELECT run_id FROM scan_runs WHERE market=? AND official=1 ORDER BY scan_date DESC, finished_at DESC, rowid DESC LIMIT 1", (market,)).fetchone()
         if run:
             syms = [r[0] for r in conn.execute("SELECT symbol FROM scan_results WHERE run_id=?", (run[0],))]
     return syms
@@ -735,6 +785,48 @@ def events(market: str = "CN", symbol: str | None = None, type: str | None = Non
                  note="公告 / SEC 为官方原始信息（等级 1）；Yahoo 新闻为媒体（等级 3）。事件只对候选与持仓按需拉取并缓存 6 小时。")
 
 
+@app.get("/api/events/stats")
+def events_stats(market: str = "CN", scope: str | None = None, days: int = 365, min_n: int = 30):
+    """事件研究（3.18）：按事件类型 / 情绪方向统计事件之后 1 / 3 / 5 个交易日的平均收益与上涨占比。
+    重点不是「新闻 = 利好」，而是历史上类似事件发生后价格真实怎么走；样本不足（< min_n）明确标注，不下结论。"""
+    market = _need_cn(market)
+    since = (date.today() - timedelta(days=days)).isoformat()
+    today = date.today().isoformat()
+    with db.market_db(market) as c:
+        syms = _scope_symbols(c, market, scope)
+        q = "SELECT symbol, event_time, event_type, level, sentiment FROM event_stream WHERE event_time>=? AND event_time<=?"
+        a: list = [since, today]
+        if syms is not None:
+            if not syms:
+                return _wrap(market, groups=[], n_events=0, min_n=min_n)
+            q += " AND symbol IN (%s)" % ",".join("?" * len(syms))
+            a += syms
+        rows = db.rows(c.execute(q + " LIMIT 5000", a))
+        buckets: dict = {}
+        for r in rows:
+            fr = _forward_returns(c, r["symbol"], r["event_time"])
+            if not fr:
+                continue
+            tone = "利好倾向" if (r["sentiment"] or 0) > 0 else "利空倾向" if (r["sentiment"] or 0) < 0 else "中性 / 未判定"
+            for key in ((r["event_type"], "全部"), (r["event_type"], tone)):
+                b = buckets.setdefault(key, {"event_type": key[0], "tone": key[1], "n": 0, "r1": [], "r3": [], "r5": []})
+                b["n"] += 1
+                for k, lst in (("ret_1d", "r1"), ("ret_3d", "r3"), ("ret_5d", "r5")):
+                    if k in fr:
+                        b[lst].append(fr[k])
+    out = []
+    for b in buckets.values():
+        row = {"event_type": b["event_type"], "tone": b["tone"], "n": b["n"], "enough": b["n"] >= min_n}
+        for k, lst in (("1d", "r1"), ("3d", "r3"), ("5d", "r5")):
+            v = b[lst]
+            row[f"mean_{k}"] = float(np.mean(v)) if v else None
+            row[f"up_{k}"] = float(np.mean([x > 0 for x in v])) if v else None
+        out.append(row)
+    out.sort(key=lambda r: (r["event_type"], r["tone"] != "全部", r["tone"]))
+    return _wrap(market, groups=out, n_events=len(rows), min_n=min_n,
+                 note="基准 = 事件当日收盘；A 股 / 美股只统计已入库（候选 + 持仓按需拉取）的事件，样本通常很少，请勿据此下结论。")
+
+
 @app.post("/api/events/refresh")
 def events_refresh(body: dict = Body(default={}), market: str = "CN"):
     """按需拉取事件：symbols 指定，或 scope = held / watch / candidates。force=true 忽略缓存。"""
@@ -758,7 +850,7 @@ def events_refresh(body: dict = Body(default={}), market: str = "CN"):
 
 # ---- 行情总览（M6 行情页）-----------------------------------------------------------
 
-INDEX_NAMES = {"sh.000300": "沪深300", "sh.000001": "上证指数", "sz.399001": "深证成指", "sz.399006": "创业板指", "sh.000905": "中证500",
+INDEX_NAMES = {"sh.000016": "上证50", "sh.000300": "沪深300", "sh.000001": "上证指数", "sz.399001": "深证成指", "sz.399006": "创业板指", "sh.000905": "中证500",
                "sh.000852": "中证1000", "SPY": "SPY (S&P 500)", "QQQ": "QQQ (Nasdaq 100)", "IWM": "IWM (小盘)", "DIA": "DIA (道指)",
                "^GSPC": "S&P 500", "^IXIC": "Nasdaq 综合", "^VIX": "VIX 恐慌指数",
                "XLK": "XLK 科技", "XLF": "XLF 金融", "XLV": "XLV 医疗", "XLY": "XLY 可选消费", "XLP": "XLP 必需消费", "XLE": "XLE 能源", "XLI": "XLI 工业",
@@ -788,7 +880,7 @@ def market_overview(market: str = "CN", movers: int = 12):
                         "ret_5d": cl[0] / cl[5] - 1 if len(cl) > 5 else None, "ret_20d": cl[0] / cl[20] - 1 if len(cl) > 20 else None,
                         "above_ma50": None if ma50 is None else cl[0] > ma50, "above_ma200": None if ma200 is None else cl[0] > ma200})
     out["indices"] = [i for i in idx if i["symbol"] in markets.gate_benchmarks(market)]
-    out["sector_etfs"] = [i for i in idx if i["symbol"] in markets.aux_indices(market)]
+    out["sector_etfs"] = [i for i in idx if i["symbol"] in settings.cfg()["gate"].get("sector_etfs_us", [])] if market == "US" else []
     mem = l2.loc[last]
     r1 = F["ret_1"].loc[last][mem]
     m = ctx["feat"].m
@@ -814,6 +906,41 @@ def market_overview(market: str = "CN", movers: int = 12):
     row = lambda k: F[k].loc[last]  # noqa: E731
     out["movers"] = {"gainers": top(row("ret_1")), "losers": top(row("ret_1"), True), "volume": top(row("vol_ratio")), "strong": top(row("rps_20"))}
     return _wrap(market, **out)
+
+
+@app.get("/api/storage")
+def storage_get():
+    """数据目录各部分大小与用途（设置页「存储空间」）。"""
+    return backup.storage_report()
+
+
+@app.post("/api/storage/clean")
+def storage_clean(body: dict = Body(...)):
+    """用户在设置页确认后执行：删除演示数据 / 旧备份，或压缩全量备份。核心数据不在可清理范围内。"""
+    try:
+        return backup.storage_clean(str(body.get("key", "")))
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.get("/api/market/view")
+def market_view_get(market: str = "CN"):
+    """市场温度（全A站上 20 日线比例 + 历史证据）+ 宽基指数 / ETF 的规则买入位、止损位、规则仓位与回测。"""
+    from . import market_view
+    market = _need_cn(market)
+    d = dict(market_view.build(market))
+    acct = portfolio.get_account(market)
+    etf_pct = float(settings.cfg().get("allocation", {}).get("etf", 0) or 0)
+    if d.get("status") == "ok" and acct.get("equity") and etf_pct and d.get("indices"):
+        per_index = acct["equity"] * etf_pct / len(d["indices"])
+        rule = d["rule"]
+        d["allocation"] = {"equity": acct["equity"], "etf_pct": etf_pct, "etf_amount": round(acct["equity"] * etf_pct, 2),
+                           "stock_amount": round(acct["equity"] * (1 - etf_pct), 2), "per_index": round(per_index, 2),
+                           "trend_amount": round(per_index * rule["trend"]["weight"], 2), "washout_amount": round(per_index * rule["washout"]["weight"], 2),
+                           "stock_max_positions": settings.cfg()["portfolio"]["max_positions"],
+                           "stock_risk_per_trade": acct.get("risk_per_trade") or settings.cfg()["portfolio"]["risk_per_trade"]}
+        d["indices"] = [{**i, "hold_amount": round(per_index * i["position"], 2)} for i in d["indices"]]
+    return _wrap(market, **d)
 
 
 # ---- 基本面摘要（3.15）----------------------------------------------------------------
@@ -1014,6 +1141,30 @@ def icon():
 def _startup():
     if settings.cfg()["jobs"].get("scan_on_startup", True):
         manager.schedule()
+    if settings.cfg()["jobs"].get("prewarm", True):
+        threading.Thread(target=_prewarm, name="prewarm", daemon=True).start()
+
+
+def _prewarm():
+    """启动后在后台预热：市场温度 / 指数择时与全市场面板（首次约 40 秒）。这样打开页面时不必等待，也不会被并发请求重复构建。"""
+    from . import market_view
+    warmed = False
+    for m in ("CN", "US"):
+        try:
+            with db.market_db(m) as c:
+                if not c.execute("SELECT 1 FROM daily_bar LIMIT 1").fetchone():
+                    continue
+                market_view.ensure_breadth(c, m)
+            market_view.build(m)
+            if not warmed:                     # 面板缓存只有一份（约 2 GB）：只预热首页默认市场
+                with settings.market_ctx(m):
+                    _scan_ctx(m)
+                warmed = True
+            r = scanner.rescan_if_config_changed(m)       # 参数变了（如升级后默认形态改变）：当天清单按新参数重扫
+            if r:
+                log.info("rescanned %s %s with current config: %s candidates", m, r.get("scan_date"), len(r.get("candidates", [])))
+        except Exception:  # noqa: BLE001 - 预热失败不影响服务，按需时再算
+            log.exception("prewarm %s failed", m)
 
 
 def main():
@@ -1023,7 +1174,17 @@ def main():
     host = s["host"]
     if host not in ("127.0.0.1", "localhost", "::1") and not s.get("token"):
         raise SystemExit("开放局域网访问（host 非 127.0.0.1）时必须设置 server.token 访问口令（系统内含持仓数据，1.6）。")
-    uvicorn.run(app, host=host, port=int(os.environ.get("PORT") or s["port"]), log_level="info")
+    kw = {}
+    cert, key = s.get("ssl_certfile"), s.get("ssl_keyfile")
+    if cert and key:                       # 本地 HTTPS：手机经局域网访问时才能安装 PWA / 注册 Service Worker（1.6）
+        from pathlib import Path
+        for f in (cert, key):
+            if not Path(f).exists():
+                raise SystemExit(f"找不到证书文件：{f}（可用 python tools/make_cert.py 生成自签名证书，见 docs/使用手册.md）")
+        kw = {"ssl_certfile": cert, "ssl_keyfile": key}
+        print(f"HTTPS 已启用：https://{host if host not in ('0.0.0.0', '::') else '<本机 IP>'}:{int(os.environ.get('PORT') or s['port'])}/")
+    uvicorn.run(app, host=host, port=int(os.environ.get("PORT") or s["port"]), log_level="info",
+                access_log=bool(s.get("access_log", False)), **kw)      # 不逐条记录页面请求（轮询会让日志无限变大）
 
 
 if __name__ == "__main__":

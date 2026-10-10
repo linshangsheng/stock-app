@@ -2,6 +2,7 @@
 // 行业强弱由库内个股日收益等权合成（3.14）；排行只在当日交易池 L2 内统计。数据全部来自后端，前端不做计算。
 import { get, state } from './api.js';
 import { h, clear, fmtPrice, fmtPct, fmtNum, dirClass, code } from './util.js';
+import { loadMarketView, marketFull } from './marketpanel.js';
 
 const REGIME = { NORMAL: ['正常', '正常开仓'], CAUTION: ['谨慎', '仓位上限减半，只做最强候选'], DEFENSIVE: ['防守', '不开新仓'], UNKNOWN: ['未知', '基准数据缺失'] };
 
@@ -9,15 +10,31 @@ export const marketView = {
   layout: 'page',
   async mount(ctx) {
     const el = ctx.pageEl; clear(el);
-    const body = h('div', { class: 'pane-body page' }, h('div', { class: 'row between mb' }, h('h1', {}, state.market === 'US' ? '美股行情' : 'A股行情'), h('span', { class: 'hint', id: 'mk-asof' })),
-      h('div', { class: 'empty' }, h('span', { class: 'spinner' }), ' 加载行情总览…'));
-    el.append(body);
+    const mvBox = h('div', {}, h('div', { class: 'card' }, h('div', { class: 'empty' }, h('span', { class: 'spinner' }), ' 加载市场温度与指数择时…')));
+    const body = h('div', {}, h('div', { class: 'empty' }, h('span', { class: 'spinner' }), ' 加载行情总览（首次打开需构建全市场数据，约 40 秒）…'));
+    el.append(h('div', { class: 'pane-body page' }, h('div', { class: 'row between mb' }, h('h1', {}, state.market === 'US' ? '美股行情' : 'A股行情'), h('span', { class: 'hint', id: 'mk-asof' })),
+      mvBox, h('h2', { class: 'mt', style: 'margin-top:22px' }, '个股与行业'), body));
+    // 市场温度 / 指数择时：轻量，单独加载，不等行情总览
+    (async () => {
+      let mv = null;
+      for (let k = 0; k < 20; k++) {
+        try { mv = await loadMarketView(); } catch (e) { mv = { status: 'error', message: e.message }; }
+        if (mv.status !== 'computing' || !document.body.contains(mvBox)) break;
+        clear(mvBox); mvBox.append(marketFull(mv).el);
+        await new Promise(r => setTimeout(r, 8000));
+      }
+      if (!document.body.contains(mvBox)) return;
+      this._mv?.destroy();
+      this._mv = marketFull(mv);
+      clear(mvBox); mvBox.append(this._mv.el); this._mv.init();
+    })();
     let o;
-    try { o = await get('/market/overview'); } catch (e) { clear(body); body.append(h('h1', {}, '行情'), h('div', { class: 'empty' }, h('div', { class: 'big' }, '暂无行情数据'), e.message, h('div', { class: 'mt' }, h('a', { class: 'btn', href: '#/settings' }, '去设置页初始化数据')))); return; }
+    try { o = await get('/market/overview', {}, { timeout: 180000 }); } catch (e) { clear(body); body.append(h('div', { class: 'empty' }, h('div', { class: 'big' }, '暂无行情数据'), e.message, h('div', { class: 'mt' }, h('a', { class: 'btn', href: '#/settings' }, '去设置页初始化数据')))); return; }
     clear(body);
     const g = o.breadth;
     const [rl, rt] = REGIME[g.regime] || ['—', ''];
-    body.append(h('div', { class: 'row between mb' }, h('h1', {}, state.market === 'US' ? '美股行情' : 'A股行情'), h('span', { class: 'hint' }, `数据截止 ${o.date}（盘后日线）${o._stale ? ' · 数据延迟' : ''}`)));
+    const asof = document.getElementById('mk-asof');
+    if (asof) asof.textContent = `数据截止 ${o.date}（盘后日线）${o._stale ? ' · 数据延迟' : ''}`;
 
     // 指数
     body.append(h('div', { class: 'grid c4' }, o.indices.map(i => h('div', { class: 'idx-card' },
@@ -36,7 +53,7 @@ export const marketView = {
     // 市场环境 / 宽度
     const bar = (v, label) => h('div', { class: 'kv' }, h('span', { class: 'k' }, label), h('span', { class: 'v num' }, v == null ? '—' : fmtPct(v, 0, false)),
       h('div', { class: 'bar' }, h('i', { style: `width:${Math.round((v || 0) * 100)}%` })));
-    body.append(h('div', { class: 'card mt' }, h('div', { class: 'card-title' }, h('h3', {}, '市场环境与宽度（当日交易池）'), h('span', { class: 'pill-state ' + g.regime, title: rt }, rl)),
+    body.append(h('div', { class: 'card mt' }, h('div', { class: 'card-title' }, h('h3', {}, '个股开仓闸门与宽度（当日交易池）'), h('span', { class: 'pill-state ' + g.regime, title: rt }, rl)),
       h('div', { class: 'grid c4' }, h('div', { class: 'kv' }, h('span', { class: 'k' }, '上涨 / 下跌 / 平'), h('span', { class: 'v num' }, `${g.up} / ${g.down} / ${g.flat}`)),
         bar(g.adv_ratio, '涨跌比（涨 /（涨+跌））'), bar(g.above_ma50, '站上 MA50 的比例'), bar(g.above_ma200, '站上 MA200 的比例')),
       h('div', { class: 'grid c4 mt-s' }, bar(g.above_ma20, '站上 MA20 的比例'), h('div', { class: 'kv' }, h('span', { class: 'k' }, '创 52 周新高'), h('span', { class: 'v num' }, g.new_highs ?? '—')),
@@ -67,4 +84,5 @@ export const marketView = {
     body.append(h('div', { class: 'card mt' }, h('h3', { style: 'margin-bottom:6px' }, '排行（交易池 L2 内）'), tabs, tbl));
     draw();
   },
+  cleanup() { this._mv?.destroy(); this._mv = null; },
 };

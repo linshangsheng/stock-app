@@ -173,6 +173,7 @@ def _run_scan(market: str, scan_date: str | None, persist: bool, include_preview
                 "rs_20": _f(F["rs_20"].loc[last, s]) if "rs_20" in F else None,
                 "ret_20": _f(F["ret_20"].loc[last, s]), "dist_52w_high": _f(F["dist_52w_high"].loc[last, s]),
                 "adv20": _f(F["amt_ma20"].loc[last, s]),
+                "struct_low": _f((F["ll5_incl"] if names_en[prim - 1] in ("pullback", "oversold") else F["struct_low_breakout"]).loc[last, s]),
             })
         cand = pd.DataFrame(rows)
         summary = {"universe_l2": int(l2.loc[last].sum()), "signals_today": int(sig_today.sum()),
@@ -199,7 +200,7 @@ def _run_scan(market: str, scan_date: str | None, persist: bool, include_preview
         official = gate["status"] == "PASS"
         run_id = f"{market}-{day.replace('-', '')}-{settings.config_hash(config_snapshot())[:6]}-{datetime.now().strftime('%H%M%S')}"
         res_regime = {"state": regime, "detail": reg_detail, "position_factor": port_factor, "new_positions_allowed": new_allowed}
-        out = {"run_id": run_id, "market": market, "scan_date": day, "data_asof": day,
+        out = {"run_id": run_id, "market": market, "scan_date": day, "data_asof": day, "entry_mode": cfg["execution"]["entry_mode"],
                "gate": {k: gate[k] for k in ("status", "checks", "reasons")}, "official": official, "regime": res_regime,
                "summary": summary, "candidates": results, "started_at": started,
                "valid_until": mc.next_trading_day(conn, day), "is_stale": _is_stale(conn, market, day)}
@@ -225,6 +226,18 @@ def _run_scan(market: str, scan_date: str | None, persist: bool, include_preview
         if not official and not include_preview:
             out["candidates"] = []
         return out
+
+
+def rescan_if_config_changed(market: str = "CN") -> dict | None:
+    """最新一份正式清单若是用旧参数（配置哈希不同）算的，且就是当前数据日，则按现行参数重扫一次（升级 / 改参数后立即生效）。
+    不同交易日的历史清单不动（那是当时真实给出的，历史回看要用）。"""
+    with settings.market_ctx(market), db.market_db(market) as c:
+        asof = db.get_meta(c, "data_asof")
+        row = c.execute("SELECT config_hash, scan_date FROM scan_runs WHERE market=? AND official=1 ORDER BY scan_date DESC, finished_at DESC, rowid DESC LIMIT 1",
+                        (market,)).fetchone()
+        if not row or not asof or row["scan_date"] != asof or row["config_hash"] == settings.config_hash(config_snapshot()):
+            return None
+    return run_scan(market, scan_date=asof)
 
 
 def _f(v):

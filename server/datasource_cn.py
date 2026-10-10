@@ -146,12 +146,15 @@ class BaoStockSource:
             pc = _num(df["preclose"])
             ex = ((pc / prev - 1).abs() > 0.001) & prev.notna() & pc.notna()
             need_events = bool(ex.any())
+        ev = None
         if need_events:
             ev = self.adj_factor_events(symbol, "1990-01-01", end)
             out["adj_factor"] = attach_adj_factor(out["date"], ev)
         else:
             out["adj_factor"] = float(prev_factor)
-        return out[BAR_COLS]
+        res = out[BAR_COLS].copy()
+        res.attrs["adj_events"] = ev                    # 调用方（初始化）直接复用，不必为同一批数据再请求一次复权因子
+        return res
 
     def index_bars(self, symbol: str, start: str, end: str) -> pd.DataFrame:
         df = self._query("query_history_k_data_plus", symbol, "date,open,high,low,close,volume,amount",
@@ -235,7 +238,50 @@ class EastmoneySource:
 
         return self.th.call(once, retries=2)
 
-    def snapshot(self) -> pd.DataFrame:
+    def _ulist(self, host: str, symbols: list[str]) -> list[dict]:
+        import requests
+
+        secids = ",".join(_secid(x) for x in symbols)
+
+        def once():
+            r = requests.get(f"https://{host}/api/qt/ulist.np/get", params={"fltt": 2, "invt": 2, "fields": self.FIELDS, "secids": secids,
+                             "ut": "bd1d9ddb04089700cf9c27f6f7426281"}, timeout=30,
+                             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+                                      "Referer": "https://quote.eastmoney.com/"})
+            r.raise_for_status()
+            d = (r.json().get("data") or {}).get("diff") or []
+            if not d:
+                raise throttle.RateLimited("东财 ulist 返回空数据")
+            return d.values() if isinstance(d, dict) else d
+
+        return list(self.th.call(once, retries=2))
+
+    def snapshot(self, codes: list[str] | None = None) -> pd.DataFrame:
+        """优先用 clist 分页取全市场（约 56 页）；整体失败且给出了代码清单（codes）时，改用 ulist 按代码分批取（每批 80 只）。
+        M0 实测：clist 的大列表翻页较容易触发 IP 级限流（单页可通，连续翻页会被断开）；ulist 小批量更稳，但没有在限流期之外联调过。"""
+        try:
+            return self._snapshot_clist()
+        except throttle.CircuitOpen:
+            raise
+        except Exception as e:  # noqa: BLE001
+            if not codes:
+                raise
+            rows = []
+            for host in self.HOSTS:
+                try:
+                    rows = []
+                    for i in range(0, len(codes), 80):
+                        rows += self._ulist(host, codes[i:i + 80])
+                    break
+                except throttle.CircuitOpen:
+                    raise
+                except Exception:  # noqa: BLE001
+                    rows = []
+            if not rows:
+                raise RuntimeError(f"东财快照不可用（clist 与 ulist 均失败）：{e}")
+            return parse_clist(rows)
+
+    def _snapshot_clist(self) -> pd.DataFrame:
         last_err = None
         for host in self.HOSTS:
             try:

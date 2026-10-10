@@ -118,6 +118,14 @@ window.addEventListener('need-token', () => {
 
 // ---------- 预警（4.6）：页面内提醒，仅在页面打开时生效 ----------
 const alerted = new Set(prefs.get('alerted', []));
+/** 浏览器系统通知（页面打开时；首次触发预警时请求权限）。邮件 / 手机推送不在范围内——持仓止损以券商条件单为准。 */
+function notify(title, body) {
+  try {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'granted') new Notification(title, { body, icon: 'icon.svg' });
+    else if (Notification.permission === 'default') Notification.requestPermission().then(p => { if (p === 'granted') new Notification(title, { body, icon: 'icon.svg' }); });
+  } catch { /* 不支持通知的环境 */ }
+}
 async function checkAlerts() {
   if (state.market !== 'CN' || state.offline) return;
   try {
@@ -128,11 +136,48 @@ async function checkAlerts() {
       if (alerted.has(key)) continue;
       alerted.add(key); prefs.set('alerted', [...alerted].slice(-200));
       const [kind, val] = a.rule.split(':');
+      notify('价格预警', `${a.name} ${a.rule.replace(':', ' ')}（最新 ${a.quote?.close}）`);
       toast(`预警：${a.name} ${({ price_above: '收盘价 ≥', price_below: '收盘价 ≤', pct_above: '涨幅 ≥', pct_below: '跌幅 ≤' })[kind]} ${val} 已触发（最新 ${a.quote?.close}）`, 'ok');
     }
   } catch { /* 未初始化 / 无预警 */ }
 }
 setInterval(checkAlerts, 60000);
+
+// ---------- 软件更新提示：后端重启后若代码 / 配置变了，顶部出现「点这里刷新」（不必 Ctrl+F5）----------
+let _build = null;
+const updBar = h('div', { class: 'alert info', id: 'update-bar', hidden: true, style: 'position:fixed;left:50%;top:8px;transform:translateX(-50%);z-index:71;box-shadow:var(--shadow);display:flex;gap:10px;align-items:center' },
+  h('span', {}, '软件已更新'), h('button', { class: 'btn sm primary', onclick: () => location.reload() }, '点这里刷新'));
+document.body.append(updBar);
+async function checkUpdate() {
+  try {
+    const p = await api('/ping', { market: false, cache: false });
+    if (_build && p.build && p.build !== _build) updBar.hidden = false;
+    _build = _build || p.build;
+  } catch { /* 后端未启动 */ }
+}
+setInterval(checkUpdate, 60000);
+
+// ---------- 全屏：启动后第一次点击 / 按键自动进入（浏览器只允许用户操作后全屏），Esc 退出 ----------
+// Esc 退出后本次会话不再自动进入；右下角 ⛶ 按钮随时切换。设置页可关闭「自动全屏」。
+const fsSupported = !!document.documentElement.requestFullscreen;
+const isFs = () => !!document.fullscreenElement;
+function enterFs() { if (fsSupported && !isFs()) document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => { /* 某些嵌入环境不允许 */ }); }
+function toggleFs() { if (isFs()) document.exitFullscreen(); else { sessionStorage.removeItem('fsExited'); enterFs(); } }
+ctx.toggleFullscreen = toggleFs;
+function autoFsOnce(e) {
+  if (e.type === 'keydown' && (e.key === 'Escape' || e.key === 'F11')) return;
+  removeEventListener('pointerdown', autoFsOnce, true); removeEventListener('keydown', autoFsOnce, true);
+  if (prefs.get('autoFullscreen', true) && !sessionStorage.getItem('fsExited')) enterFs();
+}
+if (fsSupported) {
+  addEventListener('pointerdown', autoFsOnce, true); addEventListener('keydown', autoFsOnce, true);
+  let was = false;
+  document.addEventListener('fullscreenchange', () => {
+    if (was && !isFs()) sessionStorage.setItem('fsExited', '1');
+    was = isFs();
+    const b = $('#fs-btn'); if (b) b.title = isFs() ? '退出全屏（Esc）' : '全屏';
+  });
+}
 
 // ---------- 启动 ----------
 (async function boot() {
@@ -143,12 +188,15 @@ setInterval(checkAlerts, 60000);
     $$('.market-switch button').forEach(x => x.classList.toggle('on', x.dataset.market === saved));
   }
   applyTheme(); applyColors();
+  if (fsSupported) $('#fs-btn').addEventListener('click', toggleFs); else $('#fs-btn').hidden = true;
+  $('#reload-btn').addEventListener('click', () => location.reload());
   $('#theme-btn').addEventListener('click', () => {
     const cur = document.documentElement.dataset.theme;
     prefs.set('theme', cur === 'dark' ? 'light' : 'dark'); applyTheme();
   });
   try {
     const p = await api('/ping', { market: false, cache: false });
+    _build = p.build || null;
     _demo = p.demo || {};
     refreshDemoBadge();
   } catch { /* 后端未启动：api.js 已触发离线提示 */ }

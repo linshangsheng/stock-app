@@ -116,7 +116,8 @@ def l2_exclusion_stats(cond: dict[str, pd.DataFrame], day_index: int = -1) -> di
 
 # ---- L1 ---------------------------------------------------------------------
 
-def apply_l1(conn, snapshot: pd.DataFrame | None = None, asof: str | None = None, market: str = "CN") -> dict:
+def apply_l1(conn, snapshot: pd.DataFrame | None = None, asof: str | None = None, market: str = "CN",
+             exclude_missing: bool = False) -> dict:
     """应用 L1 入库过滤，返回各条件剔除数量（3.26.1）。
     有全市场快照时按 价格 / 流通市值 / 成交额 做入库粗筛；无快照时仅按板块与证券类型（L2 逐日兜底）。
     已退市股票一律入库；ST 不在 L1 剔除；只改 in_l1 标记，不删数据。"""
@@ -142,6 +143,10 @@ def apply_l1(conn, snapshot: pd.DataFrame | None = None, asof: str | None = None
         stats.update(price=int((bad_px & ~delisted).sum()), mktcap=int((bad_cap & ~delisted).sum()),
                      amount=int((bad_amt & ~delisted).sum()))
         keep &= ~(bad_px | bad_cap | bad_amt)
+        if exclude_missing:                               # 美股：筛选器已覆盖全部在市普通股，不在快照里的（低价 / 无成交 / 权证等）剔除
+            absent = ~sec["symbol"].isin(snap.index)
+            stats["not_in_snapshot"] = int((absent & ~delisted).sum())
+            keep &= ~absent
     keep |= delisted
     if snapshot is None:                                  # 无快照：保留此前预筛（prefilter_l1）已剔除的标记，不要把垃圾股翻回来
         pre = {r[0] for r in conn.execute("SELECT symbol FROM fetch_state WHERE task='prefilter' AND status='excluded'")}

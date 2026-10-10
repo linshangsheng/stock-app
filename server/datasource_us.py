@@ -28,8 +28,22 @@ _NON_COMMON = re.compile(r"\b(?:warrants?|rights?|units?|preferred|depositary|no
                          r"acquisition|blank check|spac)\b", re.I)
 
 
+US_EXCHANGES = ("NMS", "NGM", "NCM", "NYQ", "ASE")       # Nasdaq 三层 / NYSE / NYSE American（Yahoo 交易所代码）
+
+
 def to_yahoo(symbol: str) -> str:
     return symbol.replace(".", "-")
+
+
+def parse_screen_quotes(quotes: list[dict]) -> pd.DataFrame:
+    """Yahoo 筛选器结果 -> 快照表（与 A 股东财快照同列名，供 universe.apply_l1 复用）。"""
+    rows = []
+    for q in quotes:
+        px, vol = q.get("regularMarketPrice"), q.get("averageDailyVolume3Month")
+        if not q.get("symbol") or px is None or vol is None:
+            continue
+        rows.append((q["symbol"], float(px), float(px) * float(vol), float(q["marketCap"]) if q.get("marketCap") else None))
+    return pd.DataFrame(rows, columns=["symbol", "close", "amount", "float_mktcap"]).drop_duplicates("symbol")
 
 
 def parse_nasdaq_lists(nasdaq_txt: str, other_txt: str) -> pd.DataFrame:
@@ -56,6 +70,8 @@ class UsSource:
     def __init__(self):
         self.th = throttle.get("yfinance")
         self._yf = None
+        n = int(settings.cfg().get("init", {}).get("us_threads", 1) or 1)
+        self._threads: bool | int = n if n > 1 else False   # 批量下载的并发线程数；遇到限流自动降为单线程
 
     @property
     def yf(self):
@@ -97,6 +113,43 @@ class UsSource:
     def security_basic(self, symbol: str) -> dict:
         return {"status": "active", "sec_type": "stock"}
 
+    # ---- 全市场快照 / 行业：Yahoo 筛选器（每页 250 只，一次请求 ≈ 1~2 秒）----
+    # 取代「逐股拉近 45 天日线预筛」（~1 小时）与「逐股 info 查行业」（~50 分钟）：整个美股几十个请求即可完成。
+    def _screen_all(self, conditions: list, cap: int = 20) -> list[dict]:
+        E = self.yf.EquityQuery
+        q = E("and", [E("is-in", ["exchange", *US_EXCHANGES])] + conditions)
+        out: list[dict] = []
+        for page in range(cap):
+            def once(off=page * 250):
+                r = self.yf.screen(q, size=250, offset=off, sortField="intradaymarketcap", sortAsc=False)
+                if not r or "quotes" not in r:
+                    raise RateLimited("screener 返回异常：按限流处理")
+                return r
+
+            r = self.th.call(once)
+            qs = r.get("quotes") or []
+            out += qs
+            if len(qs) < 250 or len(out) >= int(r.get("total") or 0):
+                break
+        return out
+
+    def screen_snapshot(self, min_price: float, min_avg_volume: float = 50_000) -> pd.DataFrame:
+        """全市场快照：symbol, close, amount（价格 × 3 个月日均量，近似日均成交额）, float_mktcap（总市值，美股免费源无流通市值）。"""
+        E = self.yf.EquityQuery
+        quotes = self._screen_all([E("gt", ["intradayprice", float(min_price)]), E("gt", ["avgdailyvol3m", float(min_avg_volume)])])
+        return parse_screen_quotes(quotes)
+
+    def industry_map_screen(self, min_price: float) -> pd.DataFrame:
+        """行业 / Sector 映射：按 Yahoo 的 145 个行业各查一次（行业→Sector 关系取自 yfinance 常量表）。返回 symbol, industry, sector。"""
+        E = self.yf.EquityQuery
+        rows = []
+        for sector, inds in self.yf.const.EQUITY_SCREENER_EQ_MAP["industry"].items():
+            for ind in sorted(inds):
+                for q in self._screen_all([E("eq", ["industry", ind]), E("gt", ["intradayprice", float(min_price)])]):
+                    if q.get("symbol"):
+                        rows.append((q["symbol"], ind, sector))
+        return pd.DataFrame(rows, columns=["symbol", "industry", "sector"]).drop_duplicates("symbol")
+
     # ---- 日线 + 拆股 / 分红 ----
     def daily_bars_batch(self, symbols: list[str], start: str, end: str) -> dict[str, pd.DataFrame]:
         """批量日线（一次请求同时取回拆股与分红）。整批为空视为限流（退避重试），个别股票为空视为无数据（权证等）。"""
@@ -105,8 +158,9 @@ class UsSource:
 
         def once():
             df = self.yf.download(ysyms, start=start, end=end_excl, auto_adjust=False, actions=True, progress=False,
-                                  group_by="ticker", threads=False)
+                                  group_by="ticker", threads=self._threads if len(ysyms) > 1 else False)
             if df is None or df.empty:
+                self._threads = False               # 疑似限流：此后本进程内回到单线程（更慢但更稳），再退避重试
                 raise RateLimited("yfinance 返回空数据：按限流处理")
             return df
 

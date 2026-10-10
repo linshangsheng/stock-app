@@ -139,3 +139,17 @@ def test_l1_bias_experiment_runs_on_copy_and_reports(fresh_env, monkeypatch):
         assert c.execute("SELECT COUNT(*) FROM daily_bar").fetchone()[0] == bars_before, "实验不得改动正式库"
         assert c.execute("SELECT COUNT(*) FROM securities WHERE in_l1=0").fetchone()[0] == excluded
     assert l1_bias.last_report("CN")["run_at"] == rep["run_at"]
+
+
+def test_industry_history_snapshots_are_effective_dated(fresh_env):
+    """行业映射只有当前快照 -> 从现在起累积带生效日期的快照；点时查询不得用「今天的」回看更早的日子（3.14）。"""
+    with db.market_db("CN") as c:
+        assert ingest.record_industry(c, "sh.600001", "银行", None, "2026-01-05") is True
+        assert ingest.record_industry(c, "sh.600001", "银行", None, "2026-02-05") is False          # 未变化：不追加
+        assert ingest.record_industry(c, "sh.600001", "非银金融", None, "2026-03-05") is True       # 行业调整：追加
+        assert ingest.industry_asof(c, "sh.600001", "2026-01-20") == "银行"
+        assert ingest.industry_asof(c, "sh.600001", "2026-03-10") == "非银金融"
+        assert ingest.industry_asof(c, "sh.600001", "2025-12-31") is None, "快照之前的日期不能用后来的行业回填"
+        st = ingest.industry_history_stats(c)
+        assert st["rows"] == 2 and st["symbols_with_changes"] == 1
+        assert c.execute("SELECT industry FROM industry_map WHERE symbol='sh.600001'").fetchone()[0] == "非银金融"

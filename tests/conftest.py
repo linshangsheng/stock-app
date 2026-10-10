@@ -18,6 +18,9 @@ def _reload_settings(demo: bool):
     if demo:
         settings.cfg()["datasource"]["cn"] = "demo"
         settings.cfg()["datasource"]["us"] = "demo"
+    # 机制测试（成交规则 / 无未来函数 / 回填）需要足够多的信号：合成数据上启用全部经典形态。
+    # 生产默认只启用回测证据支持的形态（config.yaml setups.enabled），与这里无关。
+    settings.cfg()["setups"]["enabled"] = ["breakout", "pullback", "vcp"]
     return settings
 
 

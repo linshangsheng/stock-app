@@ -4,8 +4,10 @@ import { get, put, post, del, state } from './api.js';
 import { StockChart } from './chart.js';
 import { h, clear, fmtPrice, fmtPct, fmtSigned, fmtAmount, fmtNum, dirClass, code, toast, esc, modal, copyText, download } from './util.js';
 import { openTradeForm } from './portfolio.js';
+import { planCard } from './plan.js';
 
 let chart = null;
+const SETUP_CN = { breakout: '突破', pullback: '回踩', vcp: '波动收缩突破', oversold: '强势超跌' };
 let seq = 0;
 
 export function destroyDetail() { chart?.destroy(); chart = null; }
@@ -59,17 +61,17 @@ export async function showDetail(ctx, symbol, meta = {}) {
       h('button', { class: 'btn', title: '价格 / 涨跌幅预警（仅页面打开时生效）', onclick: () => alertDlg(symbol, k.name, last.close) }, '⏰ 预警'),
       h('button', { class: 'btn primary', onclick: () => openTradeForm({
         symbol, name: k.name, side: 'buy', price: lv.scan?.entry_ref ?? last.close, initial_stop: lv.scan?.stop_price, setup: lv.scan?.setup,
-        signal_run_id: lv.scan?.run_id, planned_trigger: lv.scan?.trigger_price, shares: lv.scan?.shares, onDone: () => ctx.refreshList?.(),
+        signal_run_id: lv.scan?.run_id, planned_trigger: lv.scan?.trigger_price, shares: lv.scan?.shares, risk_amount: lv.scan?.op?.risk_budget ?? lv.scan?.risk_amount, onDone: () => ctx.refreshList?.(),
       }) }, '记录买入')));
 
   // 清单信息卡
   const info = [];
   if (lv.scan) {
     info.push(h('div', { class: 'card soft mt' },
-      h('div', { class: 'card-title' }, h('h3', {}, `今日观察清单（${lv.scan.scan_date}）`), h('span', { class: 'badge accent' }, lv.scan.setup)),
+      h('div', { class: 'card-title' }, h('h3', {}, `今日观察清单（${lv.scan.scan_date}）`), h('span', { class: 'badge accent' }, SETUP_CN[lv.scan.setup] || lv.scan.setup)),
       h('div', { class: 'row wrap' }, (lv.scan.reasons || []).map(r => h('span', { class: 'tag' }, r))),
       h('div', { class: 'grid c4 mt-s' },
-        kv('综合分', fmtNum(lv.scan.score, 0)), kv('触发价', fmtPrice(lv.scan.trigger_price)), kv('止损位', fmtPrice(lv.scan.stop_price)),
+        kv('综合分', fmtNum(lv.scan.score, 0)), kv('参考价（收盘）', fmtPrice(lv.scan.entry_ref ?? lv.scan.close)), kv('止损位', fmtPrice(lv.scan.stop_price)),
         kv('建议股数', lv.scan.shares != null ? String(lv.scan.shares) : '未录入账户'))));
   }
   if (lv.position) {
@@ -96,7 +98,8 @@ export async function showDetail(ctx, symbol, meta = {}) {
 
   const finBox = h('div', { class: 'mt' });
   const flowBox = h('div', { class: 'mt' });
-  el.append(topBar(ctx), head, ...info, tools, box, h('div', { class: 'pane-body' }, h('h3', { style: 'margin-bottom:8px' }, '关键指标'), ind, finBox, flowBox,
+  const plan = lv.scan ? planCard(lv.scan, () => showDetail(ctx, symbol, meta)) : null;
+  el.append(topBar(ctx), head, plan, ...info, tools, box, h('div', { class: 'pane-body' }, h('h3', { style: 'margin-bottom:8px' }, '关键指标'), ind, finBox, flowBox,
     h('p', { class: 'hint mt' }, '指标全部由后端 features.py 统一计算（口径见需求书 3.6.1），前端只做展示。价格为前复权。')));
   renderFin(finBox, symbol);
   renderFlow(flowBox, symbol);
@@ -166,7 +169,7 @@ function summaryText(k, last, chg, pct, lv) {
   const lines = [`${k.name}（${code(k.symbol)}）${k.industry ? ' · ' + k.industry : ''}`,
     `${k.asof_bar} 收盘 ${fmtPrice(last.close)}  ${fmtSigned(chg)} (${fmtPct(pct)})  成交额 ${fmtAmount(last.amount)}`,
     `RSI14 ${fmtNum(i.rsi14, 1)} · 量比 ${fmtNum(i.vol_ratio, 2)} · ATR% ${fmtPct(i.atr_pct, 2, false)} · 20日 ${fmtPct(i.ret_20)} · 距52周高 ${fmtPct(i.dist_52w_high, 1, false)}`];
-  if (lv.scan) lines.push(`观察清单：${lv.scan.setup}，触发价 ${fmtPrice(lv.scan.trigger_price)}，止损位 ${fmtPrice(lv.scan.stop_price)}${lv.scan.shares != null ? '，建议 ' + lv.scan.shares + ' 股' : ''}`);
+  if (lv.scan) lines.push(`观察清单：${SETUP_CN[lv.scan.setup] || lv.scan.setup}，次日开盘买（参考价 ${fmtPrice(lv.scan.entry_ref ?? lv.scan.close)}），止损位 ${fmtPrice(lv.scan.stop_price)}${lv.scan.take_profit ? '，止盈 ' + fmtPrice(lv.scan.take_profit) : ''}${lv.scan.shares != null ? '，建议 ' + lv.scan.shares + ' 股' : ''}`);
   if (lv.position) lines.push(`持仓：${lv.position.qty} 股，成本 ${fmtPrice(lv.position.avg_cost)}，移动止损 ${fmtPrice(lv.position.current_stop)}`);
   return lines.join('\n');
 }

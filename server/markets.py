@@ -29,8 +29,11 @@ def gate_benchmarks(market: str) -> list[str]:
 
 
 def aux_indices(market: str) -> list[str]:
-    """辅助序列（不参与闸门）：美股行业 ETF。"""
-    return list(settings.cfg()["gate"].get("sector_etfs_us", [])) if market == US else []
+    """辅助序列（不参与闸门）：美股行业 ETF；指数择时用到、但不在闸门基准里的宽基指数（如上证 50）。"""
+    extra = settings.cfg()["gate"].get("sector_etfs_us", []) if market == US else []
+    mv = settings.cfg().get("market_view", {}).get("indices_us" if market == US else "indices_cn", [])
+    bench = set(gate_benchmarks(market))
+    return list(dict.fromkeys([*extra, *(i["symbol"] for i in mv if i["symbol"] not in bench)]))
 
 
 def currency(market: str) -> str:

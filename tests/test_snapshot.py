@@ -101,3 +101,20 @@ def test_snapshot_safe_blocks_once_new_session_started(demo_env):
             assert ingest.snapshot_safe(c, "CN", asof) is False
         finally:
             mcal.now_in_market = orig
+
+
+def test_snapshot_falls_back_to_ulist_by_codes(monkeypatch):
+    src = EastmoneySource()
+    monkeypatch.setattr(src, "_snapshot_clist", lambda: (_ for _ in ()).throw(RuntimeError("clist blocked")))
+    calls = []
+
+    def fake_ulist(host, syms):
+        calls.append(len(syms))
+        return [r for r in rows() if ("sh." if r["f12"].startswith("6") else "sz.") + r["f12"] in syms]
+
+    monkeypatch.setattr(src, "_ulist", fake_ulist)
+    codes = ["sh.600519", "sz.300750"] + [f"sz.{n:06d}" for n in range(100)]
+    df = src.snapshot(codes)
+    assert set(df["symbol"]) == {"sh.600519", "sz.300750"} and calls == [80, 22], "ulist 按 80 只分批"
+    with pytest.raises(RuntimeError):
+        src.snapshot(None)                                     # 没有代码清单可退：把 clist 的失败如实抛出

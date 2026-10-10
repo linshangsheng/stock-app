@@ -56,7 +56,7 @@ def _quarter_ends(start: date, end: date) -> list[date]:
 
 
 def refresh_securities(conn, src, market: str = "CN", years: int | None = None,
-                       progress: ProgressCb | None = None) -> int:
+                       progress: ProgressCb | None = None, fast: bool = False) -> int:
     """证券列表：取多个历史交易日（半年一个，最近一个为最新收盘日）的并集，补回窗口期内已退市的 A 股（3.26.1-5）。
     BaoStock 的 query_all_stock 单次约 15~20 秒（M0 实测），因此每个日期查询后立即入库并记录进度（meta.sec_union_days），
     中断后只补未完成的日期；每周刷新只需查最新一天。"""
@@ -66,6 +66,8 @@ def refresh_securities(conn, src, market: str = "CN", years: int | None = None,
     today = date.fromisoformat(mc.today_str(market))
     qs = _quarter_ends(today - timedelta(days=365 * years), today)
     qs = qs[::-1][::2][::-1]                                   # 半年一个（以最近的季末为锚）
+    if fast:                                                   # 抽样 / 试用：只查最新交易日名单 1 次（不补已退市股票，省流量与时间）
+        qs = []
     days = []
     for q in qs:                                               # 取该季末当日或之前最近的交易日
         td = mc.trading_days(conn, (q - timedelta(days=10)).isoformat(), q.isoformat())
@@ -126,12 +128,38 @@ def _refresh_securities_current(conn, src) -> int:
     return n_new
 
 
+def choose_sample(conn, market: str, n: int, seed: int | None = None, resample: bool = False) -> list[str]:
+    """初始化范围：从 L1 内的在市股票里随机抽 n 只，并把结果存进 meta（init_sample）。
+    同样的 n 且未要求重新抽样时沿用已存的那一批——保证中断续跑、再次点击不会每次换一批、也不重复下载。"""
+    import random as _r
+
+    cur = db.get_meta(conn, "init_sample")
+    if cur and not resample:
+        d = json.loads(cur)
+        if d.get("n") == n and d.get("symbols"):
+            return d["symbols"]
+    pool = [r[0] for r in conn.execute("SELECT symbol FROM securities WHERE in_l1=1 AND status!='delisted' AND sec_type='stock' ORDER BY symbol")]
+    seed = seed if seed is not None else _r.SystemRandom().randrange(1, 10 ** 9)
+    picked = sorted(_r.Random(seed).sample(pool, min(n, len(pool))))
+    db.set_meta(conn, "init_sample", json.dumps({"n": n, "seed": seed, "symbols": picked, "pool": len(pool),
+                                                 "at": _now()}, ensure_ascii=False))
+    conn.commit()
+    return picked
+
+
+def clear_sample(conn) -> None:
+    conn.execute("DELETE FROM meta WHERE key='init_sample'")
+    conn.commit()
+
+
 def refresh_industry_us(conn, src, limit: int | None = None, stop: Callable[[], bool] | None = None,
-                        progress: ProgressCb | None = None) -> int:
+                        progress: ProgressCb | None = None, only: set[str] | None = None) -> int:
     """美股行业 / Sector（yfinance info，逐股接口，只对 L1 幸存者拉取，可断点续跑；当前快照，历史偏差同 3.14）。"""
     todo = [r[0] for r in conn.execute(
         "SELECT s.symbol FROM securities s LEFT JOIN industry_map m ON m.symbol=s.symbol "
         "WHERE s.in_l1=1 AND s.status!='delisted' AND m.symbol IS NULL ORDER BY s.symbol").fetchall()]
+    if only is not None:
+        todo = [x for x in todo if x in only]
     if limit:
         todo = todo[:limit]
     asof = date.today().isoformat()
@@ -147,7 +175,7 @@ def refresh_industry_us(conn, src, limit: int | None = None, stop: Callable[[], 
         except Exception:  # noqa: BLE001
             continue
         if ind or sec:
-            conn.execute("INSERT OR REPLACE INTO industry_map(symbol,industry,sector,asof) VALUES(?,?,?,?)", (sym, ind or sec, sec, asof))
+            record_industry(conn, sym, ind or sec, sec, asof)
             n += 1
         if i % 50 == 0:
             conn.commit()
@@ -158,6 +186,49 @@ def refresh_industry_us(conn, src, limit: int | None = None, stop: Callable[[], 
     return n
 
 
+def refresh_industry_us_bulk(conn, src, progress: ProgressCb | None = None) -> int:
+    """美股行业 / Sector 批量版：Yahoo 筛选器按行业各查一次（约 150 个请求），代替逐股 info（每只 1 个请求，约 50 分钟）。
+    只写 L1 内的股票；没覆盖到的（个别股票 Yahoo 无行业）留给逐股 refresh_industry_us 兜底。"""
+    df = src.industry_map_screen(float(markets.universe_cfg("US")["l1"]["min_price"]))
+    l1 = {r[0] for r in conn.execute("SELECT symbol FROM securities WHERE in_l1=1")}
+    asof = date.today().isoformat()
+    n = 0
+    for r in df.itertuples():
+        if r.symbol in l1:
+            record_industry(conn, r.symbol, r.industry, r.sector, asof)
+            n += 1
+    db.set_meta(conn, "industry_map_asof", asof)
+    conn.commit()
+    if progress:
+        progress("industry", n, n)
+    return n
+
+
+def record_industry(conn, symbol: str, industry: str | None, sector: str | None, asof: str) -> bool:
+    """写当前行业映射；若与上一条记录不同（或首次出现）则追加一条带生效日期的历史快照（3.14：免费源只有当前快照，
+    历史偏差只能靠「从现在起累积带生效日期的快照」逐步消除）。返回是否发生变化。"""
+    last = conn.execute("SELECT industry, sector FROM industry_map_hist WHERE symbol=? ORDER BY asof DESC LIMIT 1", (symbol,)).fetchone()
+    changed = last is None or last["industry"] != industry or last["sector"] != sector
+    if changed:
+        conn.execute("INSERT OR REPLACE INTO industry_map_hist(symbol,industry,sector,asof) VALUES(?,?,?,?)", (symbol, industry, sector, asof))
+    conn.execute("INSERT INTO industry_map(symbol,industry,sector,asof) VALUES(?,?,?,?) "
+                 "ON CONFLICT(symbol) DO UPDATE SET industry=excluded.industry, sector=excluded.sector, asof=excluded.asof",
+                 (symbol, industry, sector, asof))
+    return changed
+
+
+def industry_asof(conn, symbol: str, day: str) -> str | None:
+    """点时行业：day 当天或之前最近一次快照的行业；没有快照早于 day 时返回 None（不得用「今天的」回看更早的日子）。"""
+    r = conn.execute("SELECT industry FROM industry_map_hist WHERE symbol=? AND asof<=? ORDER BY asof DESC LIMIT 1", (symbol, day)).fetchone()
+    return r[0] if r else None
+
+
+def industry_history_stats(conn) -> dict:
+    r = conn.execute("SELECT COUNT(*), COUNT(DISTINCT asof), MIN(asof), MAX(asof) FROM industry_map_hist").fetchone()
+    changes = conn.execute("SELECT COUNT(*) FROM (SELECT symbol FROM industry_map_hist GROUP BY symbol HAVING COUNT(*)>1)").fetchone()[0]
+    return {"rows": r[0], "snapshots": r[1], "first": r[2], "last": r[3], "symbols_with_changes": changes}
+
+
 def refresh_industry(conn, src) -> int:
     if hasattr(src, "list_current_securities"):
         return refresh_industry_us(conn, src)
@@ -165,9 +236,7 @@ def refresh_industry(conn, src) -> int:
     asof = date.today().isoformat()
     n = 0
     for r in df.itertuples():
-        conn.execute("INSERT INTO industry_map(symbol,industry,asof) VALUES(?,?,?) "
-                     "ON CONFLICT(symbol) DO UPDATE SET industry=excluded.industry, asof=excluded.asof",
-                     (r.symbol, r.industry, asof))
+        record_industry(conn, r.symbol, r.industry, None, asof)
         n += 1
     db.set_meta(conn, "industry_map_asof", asof)
     conn.commit()
@@ -299,7 +368,8 @@ def prefilter_l1(conn, src, market: str = "CN", progress: ProgressCb | None = No
 
 
 def init_history(conn, src, market: str = "CN", limit: int | None = None, years: int | None = None,
-                 progress: ProgressCb | None = None, stop: Callable[[], bool] | None = None) -> dict:
+                 progress: ProgressCb | None = None, stop: Callable[[], bool] | None = None,
+                 only: set[str] | None = None) -> dict:
     """首次初始化 / 回补：对 L1 内尚未完成的股票拉取全部历史。断点续跑：只补 fetch_state 未 ok 的项。
     一次性开销（全量 A 股数小时），必须可中断续跑（3.26.2-8）。"""
     years = years or int(settings.cfg()["history_years"])
@@ -308,6 +378,8 @@ def init_history(conn, src, market: str = "CN", limit: int | None = None, years:
     todo = [r[0] for r in conn.execute(
         "SELECT s.symbol FROM securities s LEFT JOIN fetch_state f ON f.symbol=s.symbol AND f.task='daily' "
         "WHERE s.in_l1=1 AND (f.status IS NULL OR f.status!='ok') ORDER BY s.symbol").fetchall()]
+    if only is not None:
+        todo = [x for x in todo if x in only]
     if limit:
         todo = todo[:limit]
     ok = fail = 0
@@ -331,18 +403,29 @@ def init_history(conn, src, market: str = "CN", limit: int | None = None, years:
         if stop and stop():
             break
         try:
-            basic = src.security_basic(sym)
+            delisted = conn.execute("SELECT status FROM securities WHERE symbol=?", (sym,)).fetchone()
+            basic: dict = {}
+            if delisted and delisted[0] == "delisted":      # 仅已退市股票需要精确的上市 / 退市日期（数据完整性闸门用）；在市股票省掉这次请求
+                basic = src.security_basic(sym)
             ld, dd = basic.get("list_date"), basic.get("delist_date")
             s0 = max(start, ld) if ld else start
             s1 = min(last, dd) if dd else last
             bars = src.daily_bars(sym, s0, s1)
             save_bars(conn, sym, bars, src.name)
-            ev = src.adj_factor_events(sym, "1990-01-01", s1)
+            ev = bars.attrs.get("adj_events")
+            if ev is None:                                   # 数据源没带出复权因子事件（演示源等）：单独取一次
+                ev = src.adj_factor_events(sym, "1990-01-01", s1)
             for e in ev.itertuples():
                 conn.execute("INSERT OR REPLACE INTO corp_actions(symbol,ex_date,type,ratio_or_amount) VALUES(?,?,?,?)",
                              (sym, e.date, "adj_factor", e.factor))
-            conn.execute("UPDATE securities SET name=COALESCE(?,name), list_date=?, delist_date=?, status=?, sec_type=? WHERE symbol=?",
-                         (basic.get("name"), ld, dd, basic.get("status", "active"), basic.get("sec_type", "stock"), sym))
+            if not basic and (bars.empty or bars["date"].max() < (date.fromisoformat(last) - timedelta(days=10)).isoformat()):
+                basic = src.security_basic(sym)                 # 近期没有日线（退市 / 长期停牌）：补查精确的上市 / 退市日期与状态
+                ld, dd = basic.get("list_date"), basic.get("delist_date")
+            if basic:
+                conn.execute("UPDATE securities SET name=COALESCE(?,name), list_date=?, delist_date=?, status=?, sec_type=? WHERE symbol=?",
+                             (basic.get("name"), ld, dd, basic.get("status", "active"), basic.get("sec_type", "stock"), sym))
+            elif len(bars) and bars["date"].min() > (date.fromisoformat(start) + timedelta(days=10)).isoformat():
+                conn.execute("UPDATE securities SET list_date=COALESCE(list_date, ?) WHERE symbol=?", (bars["date"].min(), sym))   # 窗口内才出现 = 新上市，首条日线即上市日
             set_state(conn, sym, "daily", "ok", bars["date"].max() if len(bars) else None, 0)
             ok += 1
         except CircuitOpen:
@@ -725,3 +808,46 @@ def ensure_events(conn, provider, symbols: list[str], market: str = "CN", force:
         ok += 1
     conn.commit()
     return {"requested": len(todo), "ok": ok, "failed": failed, "new_events": new, "cached": len(symbols) - len(todo)}
+
+
+# ---- 当日数据可用性探测 / 自学习（3.26.5：以「数据可用」为准，不以固定时刻为准）---------------
+
+def probe_day_available(src, market: str, day: str) -> bool:
+    """只查 1 个基准指数的当日日线：有返回即认为上游已提供当日数据（探测很便宜，可以频繁做）。"""
+    sym = markets.gate_benchmarks(market)[0]
+    try:
+        df = src.index_bars(sym, day, day)
+    except CircuitOpen:
+        raise
+    except Exception:  # noqa: BLE001
+        return False
+    return df is not None and len(df) > 0 and str(df["date"].iloc[-1]) == day
+
+
+def record_ready_observation(conn, market: str, day: str, now=None) -> int | None:
+    """首次探测到 day 的数据可用时，记录「收盘后多少分钟」（探测间隔内的上界）。只在 day 就是今天的市场日期时记录；
+    保留最近 20 次，供 effective_ready_minutes 取中位数。"""
+    from datetime import datetime as _dt
+
+    n = mc.now_in_market(market, now)
+    if n.date().isoformat() != day or db.get_meta(conn, f"ready_obs_day:{market}") == day:
+        return None
+    cfgm = mc.MARKETS[market]
+    close_t = cfgm.get("half_close", cfgm["close"]) if (market == "US" and mc.is_half_day(conn, day)) else cfgm["close"]
+    minutes = int((n - _dt.combine(n.date(), close_t, tzinfo=n.tzinfo)).total_seconds() // 60)
+    if minutes < 0:
+        return None
+    obs = json.loads(db.get_meta(conn, f"ready_obs:{market}", "[]") or "[]")
+    obs = (obs + [minutes])[-20:]
+    db.set_meta(conn, f"ready_obs:{market}", json.dumps(obs))
+    db.set_meta(conn, f"ready_obs_day:{market}", day)
+    conn.commit()
+    return minutes
+
+
+def ready_stats(conn, market: str) -> dict:
+    obs = json.loads(db.get_meta(conn, f"ready_obs:{market}", "[]") or "[]")
+    if not obs:
+        return {"n": 0, "median_min": None}
+    s_ = sorted(obs)
+    return {"n": len(obs), "median_min": s_[len(s_) // 2], "max_min": s_[-1], "last": obs[-1]}

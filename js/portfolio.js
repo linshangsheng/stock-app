@@ -6,7 +6,7 @@ import { showDetail } from './detail.js';
 import { parseTrades, fileToText } from './parse.js';
 import { toCSV } from './parse.js';
 
-const SETUPS = [['', '未标注'], ['breakout', '突破'], ['pullback', '回踩'], ['vcp', '波动收缩突破']];
+const SETUPS = [['', '未标注'], ['breakout', '突破'], ['pullback', '回踩'], ['vcp', '波动收缩突破'], ['oversold', '强势超跌']];
 const EXIT_REASONS = ['止损', '移动止盈', '时间退出', '信号反转', '事件', '主观'];
 const LEVEL = { must: ['必须处理', 'bad'], watch: ['关注', 'warn'], ok: ['正常', 'ok'] };
 const REGIME = { NORMAL: '正常', CAUTION: '谨慎', DEFENSIVE: '防守', UNKNOWN: '未知' };
@@ -17,9 +17,22 @@ export function openTradeForm(pre = {}) {
   const f = { side: pre.side || 'buy', symbol: pre.symbol || '', date: pre.date || today, price: pre.price ?? '', qty: pre.qty ?? pre.shares ?? '',
     fee: '', initial_stop: pre.initial_stop ?? '', setup: pre.setup || '', exit_reason: pre.exit_reason || '', note: '' };
   const err = h('div', { class: 'alert bad', hidden: true });
+  const sizeHint = h('div', { class: 'small', style: 'grid-column:1/-1' });
+  // 风险预算（来自观察清单）：高开时按实际成交价重算股数，只少不多，单笔最多亏的钱不变
+  const lotOf = sym => (state.market === 'US' ? 1 : /^sh\.688|^688/.test(sym || '') ? 200 : 100);
+  function riskHint() {
+    const risk = pre.risk_amount, px = +f.price, sp = +f.initial_stop, q = +f.qty;
+    if (f.side !== 'buy' || !risk || !px || !sp || px <= sp) { sizeHint.textContent = ''; return; }
+    const lot = lotOf(f.symbol);
+    const maxQ = lot === 1 ? Math.floor(risk / (px - sp)) : Math.floor(risk / (px - sp) / (lot === 200 ? 1 : 100)) * (lot === 200 ? 1 : 100);
+    const ok = maxQ >= lot;
+    sizeHint.className = 'alert small ' + (!ok ? 'bad' : q > maxQ ? 'warn' : 'ok');
+    sizeHint.textContent = !ok ? `按这个成交价，止损距离太大：最多亏 ${risk.toFixed(0)} 元的预算连一手都买不了——建议放弃这笔。`
+      : `按这个成交价，最多买 ${maxQ} 股（最多亏 ${risk.toFixed(0)} 元 ÷ 每股风险 ${(px - sp).toFixed(2)}）` + (q > maxQ ? `；你填的 ${q} 股超出预算，打到止损会多亏 ${((q - maxQ) * (px - sp)).toFixed(0)} 元。` : '。');
+  }
   const inp = (k, label, type = 'text', extra = {}) => h('label', { class: 'f ' + (extra.full ? 'full' : '') }, label,
-    h('input', { type, step: 'any', value: f[k], placeholder: extra.ph || '', oninput: e => { f[k] = e.target.value; }, ...(extra.attrs || {}) }));
-  const stopLabel = h('label', { class: 'f' }, '初始止损价（必填，用于 R 倍数）', h('input', { type: 'number', step: 'any', value: f.initial_stop, oninput: e => { f.initial_stop = e.target.value; } }));
+    h('input', { type, step: 'any', value: f[k], placeholder: extra.ph || '', oninput: e => { f[k] = e.target.value; riskHint(); }, ...(extra.attrs || {}) }));
+  const stopLabel = h('label', { class: 'f' }, '初始止损价（必填，用于 R 倍数）', h('input', { type: 'number', step: 'any', value: f.initial_stop, oninput: e => { f.initial_stop = e.target.value; riskHint(); } }));
   const exitLabel = h('label', { class: 'f' }, '出场原因（必选）', h('select', { onchange: e => { f.exit_reason = e.target.value; } },
     [['', '请选择'], ...EXIT_REASONS.map(x => [x, x])].map(([v, l]) => h('option', { value: v, selected: f.exit_reason === v ? true : null }, l))));
   const sideSel = h('select', { onchange: e => { f.side = e.target.value; sync(); } }, [['buy', '买入'], ['sell', '卖出']].map(([v, l]) => h('option', { value: v, selected: f.side === v ? true : null }, l)));
@@ -32,8 +45,8 @@ export function openTradeForm(pre = {}) {
       inp('qty', state.market === 'US' ? '数量（股，整股）' : '数量（股）', 'number'), inp('fee', '费用（留空按配置费率估算）', 'number'),
       stopLabel, exitLabel,
       h('label', { class: 'f' }, '形态标签', h('select', { onchange: e => { f.setup = e.target.value; } }, SETUPS.map(([v, l]) => h('option', { value: v, selected: f.setup === v ? true : null }, l)))),
-      inp('note', '备注（出场原因选「主观」须写）', 'text')));
-  sync();
+      inp('note', '备注（出场原因选「主观」须写）', 'text'), sizeHint));
+  sync(); riskHint();
   const m = modal(f.side === 'buy' ? '记录买入' : '记录卖出', body, [{ label: '取消' }, { label: '保存', primary: true, onclick: async () => {
     err.hidden = true;
     try {
@@ -93,7 +106,8 @@ export const portfolio = {
           h('div', { class: 't1' }, h('span', { class: 'name' }, p.name), h('span', { class: 'code num' }, code(p.symbol)), h('span', { class: 'badge ' + lc }, lt), h('span', { class: 'grow' }),
             h('span', { class: 'num', style: 'font-weight:600' }, fmtPrice(p.price)), h('span', { class: 'num ' + dirClass(p.pnl_pct), style: 'min-width:62px;text-align:right;font-weight:600' }, fmtPct(p.pnl_pct))),
           h('div', { class: 't2 num' }, h('span', {}, `${p.qty} 股 · 成本 ${fmtPrice(p.avg_cost)}`), h('span', { class: dirClass(p.r_multiple) }, p.r_multiple != null ? `${fmtSigned(p.r_multiple, 2)}R` : ''),
-            h('span', {}, `持有 ${p.hold_days ?? '—'} 日`), h('span', {}, `止损 ${fmtPrice(p.current_stop)}${p.stop_dist_atr != null ? `（${fmtNum(p.stop_dist_atr, 1)} ATR）` : ''}`)),
+            h('span', {}, `持有 ${p.hold_days ?? '—'} 日`), h('span', {}, `止损 ${fmtPrice(p.current_stop)}${p.stop_dist_atr != null ? `（${fmtNum(p.stop_dist_atr, 1)} ATR）` : ''}`),
+            p.take_profit ? h('span', { title: '短期止盈：买入价 × 1.10，盘中涨到即全部卖出（挂条件单）' }, `止盈 ${fmtPrice(p.take_profit)}${p.take_profit_dist != null ? `（还差 ${fmtPct(p.take_profit_dist, 1)}）` : ''}`) : null),
           (p.reasons || []).length ? h('div', { class: 'small', style: 'margin-top:3px;color:' + (p.level === 'must' ? 'var(--red)' : 'var(--warn)') }, p.reasons.join('；')) : null,
           p.level !== 'ok' || p.new_stop ? h('div', { class: 'small', style: 'margin-top:2px' }, '▸ ' + p.action) : null,
           (p.flags || []).length ? h('div', { class: 'small muted' }, p.flags.join('；')) : null,

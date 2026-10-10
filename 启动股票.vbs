@@ -32,6 +32,32 @@ On Error GoTo 0
 If Not running Then
   If Not fso.FolderExists(dir & "\data") Then fso.CreateFolder dir & "\data"
   sh.Run "cmd /c python -m server.main >> data\server.log 2>&1", 0, False
-  WScript.Sleep 3000
+  ' wait until the backend answers (up to 60 s) instead of a fixed 3 s
+  Dim i
+  For i = 1 To 60
+    WScript.Sleep 1000
+    On Error Resume Next
+    Set http = CreateObject("MSXML2.XMLHTTP")
+    http.Open "GET", url & "api/ping", False
+    http.Send
+    If Err.Number = 0 Then
+      If http.Status = 200 Then Exit For
+    End If
+    Err.Clear
+    On Error GoTo 0
+  Next
+  On Error GoTo 0
 End If
-sh.Run url
+
+' open as an app window (no tabs / address bar), maximized; the page goes fullscreen on first click, Esc exits
+On Error Resume Next
+sh.Run "msedge --app=" & url & " --start-maximized", 1, False
+If Err.Number <> 0 Then
+  Err.Clear
+  sh.Run "chrome --app=" & url & " --start-maximized", 1, False
+  If Err.Number <> 0 Then
+    Err.Clear
+    sh.Run url
+  End If
+End If
+On Error GoTo 0

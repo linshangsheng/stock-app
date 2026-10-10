@@ -64,7 +64,7 @@ def delete_position(market: str, pid: int) -> None:
         p.execute("DELETE FROM positions WHERE id=? AND market=?", (pid, market))
 
 
-EXIT_REASONS = ("止损", "移动止盈", "时间退出", "信号反转", "事件", "主观")
+EXIT_REASONS = ("止损", "止盈", "移动止盈", "时间退出", "信号反转", "事件", "主观")
 
 
 def record_trade(market: str, t: dict) -> dict:
@@ -162,7 +162,7 @@ def _health(market: str, day: str | None, save: bool) -> dict:
         day = day or db.get_meta(conn, "data_asof") or mc.last_closed_trading_day(conn, market)
         if not day:
             return {"error": "no_data"}
-        regime_row = conn.execute("SELECT regime FROM scan_runs WHERE scan_date=? AND market=? ORDER BY finished_at DESC LIMIT 1",
+        regime_row = conn.execute("SELECT regime FROM scan_runs WHERE scan_date=? AND market=? ORDER BY finished_at DESC, rowid DESC LIMIT 1",
                                   (day, market)).fetchone()
         regime = regime_row[0] if regime_row else "UNKNOWN"
         out_pos, risk_total, mv_total = [], 0.0, 0.0
@@ -252,6 +252,10 @@ def _health_one(conn, p: dict, day: str, panel, F: dict, imap, earn: set, ex: di
          "stop_dist_atr": None if dist_atr is None else round(dist_atr, 2),
          "stop_dist_pct": round((price - new_stop) / price, 4), "risk_to_stop": round(max(0.0, (price - new_stop) * qty), 2),
          "new_stop": new_stop if raised else None, "current_stop": new_stop}
+    tp_pct = ex.get("take_profit_pct") or 0
+    tp = round(cost * (1 + tp_pct), 2) if tp_pct else None
+    o["take_profit"], o["take_profit_dist"] = tp, (round(tp / price - 1, 4) if tp else None)
+    high_today = float(panel.raw["high"][sym].iloc[i])
     must, watch, reasons = [], [], []
     action = "无需动作"
     # 退出信号
@@ -259,6 +263,9 @@ def _health_one(conn, p: dict, day: str, panel, F: dict, imap, earn: set, ex: di
     if low_today <= prev_stop or (hard and price <= hard):
         must.append(f"今日触及止损位 {prev_stop:.2f}" if low_today <= prev_stop else f"触发硬止损 {hard:.2f}")
         action = "次日开盘卖出（止损；若开盘已低于止损价按开盘价，A 股跌停可能卖不出）"
+    elif tp and held >= 1 and high_today >= tp:
+        must.append(f"今日盘中触及止盈位 {tp:.2f}（买入价 +{tp_pct:.0%}）")
+        action = "若止盈条件单已成交，到「持仓」页记录卖出；没挂单的话次日开盘卖出"
     elif ex.get("exit_below_ma") and price < {20: ma20, 50: ma50}.get(ex["exit_below_ma"], ma20):
         must.append(f"收盘跌破 MA{ex['exit_below_ma']}（趋势信号失效）")
         action = "次日开盘价卖出（收盘类退出信号，5.5.1）"
@@ -274,6 +281,8 @@ def _health_one(conn, p: dict, day: str, panel, F: dict, imap, earn: set, ex: di
     if o["level"] != "must":
         if dist_atr is not None and dist_atr < 1.0:
             watch.append(f"接近止损（仅 {dist_atr:.1f} ATR）")
+        if tp and price >= tp * 0.98:
+            watch.append(f"接近止盈位 {tp:.2f}（还差 {tp / price - 1:.1%}）")
         if sym in earn:
             watch.append("未来 5 个交易日内有财报披露")
         if watch:

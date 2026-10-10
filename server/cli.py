@@ -1,5 +1,5 @@
 """命令行入口：python -m server.cli <command>
-  init [--demo] [--limit N]   首次初始化（日历 / 名单 / L1 / 10 年日线 / 指数 / 行业），可中断续跑
+  init [--demo] [--random N]  首次初始化（日历 / 名单 / L1 / 10 年日线 / 指数 / 行业），可中断续跑；默认全部，--random N 只随机拉 N 只
   update                       盘后任务链：数据更新 -> 闸门 -> 扫描 -> 体检 -> 回填 -> 备份
   scan [--date YYYY-MM-DD]     只跑选股扫描
   health                       只跑持仓体检
@@ -45,7 +45,8 @@ def main(argv=None):
         p.add_argument("--end")
         p.add_argument("--n-random", type=int, default=200)
         p.add_argument("--what", default="portfolio")
-        p.add_argument("--sample", type=int, default=100)
+        p.add_argument("--sample", type=int, default=None, help="l1-bias：抽样数（默认 100）")
+        p.add_argument("--random", type=int, default=None, help="init：只随机拉 N 只（默认全部）")
     a = ap.parse_args(argv)
     _prepare_demo(a.demo)
 
@@ -62,7 +63,7 @@ def main(argv=None):
             print(f"  [{name}] {i}/{n}", flush=True)
     jm._progress = prog
     if a.cmd == "init":
-        out = jm.init(a.market, limit=a.limit)
+        out = jm.init(a.market, limit=a.limit, sample=a.random)
     elif a.cmd == "update":
         out = jm.daily_chain(a.market, scan_day=a.date)
     elif a.cmd == "scan":
@@ -81,7 +82,7 @@ def main(argv=None):
         out.pop("benchmark_curve", None)
     elif a.cmd == "l1-bias":
         from . import l1_bias
-        out = l1_bias.run(a.market, sample=a.sample, start=a.start, progress=prog)
+        out = l1_bias.run(a.market, sample=a.sample or 100, start=a.start, progress=prog)
     elif a.cmd == "earnings":
         from . import ingest
         from .datasource_cn import get_source

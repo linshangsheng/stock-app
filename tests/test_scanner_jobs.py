@@ -36,8 +36,17 @@ def test_scan_uses_only_data_up_to_scan_date(demo_env):
     assert a["regime"]["state"] == b["regime"]["state"] and len(a["candidates"]) > 0
 
 
+def _day_with_candidates(start_back: int = 40, max_back: int = 240, step: int = 3) -> str:
+    """合成数据按「今天」生成，某个固定的回看日是否恰好有信号随日期变化：向前找第一个有候选的扫描日（保证测试与运行日期无关）。"""
+    for n in range(start_back, max_back, step):
+        d = _days_back(n)
+        if scanner.run_scan("CN", scan_date=d, persist=False)["candidates"]:
+            return d
+    raise AssertionError("合成数据里找不到有候选的扫描日")
+
+
 def test_outcomes_backfill_matches_manual_calculation(demo_env):
-    day = _days_back(40)
+    day = _day_with_candidates()
     r = scanner.run_scan("CN", scan_date=day)
     out = scanner.backfill_outcomes("CN")
     assert out["updated"] > 0
@@ -110,7 +119,7 @@ def test_earnings_projection_from_last_year_and_deadline_fallback(demo_env):
 
 
 def test_scan_excludes_candidates_inside_earnings_window(demo_env):
-    day = _days_back(40)
+    day = _day_with_candidates()
     base = scanner.run_scan("CN", scan_date=day, persist=False)
     assert base["candidates"], "需要至少一个候选"
     victim = base["candidates"][0]["symbol"]
@@ -128,3 +137,28 @@ def test_scan_excludes_candidates_inside_earnings_window(demo_env):
         c.execute("DELETE FROM events WHERE symbol=? AND source IN ('proj','deadline')", (victim,))
     r2 = scanner.run_scan("CN", scan_date=day, persist=False)
     assert victim in {x["symbol"] for x in r2["candidates"]}
+
+
+def test_probe_waits_for_upstream_and_learns_ready_time(demo_env, monkeypatch):
+    from datetime import datetime, timezone
+    from server import ingest
+    from server.datasource_cn import get_source
+    src = get_source()
+    with db.market_db("CN") as c:
+        asof = db.get_meta(c, "data_asof")
+        assert ingest.probe_day_available(src, "CN", asof) is True
+        monkeypatch.setattr(src, "index_bars", lambda *a, **k: __import__("pandas").DataFrame())
+        assert ingest.probe_day_available(src, "CN", asof) is False, "上游还没有当日数据：继续等，不白白发几千次请求"
+        monkeypatch.undo()
+        y, m, d = map(int, asof.split("-"))
+        now = datetime(y, m, d, 8, 0, tzinfo=timezone.utc)                 # 北京时间 16:00，收盘后 60 分钟
+        assert ingest.record_ready_observation(c, "CN", asof, now) == 60
+        assert ingest.record_ready_observation(c, "CN", asof, now) is None, "同一天只记录首次可用时间"
+        assert ingest.ready_stats(c, "CN") == {"n": 1, "median_min": 60, "max_min": 60, "last": 60}
+
+
+def test_auto_chain_returns_waiting_when_probe_fails(demo_env, monkeypatch):
+    from server import ingest
+    monkeypatch.setattr(ingest, "probe_day_available", lambda *a, **k: False)
+    res = JobManager().daily_chain("CN")
+    assert res["status"] == "waiting_data" and "scan" not in res

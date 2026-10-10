@@ -39,6 +39,6 @@ def test_full_backup_goes_to_separate_dir(demo_env, monkeypatch):
     monkeypatch.setitem(settings.cfg()["backup"], "dir", str(demo_env / "daily"))
     monkeypatch.setitem(settings.cfg()["backup"], "full_dir", str(demo_env / "full"))
     info = backup.run_backup(day="2026-10-02", full=True)
-    assert (demo_env / "full" / "2026-10-02" / "ashare.db").exists()
-    assert (demo_env / "daily" / "2026-10-02" / "essential_ashare.db").exists()
+    assert (demo_env / "full" / "2026-10-02" / "ashare.db.gz").exists(), "全量备份压缩存放"
+    assert (demo_env / "daily" / "2026-10-02" / "essential_ashare.db.gz").exists()
     assert not (demo_env / "daily" / "2026-10-02" / "ashare.db").exists(), "大体积全量备份不进（可能是网盘的）每日目录"

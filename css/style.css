@@ -177,3 +177,33 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12px; margi
 .live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--green); margin-right: 4px; animation: pulse 1.5s infinite; }
 @keyframes pulse { 50% { opacity: .3; } }
 @media (max-width: 860px) { .nav a { font-size: 10px; } .heat { grid-template-columns: 1fr 52px 52px 52px; } .heat .hide-m { display: none; } }
+
+/* 观察清单：每只股票的操作计算 */
+.op-line { margin-top: 5px; padding: 5px 8px; border-radius: 6px; background: var(--accent-soft); font-size: 12px; line-height: 1.6; }
+.op-line.bad { background: var(--bad-soft); }
+.plan-card { margin: 10px 16px 0; }
+.exec-card { border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; margin-top: 8px; display: flex; flex-direction: column; gap: 3px; }
+.tmr-box { padding: 4px 4px 8px 18px; } tr.tmr > td { background: var(--panel); }
+table.mini.plan tr.no td { color: var(--muted); }
+.open-plan { margin-top: 5px; padding: 4px 8px 6px; border: 1px dashed var(--line-strong); border-radius: 6px; }
+.open-plan table.mini td { padding: 2px 6px; border-bottom: 0; font-size: 12px; }
+
+/* 市场温度（冷→热色阶，与涨跌红绿无关）与宽基指数择时 */
+:root { --z0: #2f7ed8; --z1: #7fb2ea; --z2: #b9bcc2; --z3: #f0a54a; --z4: #E24B4A; }
+:root[data-theme="dark"] { --z0: #5b9cf0; --z1: #3f6ea8; --z2: #5c616b; --z3: #c8862f; --z4: #F0605F; }
+.gauge { position: relative; display: flex; height: 10px; border-radius: 5px; overflow: visible; margin-top: 4px; }
+.gauge > i { display: block; height: 100%; } .gauge > i:first-child { border-radius: 5px 0 0 5px; } .gauge > i:last-of-type { border-radius: 0 5px 5px 0; }
+.gauge > i.z0 { background: var(--z0); } .gauge > i.z1 { background: var(--z1); } .gauge > i.z2 { background: var(--z2); } .gauge > i.z3 { background: var(--z3); } .gauge > i.z4 { background: var(--z4); }
+.gauge > b { position: absolute; top: -4px; width: 4px; height: 18px; margin-left: -2px; border-radius: 2px; background: var(--text); box-shadow: 0 0 0 2px var(--bg); }
+.zone-pill { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; color: #fff; white-space: nowrap; }
+.zone-pill.z0 { background: var(--z0); } .zone-pill.z1 { background: var(--z1); } .zone-pill.z2 { background: var(--z2); color: var(--text); } .zone-pill.z3 { background: var(--z3); } .zone-pill.z4 { background: var(--z4); }
+.mkt-brief { padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--bg); }
+.mkt-brief .k { font-size: 11px; color: var(--muted); }
+.big-num { font-size: 34px; font-weight: 800; line-height: 1.1; font-variant-numeric: tabular-nums; }
+table.mini { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.mini th { font-weight: 500; color: var(--muted); font-size: 11px; text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line); }
+table.mini td { padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.mini th.r, table.mini td.r { text-align: right; }
+table.mini tr.hl td { background: var(--accent-soft); }
+details.card > summary { cursor: pointer; list-style: none; } details.card > summary::-webkit-details-marker { display: none; }
+details.card > summary::before { content: '▸ '; color: var(--muted); } details.card[open] > summary::before { content: '▾ '; }

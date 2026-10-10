@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS index_bar(
 CREATE TABLE IF NOT EXISTS industry_map(
   symbol TEXT PRIMARY KEY, industry TEXT, sector TEXT, asof TEXT
 );
+CREATE TABLE IF NOT EXISTS industry_map_hist(
+  symbol TEXT NOT NULL, industry TEXT, sector TEXT, asof TEXT NOT NULL, PRIMARY KEY(symbol, asof)
+);
 CREATE TABLE IF NOT EXISTS market_calendar(
   date TEXT PRIMARY KEY, is_open INTEGER NOT NULL, is_half_day INTEGER DEFAULT 0
 );
@@ -77,6 +80,9 @@ CREATE TABLE IF NOT EXISTS backtest_runs(
   run_id TEXT PRIMARY KEY, kind TEXT, strategy_id TEXT, market TEXT, config_hash TEXT, data_asof TEXT,
   metrics TEXT, trial_count INTEGER, code_version TEXT, created_at TEXT, config TEXT, result TEXT
 );
+CREATE TABLE IF NOT EXISTS market_breadth(
+  date TEXT PRIMARY KEY, n INTEGER, b20 REAL, b60 REAL, b200 REAL, up INTEGER, down INTEGER, nh INTEGER, nl INTEGER,
+  ew_ret REAL, amount REAL);
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS job_log(
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, job TEXT, status TEXT, detail TEXT

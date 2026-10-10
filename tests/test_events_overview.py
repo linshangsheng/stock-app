@@ -115,3 +115,15 @@ def test_flows_us_demo(us_env):
     cl = TestClient(main.app)
     u = cl.get("/api/flows", params={"symbol": "AAA", "market": "US"}).json()
     assert u["market"] == "US" and u["short"]["short_pct_float"] is not None and u["options"]["pc_volume_ratio"] is not None
+
+
+def test_event_stats_groups_with_sample_size_flag(client):
+    syms = [r["symbol"] for r in client.get("/api/search", params={"q": "演示股票0"}).json()["items"][:5]]
+    client.post("/api/events/refresh", json={"symbols": syms})
+    r = client.get("/api/events/stats", params={"days": 400, "min_n": 3}).json()
+    assert r["n_events"] > 0 and r["groups"]
+    g = next(x for x in r["groups"] if x["event_type"] == "NEWS" and x["tone"] == "全部")
+    assert g["n"] >= 1 and g["mean_1d"] is not None
+    assert all(x["enough"] == (x["n"] >= 3) for x in r["groups"])
+    big = client.get("/api/events/stats", params={"days": 400}).json()
+    assert not any(x["enough"] for x in big["groups"]), "样本不足 30 要明确标注"

@@ -60,12 +60,14 @@ class JobManager:
                 self._set(running=None, progress=None)
 
     # ---- 任务 ----
-    def init(self, market: str = "CN", limit: int | None = None, **_) -> dict:
-        """首次初始化：日历 -> 证券名单 -> L1 -> 10 年日线（+ 复权因子 / 拆股）（可中断续跑）-> 指数 / 行业。"""
+    def init(self, market: str = "CN", limit: int | None = None, sample: int | None = None, resample: bool = False, **_) -> dict:
+        """首次初始化：日历 -> 证券名单 -> L1 -> 10 年日线（+ 复权因子 / 拆股）（可中断续跑）-> 指数 / 行业。
+        初始化范围：默认全部（config.init.sample_size = 0）；sample = N 时只随机拉 N 只（试用 / 省流量）。"""
         with settings.market_ctx(market):
-            return self._init(market, limit)
+            n = settings.cfg().get("init", {}).get("sample_size", 0) if sample is None else sample
+            return self._init(market, limit, int(n or 0), resample)
 
-    def _init(self, market: str, limit: int | None) -> dict:
+    def _init(self, market: str, limit: int | None, sample: int = 0, resample: bool = False) -> dict:
         src = get_source(market)
         out: dict = {}
         demo = markets.is_demo(market)
@@ -74,23 +76,41 @@ class JobManager:
                 self._set(message="交易日历")
                 out["calendar"] = ingest.ensure_calendar(c, src, market)
                 self._set(message="证券名单" + ("（多个历史交易日并集，含已退市）" if market == "CN" else "（Nasdaq Trader 清单：普通股）"))
-                out["securities_new"] = ingest.refresh_securities(c, src, market, progress=self._progress)
+                out["securities_new"] = ingest.refresh_securities(c, src, market, progress=self._progress, fast=bool(sample))
                 if market == "CN":
                     out["industry"] = ingest.refresh_industry(c, src)
                 snap = None
-                if market == "CN" and not demo:
+                if market == "CN" and not demo and not sample:          # 随机抽样模式：不需要全市场快照 / 预筛（省流量）
                     self._set(message="全市场快照（东财，约 3 分钟）：用于 L1 粗筛")
                     try:
-                        snap = ingest.EastmoneySource().snapshot()
+                        codes = [r[0] for r in c.execute("SELECT symbol FROM securities WHERE status!='delisted'")]
+                        snap = ingest.EastmoneySource().snapshot(codes)
                     except Exception as e:  # noqa: BLE001 - 降级：L1 走近 45 天预筛
                         out["snapshot_error"] = str(e)[:200]
-                out["l1"] = universe.apply_l1(c, snap, market=market)
+                elif market == "US" and not demo and not sample:        # 美股：Yahoo 筛选器一次性取全市场快照（~15 个请求，代替 ~1 小时的逐批预筛）
+                    self._set(message="全市场快照（Yahoo 筛选器，约 1 分钟）：用于 L1 粗筛")
+                    try:
+                        l1cfg = markets.universe_cfg(market)["l1"]
+                        snap = src.screen_snapshot(l1cfg["min_price"])
+                        if len(snap) < 500:
+                            raise RuntimeError(f"快照只有 {len(snap)} 只，疑似不完整")
+                    except Exception as e:  # noqa: BLE001 - 降级：逐批预筛
+                        snap = None
+                        out["snapshot_error"] = str(e)[:200]
+                out["l1"] = universe.apply_l1(c, snap, market=market, exclude_missing=(market == "US"))
                 out["l1"]["snapshot_used"] = snap is not None
-                if snap is None and not demo:
+                only = None
+                if sample:
+                    picked = ingest.choose_sample(c, market, sample, resample=resample)
+                    only = set(picked)
+                    out["sample"] = {"requested": sample, "picked": len(picked), "note": "随机抽样模式：只下载这批股票的历史（不做全市场快照 / 预筛 / 已退市名单并集）"}
+                else:
+                    ingest.clear_sample(c)
+                if snap is None and not demo and not sample:
                     self._set(message="L1 预筛（每只拉最近 45 天，筛掉低价 / 低成交额）")
                     out["prefilter"] = ingest.prefilter_l1(c, src, market, progress=self._progress, stop=self._stop.is_set)
                 self._set(message="拉取历史日线（限速，可中断续跑）")
-                out["history"] = ingest.init_history(c, src, market, limit=limit, progress=self._progress, stop=self._stop.is_set)
+                out["history"] = ingest.init_history(c, src, market, limit=limit, progress=self._progress, stop=self._stop.is_set, only=only)
                 remaining = c.execute("SELECT COUNT(*) FROM securities s LEFT JOIN fetch_state f ON f.symbol=s.symbol AND f.task='daily' "
                                       "WHERE s.in_l1=1 AND s.status!='delisted' AND (f.status IS NULL OR f.status!='ok')").fetchone()[0]
                 db.set_meta(c, "init_complete", "1" if remaining == 0 else "0")       # 完整初始化后，每周 L1 刷新才自动回补新进入者
@@ -101,7 +121,12 @@ class JobManager:
                 c.commit()
                 if market == "US":
                     self._set(message="行业 / Sector（逐股，可中断续跑；未补全前行业强弱按缺失处理）")
-                    out["industry"] = ingest.refresh_industry_us(c, src, stop=self._stop.is_set, progress=self._progress)
+                    if not demo and not sample:
+                        try:
+                            out["industry_bulk"] = ingest.refresh_industry_us_bulk(c, src, progress=self._progress)
+                        except Exception as e:  # noqa: BLE001 - 降级：逐股
+                            out["industry_bulk_error"] = str(e)[:200]
+                    out["industry"] = ingest.refresh_industry_us(c, src, stop=self._stop.is_set, progress=self._progress, only=only)
                 db.log_job(c, "init", "ok", json.dumps(out, ensure_ascii=False, default=str)[:1500])
         finally:
             if hasattr(src, "close"):
@@ -122,8 +147,18 @@ class JobManager:
                 day = scan_day or mc.last_closed_trading_day(c, market)
                 if not day:
                     return {"skipped": "无已收盘交易日"}
+                if not scan_day:                                                   # 自动触发：先便宜地探测上游是否已提供当日数据
+                    if not ingest.probe_day_available(src, market, day):
+                        db.log_job(c, "daily", "waiting", f"上游尚未提供 {day} 数据（探测基准指数）")
+                        return {"status": "waiting_data", "day": day}
+                    mins = ingest.record_ready_observation(c, market, day)
+                    if mins is not None:
+                        db.log_job(c, "ready", "observed", f"{market} 当日数据在收盘后约 {mins} 分钟可用")
                 self._set(message=f"更新数据 -> {day}")
-                snap_fn = ingest.EastmoneySource().snapshot if (market == "CN" and not markets.is_demo(market)) else None
+                snap_fn = None
+                if market == "CN" and not markets.is_demo(market):
+                    codes = [r[0] for r in c.execute("SELECT symbol FROM securities WHERE in_l1=1 AND status!='delisted'")]
+                    snap_fn = lambda: ingest.EastmoneySource().snapshot(codes)       # noqa: E731
                 res["update"] = ingest.update_incremental(c, src, market, day, progress=self._progress, stop=self._stop.is_set, snapshot_fn=snap_fn)
                 res["index_rows"] = ingest.refresh_indices(c, src, market)
                 have = c.execute("SELECT MAX(date) FROM daily_bar").fetchone()[0]
@@ -132,14 +167,34 @@ class JobManager:
                     db.log_job(c, "daily", "waiting", f"上游尚未提供 {day} 数据（已有 {have}）")
                     return res
                 db.set_meta(c, "data_asof", have)
+                try:                                                               # 市场温度：全市场宽度增量（几秒）
+                    from . import market_view
+                    res["breadth_rows"] = market_view.ensure_breadth(c, market)
+                except Exception as e:  # noqa: BLE001 - 不影响选股主链
+                    res["breadth_error"] = str(e)[:200]
                 # 每周刷新 L1 / 行业映射
                 last_l1 = c.execute("SELECT MAX(l1_asof) FROM securities").fetchone()[0]
                 if not last_l1 or (datetime.now().date() - datetime.fromisoformat(last_l1).date()).days >= 7:
                     if market == "US":                                            # 新上市 / 新进入：名单 -> 预筛 -> 拉历史 -> 行业
                         res["new_securities"] = ingest.refresh_securities(c, src, market)
                         if not markets.is_demo(market):
-                            res["prefilter"] = ingest.prefilter_l1(c, src, market, progress=self._progress, stop=self._stop.is_set)
+                            snap = None
+                            try:                                                  # 优先：Yahoo 筛选器快照（~15 个请求）；失败才逐批预筛
+                                snap = src.screen_snapshot(markets.universe_cfg(market)["l1"]["min_price"])
+                                if len(snap) < 500:
+                                    snap = None
+                            except Exception:  # noqa: BLE001
+                                snap = None
+                            if snap is not None:
+                                res["l1_refresh"] = universe.apply_l1(c, snap, market=market, exclude_missing=True)
+                            else:
+                                res["prefilter"] = ingest.prefilter_l1(c, src, market, progress=self._progress, stop=self._stop.is_set)
                         res["l1_backfill"] = ingest.init_history(c, src, market, progress=self._progress, stop=self._stop.is_set)
+                        if not markets.is_demo(market):
+                            try:
+                                res["industry_bulk"] = ingest.refresh_industry_us_bulk(c, src)
+                            except Exception:  # noqa: BLE001
+                                pass
                         res["industry"] = ingest.refresh_industry_us(c, src, stop=self._stop.is_set)
                     else:
                         snap = None
@@ -244,7 +299,7 @@ class JobManager:
         close_t = cfgm.get("half_close", cfgm["close"]) if (market == "US" and mc.is_half_day(conn, day)) else cfgm["close"]
         close_dt = datetime.combine(n.date(), close_t, tzinfo=n.tzinfo)
         with settings.market_ctx(market):
-            wait = settings.cfg()["jobs"]["data_ready_after_close_minutes"]
+            wait = settings.cfg()["jobs"].get("probe_start_minutes", 20)       # 探测很便宜：早点开始，由探测结果决定是否真的可用
         return n >= close_dt + timedelta(minutes=wait)
 
     def tick(self):

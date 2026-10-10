@@ -4,11 +4,12 @@ import { get, runBacktest, state } from './api.js';
 import { h, clear, fmtPct, fmtNum, fmtSigned, fmtMoney, dirClass, code, toast } from './util.js';
 import { lineChart, themeColors } from './chart.js';
 
-const KINDS = [['strategy', '策略回测'], ['single_factor', '单因子检验'], ['event_study', '形态事件研究'], ['ablation', '漏斗消融'], ['param_grid', '参数网格']];
-const SETUP_LABEL = { breakout: '突破', pullback: '回踩', vcp: '波动收缩突破' };
+const KINDS = [['strategy', '策略回测'], ['single_factor', '单因子检验'], ['event_study', '形态事件研究'], ['ablation', '漏斗消融'], ['compare', '方案对比'], ['walk_forward', 'Walk-forward'], ['param_grid', '参数网格']];
+const SETUP_LABEL = { breakout: '突破', pullback: '回踩', vcp: '波动收缩突破', oversold: '强势超跌' };
 const GRID_PRESETS = { breakout: [['vol_ratio_min', [1.2, 1.5, 1.8, 2.2]], ['close_pos_min', [0.6, 0.7, 0.8]], ['n', [20, 50, 252]]],
   pullback: [['rps60_min', [70, 80, 90]], ['vol_ratio_max', [0.6, 0.8, 1.0]], ['depth_atr_min', [-1, -0.5, 0]]],
-  vcp: [['atr_ratio_max', [0.6, 0.7, 0.8, 0.9]], ['bb_pct_max', [0.1, 0.2, 0.3]], ['vol_ratio_min', [1.1, 1.3, 1.6, 2.0]]] };
+  vcp: [['atr_ratio_max', [0.6, 0.7, 0.8, 0.9]], ['bb_pct_max', [0.1, 0.2, 0.3]], ['vol_ratio_min', [1.1, 1.3, 1.6, 2.0]]],
+  oversold: [['rps60_min', [60, 70, 80]], ['rsi_max', [30, 35, 40]]] };
 
 let charts = [];
 const killCharts = () => { charts.forEach(c => c.destroy()); charts = []; };
@@ -18,8 +19,8 @@ export const backtestView = {
   async mount(ctx) {
     const el = ctx.pageEl; clear(el); killCharts();
     const S = { kind: 'strategy', start: '', end: '', oos: '', entry_mode: 'next_open', slip: 0.1, cost_mult: 1, max_pos: 8, risk: 0.5,
-      setups: { breakout: true, pullback: true, vcp: true }, f: { regime_gate: true, risk_exclusion: true, industry_score: true, rps_score: true },
-      n_random: 200, grid_setup: 'breakout', grid_idx: 0, trail: 'atr', stop_k: 2, hold: 20 };
+      setups: { vcp: true, breakout: false, pullback: false, oversold: false }, f: { regime_gate: true, risk_exclusion: true, industry_score: true, rps_score: true },
+      n_random: 200, grid_setup: 'vcp', grid_idx: 0, trail: 'atr', stop_k: 2, hold: 20, stop_mode: 'atr', tp_pct: 10, partial_r: 0, sizing: 'risk', wf_setup: 'vcp', wf_train: 3, wf_test: 6 };
     const out = h('div', { id: 'bt-out' });
     const form = h('div', { class: 'card' });
 
@@ -37,8 +38,14 @@ export const backtestView = {
             [['next_open', '次日开盘 next_open'], ['stop_entry', '触发价 stop_entry']].map(([v, l]) => h('option', { value: v, selected: S.entry_mode === v ? true : null }, l)))) : null),
         S.kind !== 'single_factor' ? h('div', { class: 'grid c4 mt-s' }, num('slip', '滑点 %', '0.01'), num('cost_mult', '费用倍数（成本敏感性）', '0.5'), num('max_pos', '最大持仓数', '1'), num('risk', '单笔风险 %', '0.05'),
           num('stop_k', '初始止损 k×ATR', '0.5'), num('hold', '最长持有（交易日）', '1'),
-          h('label', { class: 'f' }, '移动止损', h('select', { onchange: e => { S.trail = e.target.value; } }, [['atr', 'ATR 跟踪'], ['ma10', '跟踪 MA10'], ['none', '不移动']].map(([v, l]) => h('option', { value: v, selected: S.trail === v ? true : null }, l))))) : null,
-        ['strategy', 'event_study', 'ablation'].includes(S.kind) ? h('div', { class: 'row wrap mt-s' }, h('span', { class: 'hint' }, '形态：'), ...Object.keys(SETUP_LABEL).map(k => chk(S.setups, k, SETUP_LABEL[k]))) : null,
+          h('label', { class: 'f' }, '移动止损', h('select', { onchange: e => { S.trail = e.target.value; } }, [['atr', 'ATR 跟踪'], ['ma10', '跟踪 MA10'], ['none', '不移动']].map(([v, l]) => h('option', { value: v, selected: S.trail === v ? true : null }, l)))),
+          h('label', { class: 'f' }, '初始止损方式', h('select', { onchange: e => { S.stop_mode = e.target.value; } }, [['atr', 'ATR（入场价 − k×ATR）'], ['structure', '结构化（形态低点）']].map(([v, l]) => h('option', { value: v, selected: S.stop_mode === v ? true : null }, l)))),
+          num('tp_pct', '短期止盈 %（默认 10，回测校准；0=关）', '1'), num('partial_r', '分批止盈：达到几 R 卖一半（0=关）', '0.5'),
+          h('label', { class: 'f' }, '仓位方式', h('select', { onchange: e => { S.sizing = e.target.value; } }, [['risk', '风险预算（推荐）'], ['equal', '等权'], ['fixed_pct', '固定比例 10%'], ['vol_inverse', '波动率反比']].map(([v, l]) => h('option', { value: v, selected: S.sizing === v ? true : null }, l))))) : null,
+        S.kind === 'walk_forward' ? h('div', { class: 'row wrap mt-s' }, h('label', { class: 'f' }, '形态', h('select', { onchange: e => { S.wf_setup = e.target.value; } }, Object.entries(SETUP_LABEL).map(([v, l]) => h('option', { value: v, selected: S.wf_setup === v ? true : null }, l)))),
+          num('wf_train', '训练窗口（年）', '0.5'), num('wf_test', '测试窗口（月）', '1'),
+          h('span', { class: 'hint' }, '每个窗口在训练段选最优参数，隔离期（≥ 持仓周期）之后在测试段评估；只有样本外成绩算数。')) : null,
+        ['strategy', 'event_study', 'ablation', 'compare'].includes(S.kind) ? h('div', { class: 'row wrap mt-s' }, h('span', { class: 'hint' }, '形态：'), ...Object.keys(SETUP_LABEL).map(k => chk(S.setups, k, SETUP_LABEL[k]))) : null,
         S.kind === 'strategy' ? h('div', { class: 'row wrap mt-s' }, h('span', { class: 'hint' }, '漏斗：'), chk(S.f, 'risk_exclusion', '⑤ 风险剔除'), chk(S.f, 'regime_gate', '② 市场环境闸门'), chk(S.f, 'industry_score', '② 行业强弱(打分)'), chk(S.f, 'rps_score', '③ RPS(打分)')) : null,
         S.kind === 'event_study' ? h('div', { class: 'mt-s' }, num('n_random', '随机基线抽样次数（规范建议 ≥1000，越大越慢）', '50', 'width:260px')) : null,
         S.kind === 'param_grid' ? h('div', { class: 'row wrap mt-s' }, h('label', { class: 'f' }, '形态', h('select', { onchange: e => { S.grid_setup = e.target.value; S.grid_idx = 0; renderForm(); } }, Object.entries(SETUP_LABEL).map(([v, l]) => h('option', { value: v, selected: S.grid_setup === v ? true : null }, l)))),
@@ -53,8 +60,8 @@ export const backtestView = {
       return {
         id: 'ui-' + S.kind, start: S.start || null, end: S.end || null, oos_start: S.oos || null, entry_mode: S.entry_mode, slippage: S.slip / 100, cost_mult: +S.cost_mult,
         setups: Object.keys(S.setups).filter(k => S.setups[k]),
-        exits: { stop_atr_k: +S.stop_k, max_hold_days: +S.hold, trail: S.trail },
-        portfolio: { max_positions: +S.max_pos, risk_per_trade: S.risk / 100 }, funnel: f,
+        exits: { stop_atr_k: +S.stop_k, max_hold_days: +S.hold, trail: S.trail, stop_mode: S.stop_mode, take_profit_pct: (+S.tp_pct || 0) / 100, partial_r: +S.partial_r || 0 },
+        portfolio: { max_positions: +S.max_pos, risk_per_trade: S.risk / 100, sizing: S.sizing }, funnel: f,
       };
     }
 
@@ -68,6 +75,8 @@ export const backtestView = {
         let params = { strategy: st };
         if (S.kind === 'single_factor') params = { strategy: { start: S.start || null, end: S.end || null } };
         if (S.kind === 'event_study') params = { strategy: st, n_random: +S.n_random, setups: st.setups };
+        if (S.kind === 'compare') params = { strategy: st };
+        if (S.kind === 'walk_forward') params = { strategy: st, setup: S.wf_setup, train_years: +S.wf_train, test_months: +S.wf_test };
         if (S.kind === 'param_grid') { const [p, vs] = GRID_PRESETS[S.grid_setup][S.grid_idx]; params = { strategy: st, setup: S.grid_setup, param: p, values: vs }; }
         const r = await runBacktest(S.kind, params);
         clear(out); renderResult(r);
@@ -86,7 +95,7 @@ export const backtestView = {
       killCharts();
       out.append(header(r));
       if (r.error) { out.append(h('div', { class: 'alert bad' }, r.message || r.error)); return; }
-      ({ strategy: renderStrategy, single_factor: renderFactor, event_study: renderEvents, ablation: renderAblation, param_grid: renderGrid }[r.kind] || (() => {}))(r);
+      ({ strategy: renderStrategy, single_factor: renderFactor, event_study: renderEvents, ablation: renderAblation, param_grid: renderGrid, compare: renderCompare, walk_forward: renderWF }[r.kind] || (() => {}))(r);
       if (r.notes) out.append(h('details', { class: 'mt', open: true }, h('summary', {}, '已知偏差与局限（请务必阅读）'), h('ul', { class: 'small muted', style: 'margin:0;padding-left:18px' }, r.notes.map(n => h('li', {}, n)))));
       if (r.note || r.caveat) out.append(h('p', { class: 'hint mt-s' }, [r.note, r.caveat].filter(Boolean).join(' ')));
     }
@@ -101,6 +110,9 @@ export const backtestView = {
         h('div', { class: 'grid c4 mt-s' }, kv('交易笔数', m.n ?? 0), kv('胜率', fmtPct(m.win_rate, 0, false)), kv('期望值 (R)', m.expectancy_r != null ? fmtSigned(m.expectancy_r, 2) : '—', dirClass(m.expectancy_r)), kv('盈亏比 / PF', `${m.payoff ?? '—'} / ${m.profit_factor ?? '—'}`)),
         h('div', { class: 'grid c4 mt-s' }, kv('平均持有', (m.avg_hold_days ?? '—') + ' 日'), kv('MAE / MFE', `${fmtPct(m.avg_mae, 1)} / ${fmtPct(m.avg_mfe, 1)}`), kv('资金利用率', fmtPct(m.exposure, 0, false)), kv('最大连亏', (m.max_consec_losses ?? '—') + ' 笔')),
         h('div', { class: 'grid c4 mt-s' }, kv('相对基准超额', fmtPct(m.excess_return), dirClass(m.excess_return)), kv('alpha / beta', `${fmtPct(m.alpha, 1)} / ${m.beta ?? '—'}`), kv('年换手', (m.turnover_per_year ?? '—') + ' 倍'), kv('亏损>1.5R', (m.loss_over_1_5r ?? 0) + ' 次', '', '止损可执行性检验：跳空 / 跌停导致实际亏损超过计划风险'))));
+      const dsr = m.deflated_sharpe;
+      if (dsr) out.append(h('div', { class: 'card mt' }, h('div', { class: 'card-title' }, h('h3', {}, 'Deflated Sharpe（扣除多次尝试的运气成分，6.6）'), h('span', { class: 'badge ' + (dsr.dsr >= 0.95 ? 'ok' : dsr.dsr >= 0.5 ? 'warn' : 'bad') }, `DSR ${dsr.dsr}`)),
+        h('div', { class: 'grid c4' }, kv('年化夏普', dsr.sr_annual), kv('试验次数', dsr.trials), kv('期望最大 Sharpe 门槛（日频）', dsr.benchmark_sr_daily), kv('观测 Sharpe（日频）', dsr.sr_daily)), h('p', { class: 'hint mt-s' }, dsr.interpretation)));
       const c = themeColors();
       const eq = h('div', {}), dd = h('div', {});
       out.append(h('div', { class: 'card mt' }, h('h3', {}, '权益曲线（与基准对比）'), eq, h('h3', { style: 'margin-top:8px' }, '回撤'), dd));
@@ -164,6 +176,32 @@ export const backtestView = {
       out.append(h('div', { class: 'card' }, h('div', { class: 'card-title' }, h('h3', {}, `${SETUP_LABEL[r.setup]} · ${r.param}`), h('span', { class: 'badge ' + (r.stable ? 'ok' : 'warn') }, r.stable ? '参数相对稳健' : '结果对参数敏感（过拟合风险）')),
         h('table', {}, h('thead', {}, h('tr', {}, ['取值', '笔数', '期望R', '胜率', '最大回撤', '总收益'].map((t, i) => h('th', { class: i ? 'r' : '' }, t)))),
           h('tbody', {}, r.rows.map(x => h('tr', {}, h('td', { class: 'num' }, x.value), h('td', { class: 'num' }, x.n), h('td', { class: 'num ' + dirClass(x.expectancy_r) }, x.expectancy_r != null ? fmtSigned(x.expectancy_r, 2) : '—'), h('td', { class: 'num' }, fmtPct(x.win_rate, 0, false)), h('td', { class: 'num down' }, fmtPct(x.max_drawdown)), h('td', { class: 'num ' + dirClass(x.total_return) }, fmtPct(x.total_return))))))));
+    }
+
+    function renderCompare(r) {
+      let grp = '';
+      out.append(h('div', { class: 'card' }, h('h3', {}, '方案对比（同一信号、同一成交规则与成本；差异只来自被对比的那一项）'), h('div', { class: 'tbl-wrap' }, h('table', {},
+        h('thead', {}, h('tr', {}, ['方案', '笔数', '期望R', '胜率', '盈亏比', '平均持有', '最大回撤', '总收益', '夏普', 'MAE'].map((t, i) => h('th', { class: i ? 'r' : '' }, t)))),
+        h('tbody', {}, r.rows.flatMap(x => {
+          const head = x.group !== grp ? [h('tr', {}, h('td', { colspan: 10, style: 'background:var(--panel);font-weight:600;font-size:12px;color:var(--muted)' }, x.group))] : [];
+          grp = x.group;
+          return [...head, h('tr', {}, h('td', {}, x.variant), h('td', { class: 'num' }, x.n), h('td', { class: 'num ' + dirClass(x.expectancy_r) }, x.expectancy_r != null ? fmtSigned(x.expectancy_r, 2) : '—'), h('td', { class: 'num' }, fmtPct(x.win_rate, 0, false)),
+            h('td', { class: 'num' }, x.payoff ?? '—'), h('td', { class: 'num' }, x.avg_hold ?? '—'), h('td', { class: 'num down' }, fmtPct(x.max_drawdown)), h('td', { class: 'num ' + dirClass(x.total_return) }, fmtPct(x.total_return)), h('td', { class: 'num' }, x.sharpe ?? '—'), h('td', { class: 'num' }, fmtPct(x.avg_mae, 1)))];
+        }))))));
+    }
+
+    function renderWF(r) {
+      out.append(h('div', { class: 'card' }, h('div', { class: 'card-title' }, h('h3', {}, `Walk-forward · ${SETUP_LABEL[r.setup]}（训练 ${r.train_years} 年 / 隔离 ${r.embargo_days} 日 / 测试 ${r.test_months} 月）`),
+        h('span', { class: 'badge ' + ((r.efficiency ?? 0) >= 0.7 && r.mean_oos_expectancy_r > 0 ? 'ok' : 'warn') }, r.efficiency != null ? `样本外 / 样本内 = ${r.efficiency}` : '—')),
+        h('div', { class: 'grid c4' }, kv('窗口数', r.n_windows), kv('样本外为正的窗口', `${r.positive_windows} / ${r.n_windows}`), kv('平均样本内期望 R', r.mean_is_expectancy_r != null ? fmtSigned(r.mean_is_expectancy_r, 2) : '—'),
+          kv('平均样本外期望 R', r.mean_oos_expectancy_r != null ? fmtSigned(r.mean_oos_expectancy_r, 2) : '—', dirClass(r.mean_oos_expectancy_r))),
+        h('div', { class: 'grid c4 mt-s' }, kv('样本外合计笔数', r.oos.n ?? 0), kv('样本外期望 R（按笔）', r.oos.expectancy_r != null ? fmtSigned(r.oos.expectancy_r, 2) : '—', dirClass(r.oos.expectancy_r)), kv('样本外胜率', fmtPct(r.oos.win_rate, 0, false)),
+          kv('参数稳定性（最常选参数占比）', r.param_stability ?? '—')),
+        r.most_chosen ? h('p', { class: 'hint mt-s' }, '最常被选中的参数：' + JSON.stringify(r.most_chosen)) : null),
+        h('div', { class: 'card mt tbl-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['训练段', '测试段', '选中参数', '训练期望R', '训练笔数', '测试期望R', '测试笔数', '测试收益'].map((t, i) => h('th', { class: i > 2 ? 'r' : '' }, t)))),
+          h('tbody', {}, r.windows.map(w => h('tr', {}, h('td', { class: 'num small' }, w.train.join(' ~ ')), h('td', { class: 'num small' }, w.test.join(' ~ ')), h('td', { class: 'small' }, w.chosen ? Object.entries(w.chosen).map(([k, v]) => `${k}=${v}`).join(' ') : (w.note || '—')),
+            h('td', { class: 'num' }, w.train_expectancy_r ?? '—'), h('td', { class: 'num' }, w.train_n ?? '—'), h('td', { class: 'num ' + dirClass(w.test_expectancy_r) }, w.test_expectancy_r != null ? fmtSigned(w.test_expectancy_r, 2) : '—'),
+            h('td', { class: 'num' }, w.test_n ?? '—'), h('td', { class: 'num ' + dirClass(w.test_return) }, fmtPct(w.test_return))))))));
     }
 
     const runsBox = h('div', { class: 'card mt' });
