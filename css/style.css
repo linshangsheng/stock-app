@@ -258,6 +258,12 @@ table.fp-cmp td:first-child { white-space: nowrap; }
   .fp-kv { grid-template-columns: 1fr 1fr; }
   .fp-ev .grid.c2 { grid-template-columns: 1fr; }
 }
+/* 关于 */
+.about-head { display: flex; align-items: center; gap: 14px; }
+.about-head img { border-radius: 13px; box-shadow: 0 6px 18px rgba(20,30,80,.25); }
+.about-name { font-size: 18px; font-weight: 700; }
+.about-hr { border: 0; border-top: 1px solid var(--line); margin: 16px 0; }
+.brand { cursor: pointer; border-radius: 8px; } .brand:hover { background: var(--panel-2); }
 /* 导航栏 Logo（彩色图标，不随主题变色） */
 .brand img { display: block; border-radius: 6px; flex: none; }
 /* 关键均线 */

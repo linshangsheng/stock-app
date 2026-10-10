@@ -21,6 +21,7 @@ from fastapi.routing import APIRoute
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from . import APP_NAME, AUTHOR, COPYRIGHT, EMAIL, LICENSE, __version__
 from . import backup, backtest, datasource_events as ev_mod, db, ingest, markets, features as feats, market_calendar as mc, portfolio, quality, scanner, settings, \
     selection, setups, throttle, universe
 from .datasource_cn import get_source
@@ -28,7 +29,9 @@ from .jobs import manager
 from .panel import load_panel
 
 ROOT = settings.ROOT
-app = FastAPI(title="股票 App 本地后端", version="0.9.0")
+app = FastAPI(title=f"{APP_NAME} · 本地后端", version=__version__, contact={"name": AUTHOR, "email": EMAIL},
+              license_info={"name": f"{LICENSE} License", "url": "/LICENSE"},
+              description=f"{COPYRIGHT}，{LICENSE} 许可开源。个人研究工具，规则输出不构成投资建议。")
 
 
 # ---- 工具 ---------------------------------------------------------------------
@@ -127,6 +130,36 @@ BUILD_ID = _build_id()
 def ping():
     return {"ok": True, "version": app.version, "build": BUILD_ID, "disk_build": _build_id(), "auth_required": bool(settings.cfg()["server"].get("token")),
             "datasource": settings.cfg()["datasource"], "demo": {"CN": markets.is_demo("CN"), "US": markets.is_demo("US")}}
+
+
+@app.get("/api/about")
+def about():
+    """关于：名称、版本、作者与联系方式、版权、免责声明、数据来源、第三方组件（「设置 → 关于」和导航栏 Logo 弹窗用）。"""
+    import sys
+    from datetime import datetime as _dt
+    return {"name": APP_NAME, "version": __version__, "build": BUILD_ID,
+            "build_time": _dt.fromtimestamp(int(BUILD_ID)).strftime("%Y-%m-%d %H:%M") if BUILD_ID.isdigit() else None,
+            "author": AUTHOR, "email": EMAIL, "copyright": COPYRIGHT, "license": LICENSE,
+            "license_note": "可以免费使用、修改、分发（包括商用），只需保留版权声明和许可全文；软件按「现状」提供，作者不承担任何担保与责任。"
+                            "第三方组件保留各自的许可；运行时获取的行情数据不在此许可内，受各数据源的使用条款约束。",
+            "disclaimer": ["本软件是个人研究工具，给出的都是规则计算结果，不构成任何投资建议",
+                           "所有规则都来自历史回测，历史表现不代表未来",
+                           "软件不接券商、不会替你下单，所有买卖由你自己决定和完成"],
+            "data_sources": [
+                {"name": "BaoStock", "use": "A 股日线、复权因子、交易日历、股票名单、行业、季频财务与财报披露日"},
+                {"name": "东方财富（网页接口）", "use": "A 股全市场快照（入库粗筛）、融资融券 / 龙虎榜 / 北向资金等资金数据"},
+                {"name": "巨潮资讯", "use": "A 股公告"},
+                {"name": "Yahoo Finance（yfinance）", "use": "美股日线、指数（标普500、纳斯达克100 等）、行业、财报日期、新闻"},
+                {"name": "Nasdaq Trader", "use": "美股股票名单"},
+                {"name": "SEC EDGAR", "use": "美股公告与内部人交易"}],
+            "third_party": [
+                {"name": "TradingView Lightweight Charts™ v4.2.3", "license": "Apache-2.0", "note": "K 线与走势图；许可文件 vendor/LICENSE-lightweight-charts.txt"},
+                {"name": "FastAPI / Uvicorn", "license": "MIT / BSD-3-Clause", "note": "本地后端"},
+                {"name": "pandas / NumPy", "license": "BSD-3-Clause", "note": "数据计算"},
+                {"name": "PyYAML", "license": "MIT", "note": "配置文件"},
+                {"name": "yfinance", "license": "Apache-2.0", "note": "美股数据接口"},
+                {"name": "baostock", "license": "见其官网", "note": "A 股数据接口"}],
+            "python": sys.version.split()[0], "data_dir": str(settings.data_dir())}
 
 
 # ---- 搜索 / 行情 --------------------------------------------------------------
@@ -1172,6 +1205,12 @@ def icon():
 @app.get("/favicon.svg")
 def favicon():
     return FileResponse(ROOT / "favicon.svg", media_type="image/svg+xml")
+
+
+@app.get("/LICENSE")
+def license_file():
+    """开源许可全文（「关于」里的链接）。"""
+    return FileResponse(ROOT / "LICENSE", media_type="text/plain; charset=utf-8")
 
 
 @app.get("/splash.html")

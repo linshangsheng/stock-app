@@ -2,6 +2,7 @@
 import { get, post, put, state } from './api.js';
 import { h, clear, fmtPct, fmtNum, fmtMoney, toast, confirmBox, modal, dirClass } from './util.js';
 import { prefs } from './db.js';
+import { loadAbout, aboutBlock } from './about.js';
 
 let pollTimer = null;
 const stopPoll = () => { clearInterval(pollTimer); pollTimer = null; };
@@ -219,8 +220,13 @@ export const settingsView = {
         h('p', { class: 'hint mt-s' }, '恢复请在停止后端后用命令行：python -m server.cli restore --date YYYY-MM-DD --what portfolio（恢复前会自动另存现有文件，并校验记录数）。'));
     }
 
+    secAbout.id = 'about';
+    (async () => {
+      try { const a = await loadAbout(); secAbout.prepend(h('h2', { class: 'mb' }, '关于'), aboutBlock(a), h('hr', { class: 'about-hr' })); }
+      catch (e) { secAbout.prepend(h('div', { class: 'hint' }, '关于：' + e.message)); }
+    })();
     secAbout.append(h('details', { class: 'mb' }, h('summary', {}, '检验通过标准（config.yaml 的 validation，默认值）'), h('pre', { class: 'code' }, JSON.stringify(cfg.validation, null, 2))),
-      h('h3', {}, '关于本版本'), h('ul', { class: 'small muted', style: 'margin:6px 0 0;padding-left:18px' },
+      h('h3', {}, '本版本的范围'), h('ul', { class: 'small muted', style: 'margin:6px 0 0;padding-left:18px' },
       h('li', {}, '范围：需求书 v0.3 的 M1~M6（A 股 + 美股）。美股回测存在幸存者偏差（免费源无已退市股票），结果只作上界参考。'),
       h('li', {}, '所有策略规则都是待验证的假设；没有通过「回测 → 样本外」检验的规则一律视为无效（5.1）。'),
       h('li', {}, '系统不接券商下单；持仓由你手动录入，系统只给出次日执行参数。'),

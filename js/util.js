@@ -105,7 +105,10 @@ export function download(filename, text, type = 'application/json') {
 /** 模态框；返回 {close}。content 为 Node，actions 为 [{label, primary, onclick}] */
 export function modal(title, content, actions = []) {
   const root = $('#modal-root');
-  const close = () => ov.remove();
+  const onKey = e => { if (e.key === 'Escape' && root.lastElementChild === ov) { e.stopPropagation(); close(); } };
+  function close() { ov.remove(); document.removeEventListener('keydown', onKey, true); window.removeEventListener('hashchange', close); }
+  document.addEventListener('keydown', onKey, true);          // Esc 关掉最上面的弹窗
+  window.addEventListener('hashchange', close);                // 换页面时弹窗跟着关掉
   const box = h('div', { class: 'modal', role: 'dialog', 'aria-label': title },
     h('h2', {}, title), content,
     h('div', { class: 'actions' }, actions.map(a => h('button', {

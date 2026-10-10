@@ -195,6 +195,9 @@ async def run(base: str, out: Path, width: int, height: int):
                             "if (!c) return null; c.id = 'shot-storage'; return true;")
             if st:
                 await p.shot(out / "17-设置-存储空间.png", await p.rect("#shot-storage"))
+            await asyncio.sleep(1)
+            if await p.js("return !!document.querySelector('#about .about');"):
+                await p.tall_shot(out / "28-设置-关于.png", "#about", width, height)
             # 启动画面：指向一个不存在的端口，让它停在「等待后端」的画面
             await p.goto(base + "/splash.html?url=http://127.0.0.1:9/", 6)
             await p.shot(out / "27-启动画面.png")

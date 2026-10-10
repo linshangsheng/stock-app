@@ -13,7 +13,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 
-from . import settings, throttle
+from . import EMAIL as _EMAIL, settings, throttle
 
 EVENT_TYPES = ["EARNINGS", "DIVIDEND", "BUYBACK", "INSIDER", "M_AND_A", "CONTRACT", "REGULATORY", "ANALYST", "NEWS", "OTHER"]
 TYPE_LABEL = {"EARNINGS": "财报 / 业绩", "DIVIDEND": "分红", "BUYBACK": "回购", "INSIDER": "增减持 / Insider", "M_AND_A": "并购重组",
@@ -151,7 +151,7 @@ class CnEvents:
 # 美股：SEC EDGAR（官方披露）+ yfinance（新闻 / Insider）
 # ---------------------------------------------------------------------------------
 
-SEC_UA = "stock-app personal research (contact: linshangsheng1987@gmail.com)"
+SEC_UA = f"stock-app personal research (contact: {_EMAIL})"     # SEC 要求带联系方式；邮箱只在 server/__init__.py 写一次
 _FORM_TYPE = {"8-K": "OTHER", "10-K": "EARNINGS", "10-Q": "EARNINGS", "4": "INSIDER", "3": "INSIDER", "5": "INSIDER", "144": "INSIDER",
               "SC 13D": "INSIDER", "SC 13G": "INSIDER", "SC 13D/A": "INSIDER", "SC 13G/A": "INSIDER", "S-1": "OTHER", "424B5": "OTHER"}
 _8K_ITEMS = {"1.01": ("CONTRACT", "签订重大协议"), "1.02": ("CONTRACT", "终止重大协议"), "2.01": ("M_AND_A", "完成收购 / 处置资产"),

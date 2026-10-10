@@ -35,3 +35,21 @@ def test_splash_and_icons_served(demo_env):
     html = c.get("/splash.html").text
     assert "api/ping" in html and "splash=1" in html
     assert 'id="boot"' in c.get("/").text
+
+
+def test_about_single_source(demo_env):
+    from fastapi.testclient import TestClient
+    import server
+    from server import main
+    c = TestClient(main.app)
+    a = c.get("/api/about").json()
+    assert a["author"] == server.AUTHOR == "林上升" and a["email"] == server.EMAIL == "linshangsheng1987@gmail.com"
+    assert a["version"] == server.__version__ == main.app.version and a["copyright"].startswith("©")
+    assert a["data_sources"] and any("Lightweight Charts" in x["name"] for x in a["third_party"])
+    assert c.get("/api/ping").json()["version"] == server.__version__
+    assert a["license"] == server.LICENSE == "MIT"
+    lic = c.get("/LICENSE")
+    assert lic.status_code == 200 and "MIT License" in lic.text and server.EMAIL in lic.text and "林上升" in lic.text
+    from server import datasource_events
+    assert server.EMAIL in datasource_events.SEC_UA
+    assert f"v{server.__version__}" in (Path(__file__).resolve().parent.parent / "sw.js").read_text(encoding="utf-8")

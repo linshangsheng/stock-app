@@ -1,11 +1,11 @@
 // Service Worker：应用外壳「网络优先 / 缓存兜底」，行情接口 GET「缓存优先 / 后台更新」（1.3.3）。
 // 断网时可查看最近一次行情快照与自选列表。POST / PUT / DELETE 一律直连，绝不缓存（个人数据真源在后端）。
 // 注意：浏览器只允许 HTTPS 或 localhost 注册 Service Worker；手机经局域网 HTTP 访问时仅能在线浏览（1.6）。
-const VERSION = 'v0.9.0';
+const VERSION = 'v0.10.0';
 const SHELL = `stock-shell-${VERSION}`;
 const DATA = `stock-data-${VERSION}`;
 const SHELL_FILES = ['/', '/index.html', '/css/style.css', '/js/app.js', '/js/api.js', '/js/db.js', '/js/util.js', '/js/chart.js', '/js/detail.js',
-  '/js/screener.js', '/js/watchlist.js', '/js/portfolio.js', '/js/backtest.js', '/js/settings.js', '/js/parse.js', '/js/app-shared.js', '/js/market.js', '/js/marketpanel.js', '/js/plan.js', '/js/news.js', '/js/factor.js', '/js/keyma.js',
+  '/js/screener.js', '/js/watchlist.js', '/js/portfolio.js', '/js/backtest.js', '/js/settings.js', '/js/parse.js', '/js/app-shared.js', '/js/market.js', '/js/marketpanel.js', '/js/plan.js', '/js/news.js', '/js/factor.js', '/js/keyma.js', '/js/about.js',
   '/vendor/lightweight-charts.standalone.production.js', '/manifest.json', '/icon.svg', '/favicon.svg', '/icons/icon-192.png'];
 
 self.addEventListener('install', e => {

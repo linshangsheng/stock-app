@@ -198,6 +198,9 @@ if (fsSupported) {
   applyTheme(); applyColors();
   if (fsSupported) $('#fs-btn').addEventListener('click', toggleFs); else $('#fs-btn').hidden = true;
   $('#reload-btn').addEventListener('click', () => location.reload());
+  const openAbout = () => import('./about.js').then(m => m.openAbout());
+  $('.brand')?.addEventListener('click', openAbout);
+  $('.brand')?.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openAbout(); } });
   $('#theme-btn').addEventListener('click', () => {
     const cur = document.documentElement.dataset.theme;
     prefs.set('theme', cur === 'dark' ? 'light' : 'dark'); applyTheme();
