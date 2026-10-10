@@ -28,7 +28,7 @@ from .jobs import manager
 from .panel import load_panel
 
 ROOT = settings.ROOT
-app = FastAPI(title="股票 App 本地后端", version="0.7.0")
+app = FastAPI(title="股票 App 本地后端", version="0.8.0")
 
 
 # ---- 工具 ---------------------------------------------------------------------
@@ -950,6 +950,13 @@ def market_view_get(market: str = "CN"):
     return _wrap(market, **d)
 
 
+@app.get("/api/market/key_ma")
+def market_key_ma():
+    """关键均线：创业板指 / 标普500 / 纳斯达克100 的 20 / 60 / 120 / 200 / 250 日均线位置、明天的触发价、按回测证据给出的操作建议。"""
+    from . import key_ma
+    return _wrap("CN", **key_ma.build())
+
+
 @app.get("/api/factor/plan")
 def factor_plan(market: str = "CN", summary: bool = True):
     """低风险组合：今天的目标名单、与「组合」持仓比较后的卖 / 买、调仓日历、资金分配；summary=1 时附回测证据（后台缓存）。"""
@@ -1191,6 +1198,8 @@ def _prewarm():
             if m == "CN":                                  # 低风险组合的回测证据：数据日 / 参数变了才在后台重算（约 1~2 分钟）
                 from . import factor_portfolio as fpm
                 fpm.refresh_summary(m, background=True)
+                from . import key_ma                       # 关键均线：顺便把美股指数拉到缓存（两次请求）
+                key_ma.build()
         except Exception:  # noqa: BLE001 - 预热失败不影响服务，按需时再算
             log.exception("prewarm %s failed", m)
 

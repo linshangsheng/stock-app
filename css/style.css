@@ -258,6 +258,23 @@ table.fp-cmp td:first-child { white-space: nowrap; }
   .fp-kv { grid-template-columns: 1fr 1fr; }
   .fp-ev .grid.c2 { grid-template-columns: 1fr; }
 }
+/* 关键均线 */
+.km-idx > summary { list-style: none; cursor: pointer; } .km-idx > summary::-webkit-details-marker { display: none; }
+.km-idx > summary::before { content: '▸ '; color: var(--muted); } .km-idx[open] > summary::before { content: '▾ '; }
+.km-sum { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.km-head { color: var(--text); }
+.km-tbl td.km-adv { min-width: 260px; line-height: 1.5; }
+.km-brief { padding-top: 8px; border-top: 1px solid var(--line); }
+.km-row { display: flex; align-items: center; gap: 8px; margin-top: 5px; } .km-row .km-nm { min-width: 76px; font-size: 13px; font-weight: 600; }
+@media (max-width: 640px) {             /* 手机：每条均线一张小卡片 */
+  table.km-tbl thead { display: none; }
+  table.km-tbl tr { display: grid; grid-template-columns: 1.1fr 1fr 0.9fr 0.9fr; gap: 2px 8px; padding: 8px 2px; border-bottom: 1px solid var(--line); }
+  table.km-tbl td { border: 0; padding: 0; }
+  table.km-tbl td.c-trig { grid-column: 1 / -1; text-align: left; }
+  table.km-tbl td.c-trig::before { content: attr(data-label); color: var(--muted); }
+  table.km-tbl td.c-adv { grid-column: 1 / -1; min-width: 0; }
+  table.km-tbl tr.hl { background: var(--accent-soft); border-radius: 6px; } table.km-tbl tr.hl td { background: transparent; }
+}
 /* 选股页 5 个标签：收紧间距、隐藏横向滚动条（窄屏仍可左右滑） */
 .col-list .tabs { scrollbar-width: none; } .col-list .tabs::-webkit-scrollbar { display: none; }
 .col-list .tabs button { padding: 8px 9px; }

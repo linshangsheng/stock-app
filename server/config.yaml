@@ -204,6 +204,16 @@ exits:
   partial_fraction: 0.5             # 分批止盈卖出比例
   partial_move_stop_be: true        # 分批止盈后把止损上移到成本价
 
+# 关键均线（server/key_ma.py；证据：tools/ma_research.py → server/key_ma_evidence.json）：行情页「关键均线」面板。
+# 每条均线（20 / 60 / 120 / 200 / 250 日）单独检验：两段（样本内 / 样本外）都 Sharpe ≥ 一直持有、最大回撤浅 10 个百分点以上才算「可操作」。
+# 标普500 主线 200 日、纳指100 主线 200 日、创业板指主线 20 日 ±2%（= ETF 规则趋势仓）。不给杠杆建议。
+key_ma:
+  refresh_hours: 3                  # 美股指数多久从 yfinance 更新一次（失败用缓存）
+  indices:
+    - {key: cyb, name: 创业板指,    market: CN, symbol: sz.399006, etf: "159915 创业板ETF"}
+    - {key: spx, name: 标普500,     market: US, symbol: "^GSPC",   etf: "513500 标普500ETF（QDII，A 股账户可买，注意溢价）"}
+    - {key: ndx, name: 纳斯达克100, market: US, symbol: "^NDX",    etf: "513100 / 159941 纳指ETF（QDII，A 股账户可买，注意溢价）"}
+
 # 低风险多因子组合（server/factor_portfolio.py；验证见 tools/factor_research.py 与 CHANGELOG v0.7.0）：
 # 定期调仓、等金额持有「低换手 + 低波动」综合分前 N 名；不用止损止盈，调仓日按名单买卖。
 #   全市场回测（5133 只，2018~2026，事先写好 8 个方案，2018~2022 选、2023~ 验）：样本内年化约 0~+1%（同期交易池等权 -5%），

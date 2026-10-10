@@ -7,6 +7,7 @@ import { showDetail } from './detail.js';
 import { openTradeForm } from './portfolio.js';
 import { loadMarketView, marketBrief } from './marketpanel.js';
 import { loadFactorPlan, factorTab, factorLine, factorEvidenceBlock } from './factor.js';
+import { loadKeyMa, keyMaBrief } from './keyma.js';
 
 const REGIME = { NORMAL: ['正常', '正常开仓'], CAUTION: ['谨慎', '仓位上限减半，只做最强候选'], DEFENSIVE: ['防守', '不开新仓'], UNKNOWN: ['未知', '基准数据缺失，按谨慎处理'] };
 const SETUP_ORDER = ['oversold', 'vcp', 'breakout', 'pullback'];
@@ -51,6 +52,13 @@ export const screener = {
     // 宽屏：放在右侧（没点开股票时那块原本是空白）；窄屏（手机）：放在左列顶部。
     const brief = h('div', {});
     const wide = () => matchMedia('(min-width: 900px)').matches;
+    // 长线趋势（关键均线）摘要：单独加载一次
+    const kmSlot = h('div', {});
+    (async () => {
+      try { S.km = await loadKeyMa(); } catch { S.km = null; }
+      const b = keyMaBrief(S.km);
+      if (b) kmSlot.replaceChildren(b);
+    })();
     function showOverview() {
       if (!wide()) return;
       ctx.currentSymbol = null; S.sel = null;
@@ -64,6 +72,7 @@ export const screener = {
           h('b', {}, `ETF 规则健康度：${S.mv.portfolio.health.status}。`), S.mv.portfolio.health.text,
           `（当前回撤 ${fmtPct(S.mv.portfolio.health.current_dd, 1)}，10 年最大 ${fmtPct(S.mv.portfolio.health.max_dd, 1)}）`, ' ',
           h('a', { href: '#/market' }, '分年度表现 →')) : null,
+        kmSlot,
         h('p', { class: 'hint mt' }, '点左侧清单里的股票，这里会换成它的详情和「明天怎么操作」；点详情顶部的「← 市场概览」回到这里。')));
     }
     // 右侧（宽屏、没点开股票时）：「低风险组合」标签下显示组合的回测证据，其余标签显示市场概览

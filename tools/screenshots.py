@@ -150,6 +150,9 @@ async def run(base: str, out: Path, width: int, height: int):
             await p.tall_shot(out / "11-行情-宽基指数规则.png", "#col-page .card:nth-of-type(2)", width, height)
             await p.js("const d = document.querySelectorAll('#col-page details.card')[1]; if (d) { d.open = true; d.dispatchEvent(new Event('toggle')); }", 2)
             await p.tall_shot(out / "12-行情-指数详情与回测.png", "#col-page details.card[open]", width, height)
+            await p.js("document.querySelectorAll('#col-page details.card[open]').forEach(d => { d.open = false; }); "
+                       "const k = document.querySelector('.km-idx'); if (k) { k.open = true; k.dispatchEvent(new Event('toggle')); }", 3)
+            await p.tall_shot(out / "26-行情-关键均线.png", ".km-idx[open]", width, height)
             # 持仓
             await p.goto(base + "/#/portfolio", 4)
             await p.shot(out / "13-持仓页.png")

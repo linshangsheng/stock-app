@@ -3,6 +3,7 @@
 import { get, state } from './api.js';
 import { h, clear, fmtPrice, fmtPct, fmtNum, dirClass, code } from './util.js';
 import { loadMarketView, marketFull } from './marketpanel.js';
+import { loadKeyMa, keyMaCard } from './keyma.js';
 
 const REGIME = { NORMAL: ['正常', '正常开仓'], CAUTION: ['谨慎', '仓位上限减半，只做最强候选'], DEFENSIVE: ['防守', '不开新仓'], UNKNOWN: ['未知', '基准数据缺失'] };
 
@@ -12,8 +13,17 @@ export const marketView = {
     const el = ctx.pageEl; clear(el);
     const mvBox = h('div', {}, h('div', { class: 'card' }, h('div', { class: 'empty' }, h('span', { class: 'spinner' }), ' 加载市场温度与指数择时…')));
     const body = h('div', {}, h('div', { class: 'empty' }, h('span', { class: 'spinner' }), ' 加载行情总览（首次打开需构建全市场数据，约 40 秒）…'));
+    const kmBox = h('div', {}, h('div', { class: 'card mt' }, h('span', { class: 'spinner' }), ' 加载关键均线（创业板指 / 标普500 / 纳斯达克100）…'));
     el.append(h('div', { class: 'pane-body page' }, h('div', { class: 'row between mb' }, h('h1', {}, state.market === 'US' ? '美股行情' : 'A股行情'), h('span', { class: 'hint', id: 'mk-asof' })),
-      mvBox, h('h2', { class: 'mt', style: 'margin-top:22px' }, '个股与行业'), body));
+      mvBox, kmBox, h('h2', { class: 'mt', style: 'margin-top:22px' }, '个股与行业'), body));
+    (async () => {
+      let d;
+      try { d = await loadKeyMa(); } catch (e) { d = { status: 'error', message: e.message }; }
+      if (!document.body.contains(kmBox)) return;
+      this._km?.destroy();
+      this._km = keyMaCard(d);
+      kmBox.replaceChildren(this._km.el);
+    })();
     // 市场温度 / 指数择时：轻量，单独加载，不等行情总览
     (async () => {
       let mv = null;
@@ -84,5 +94,5 @@ export const marketView = {
     body.append(h('div', { class: 'card mt' }, h('h3', { style: 'margin-bottom:6px' }, '排行（交易池 L2 内）'), tabs, tbl));
     draw();
   },
-  cleanup() { this._mv?.destroy(); this._mv = null; },
+  cleanup() { this._mv?.destroy(); this._mv = null; this._km?.destroy(); this._km = null; },
 };
