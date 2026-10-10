@@ -214,5 +214,11 @@ if (fsSupported) {
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
     navigator.serviceWorker.register('sw.js').catch(() => { /* 非 HTTPS 的局域网访问不允许注册，仅影响离线 / 安装 */ });
   }
-  route();
+  const bootEl = document.getElementById('boot');
+  const fromSplash = document.documentElement.classList.contains('splash');
+  if (fromSplash) history.replaceState(null, '', location.pathname + location.hash);   // 去掉 ?splash=1，刷新时不再显示
+  try { await route(); } finally {
+    if (fromSplash && bootEl) { setTimeout(() => { bootEl.classList.add('hide'); setTimeout(() => bootEl.remove(), 700); }, 150); }
+    else bootEl?.remove();
+  }
 })();

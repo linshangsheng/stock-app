@@ -6,14 +6,33 @@
 <title>股票 · 趋势波段</title>
 <meta name="theme-color" content="#ffffff">
 <link rel="manifest" href="manifest.json">
-<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="alternate icon" href="icons/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="stylesheet" href="css/style.css">
+<style>
+/* 从启动画面（splash.html）跳过来时：先盖一层与启动画面同色的 Logo 页，首屏渲染好再淡出，不会从深色闪成白屏 */
+#boot { position: fixed; inset: 0; z-index: 9999; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+  background: radial-gradient(1200px 700px at 50% 38%, #142257 0%, #0a1230 45%, #04070f 100%); transition: opacity .6s ease; }
+html.splash #boot { display: flex; }
+#boot img { width: 96px; height: 96px; filter: drop-shadow(0 12px 30px rgba(255,170,60,.32)); animation: bootpulse 1.6s ease-in-out infinite; }
+#boot b { font: 800 30px "Microsoft YaHei UI", "PingFang SC", sans-serif; letter-spacing: .14em; padding-left: .14em; color: #ffd76a; }
+#boot.hide { opacity: 0; pointer-events: none; }
+@keyframes bootpulse { 50% { transform: scale(1.05); } }
+</style>
+<script>
+if (/[?&]splash=1/.test(location.search)) {
+  document.documentElement.classList.add('splash');
+  setTimeout(function () { var b = document.getElementById('boot'); if (b) b.classList.add('hide'); }, 6000);   // 兜底：脚本出错也不会一直挡着
+}
+</script>
 </head>
 <body>
+<div id="boot" aria-hidden="true"><img src="icon.svg" alt=""><b>趋势波段</b></div>
 <div id="app" class="app" data-view="screener">
   <nav class="nav" id="nav" aria-label="主导航">
     <div class="brand" title="股票 · 趋势波段">
-      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 17l5-6 4 3 8-9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 21h18" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity=".4"/></svg>
+      <img src="favicon.svg" width="24" height="24" alt="" aria-hidden="true">
       <span>趋势波段</span>
     </div>
     <div class="market-switch" role="tablist" aria-label="市场">

@@ -28,7 +28,7 @@ from .jobs import manager
 from .panel import load_panel
 
 ROOT = settings.ROOT
-app = FastAPI(title="股票 App 本地后端", version="0.8.0")
+app = FastAPI(title="股票 App 本地后端", version="0.9.0")
 
 
 # ---- 工具 ---------------------------------------------------------------------
@@ -1167,6 +1167,17 @@ def manifest():
 @app.get("/icon.svg")
 def icon():
     return FileResponse(ROOT / "icon.svg", media_type="image/svg+xml")
+
+
+@app.get("/favicon.svg")
+def favicon():
+    return FileResponse(ROOT / "favicon.svg", media_type="image/svg+xml")
+
+
+@app.get("/splash.html")
+def splash():
+    """启动画面（平时由「启动股票.vbs」当本地文件直接打开；这里也提供一份，便于在浏览器里预览）。"""
+    return FileResponse(ROOT / "splash.html")
 
 
 @app.on_event("startup")
