@@ -538,7 +538,9 @@ def update_incremental(conn, src, market: str = "CN", upto: str | None = None,
 def update_incremental_batch(conn, src, market: str, need: list[str], last_row: dict, upto: str,
                              progress: ProgressCb | None = None, stop: Callable[[], bool] | None = None) -> dict:
     """批量增量（美股）。yfinance 在发生拆股后会把**整段历史**重新调整，库里旧行就过期了，所以：
-    每批从各自最后一日（含）起取，核对重叠日收盘价；对不上（或新窗口里出现拆股）的股票整只重拉历史并覆盖。"""
+    每批从各自最后一日（含）起取，核对重叠日收盘价；对不上（或新窗口里出现拆股）的股票整只重拉历史并覆盖。
+    重叠日本身也用新取到的数据覆盖：Yahoo 收盘后不久给出的当日 K 线是初步数据（开盘价常落在最高 / 最低价之外），
+    第二天再取时已经修正——顺手覆盖掉，不让初步数据一直留在库里。"""
     ok = resync = fail = 0
     for i in range(0, len(need), BATCH):
         if stop and stop():
@@ -579,14 +581,34 @@ def update_incremental_batch(conn, src, market: str, need: list[str], last_row: 
                     set_state(conn, sym, "daily", f"error: resync {str(e)[:80]}")
                     fail += 1
                     continue
-            if len(new):
-                save_bars(conn, sym, new, src.name)
+            fresh = bars[bars["date"] >= last_d]                 # 含重叠日：用上游修正后的数据覆盖
+            if len(fresh):
+                save_bars(conn, sym, fresh, src.name)
             set_state(conn, sym, "daily", "ok", bars["date"].max(), 0)
             ok += 1
         conn.commit()
         if progress:
             progress("update_incremental", min(i + BATCH, len(need)), len(need))
     return {"mode": "batch", "updated": ok, "resynced_after_split": resync, "failed": fail}
+
+
+def refetch_recent(conn, src, market: str, symbols: list[str], upto: str, days: int = 5) -> dict:
+    """把指定股票最近几个交易日重新拉一遍并覆盖（只用于有批量接口的美股）。
+    场景：收盘后不久取到的是 Yahoo 的初步 K 线（开盘价落在最高 / 最低价之外等），库里一旦存下，增量更新认为「已是最新」
+    不会再取，完整性闸门就一直不过。闸门标出的异常股才重拉——一百来只只要一两次请求。"""
+    if not symbols or not hasattr(src, "daily_bars_batch"):
+        return {"refetched": 0}
+    cal = mc.trading_days(conn, None, upto)
+    if not cal:
+        return {"refetched": 0}
+    anchor = cal[-days] if len(cal) >= days else cal[0]
+    q = "SELECT symbol, date, close, adj_factor FROM daily_bar WHERE date=? AND symbol IN (%s)" % ",".join("?" * len(symbols))
+    rows = {r[0]: (r[1], r[2], r[3]) for r in conn.execute(q, [anchor, *symbols]).fetchall()}
+    need = [s for s in symbols if s in rows]
+    if not need:
+        return {"refetched": 0}
+    r = update_incremental_batch(conn, src, market, need, rows, upto)
+    return {"refetched": r.get("updated", 0) + r.get("resynced_after_split", 0), "failed": r.get("failed", 0), "from": anchor}
 
 
 def append_snapshot(conn, snap: pd.DataFrame, day: str) -> dict:

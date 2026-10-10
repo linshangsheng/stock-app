@@ -43,6 +43,8 @@ def check_gate(conn, market: str, day: str) -> dict:
                (live[["open", "high", "low", "close", "volume"]].lt(0).any(axis=1)) |
                (live[["open", "high", "low", "close"]].isna().any(axis=1))]
     bad_symbols |= set(bad["symbol"])
+    n_range = len(set(bad["symbol"]))
+    n_move = 0
     # 涨跌幅超出涨跌停且当日无除权记录
     prev_day = conn.execute("SELECT MAX(date) FROM daily_bar WHERE date<?", (day,)).fetchone()[0]
     if prev_day:
@@ -57,10 +59,14 @@ def check_gate(conn, market: str, day: str) -> dict:
         pct = (m["close"] / m["pc"] - 1).abs()
         exdiv = (m["adj_factor"] - m["pf"]).abs() > 1e-9                      # 当日有除权 / 因子变动
         over = m[(pct > lim * 1.25 + 0.01) & ~exdiv]
+        n_move = len(set(over["symbol"]) - bad_symbols)
         bad_symbols |= set(over["symbol"])
     ratio = (len(bad_symbols) / len(live)) if len(live) else 0.0
+    parts = [f"开盘 / 收盘价超出当日最高最低价 {n_range} 只" if n_range else "", f"涨跌幅异常 {n_move} 只" if n_move else ""]
+    hint = "（美股多为 Yahoo 收盘后不久的初步数据，下一轮更新会自动重新拉取这些股票）" if market == "US" and n_range else ""
     add("price_sanity", ratio <= g["max_anomaly_ratio"], round(ratio, 4), g["max_anomaly_ratio"],
-        f"异常行 {len(bad_symbols)} 条（占 {ratio:.2%}），已排除出当日扫描" if bad_symbols else "价格与成交量合理")
+        (f"异常行 {len(bad_symbols)} 条（占 {ratio:.2%}）：" + "，".join(x for x in parts if x) + f"，已排除出当日扫描{hint}")
+        if bad_symbols else "价格与成交量合理")
 
     # 4. 日期连续性：近 60 个交易日相对交易日历无缺失
     cal = mc.trading_days(conn, None, day)[-60:]

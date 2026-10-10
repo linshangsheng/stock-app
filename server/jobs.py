@@ -209,6 +209,15 @@ class JobManager:
                                 res["l1_backfill"] = ingest.init_history(c, src, market, progress=self._progress, stop=self._stop.is_set)
                         ingest.refresh_industry(c, src)
                 gate = quality.check_gate(c, market, day)
+                bad_px = any(ch["name"] == "price_sanity" and not ch["ok"] for ch in gate["checks"])
+                if gate["status"] != "PASS" and bad_px and gate.get("bad_symbols") and hasattr(src, "daily_bars_batch"):
+                    # 美股：多半是收盘后不久的初步数据，上游稍后会修正——只把异常股最近几天重拉一遍，再检查一次
+                    self._set(message=f"重新拉取 {len(gate['bad_symbols'])} 只价格异常的股票（上游数据可能已修正）")
+                    try:
+                        res["refetch_bad"] = ingest.refetch_recent(c, src, market, gate["bad_symbols"], day)
+                        gate = quality.check_gate(c, market, day)
+                    except Exception as e:  # noqa: BLE001 - 重拉失败不影响主链，下一轮调度再试
+                        res["refetch_bad_error"] = str(e)[:200]
                 res["gate"] = {"status": gate["status"], "reasons": gate["reasons"]}
                 db.log_job(c, "gate", gate["status"], "; ".join(gate["reasons"]))
             self._set(message="选股扫描")
