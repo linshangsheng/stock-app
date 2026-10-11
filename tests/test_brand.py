@@ -34,7 +34,7 @@ def test_splash_and_icons_served(demo_env):
         r = c.get(path)
         assert r.status_code == 200 and r.headers["content-type"].startswith(ctype), path
     html = c.get("/splash.html").text
-    assert "api/ping" in html and "splash=1" in html
+    assert "favicon.svg?t=" in html and "splash=1" in html and "qs.get('alt')" in html   # 用 favicon 当指纹探测主端口和备用端口
     assert 'id="boot"' in c.get("/").text
 
 
@@ -63,3 +63,33 @@ def test_installer_bat_is_gbk_crlf_and_covers_the_steps():
     assert "chcp 936" in s and "server\\requirements.txt" in s and "pypi.tuna.tsinghua.edu.cn" in s
     assert "Add python.exe to PATH" in s and "启动股票.vbs" in s and "/quiet" in s
 
+
+
+def test_pick_port_falls_back_when_preferred_is_unavailable():
+    """8000 被 Windows 保留或被占用时换备用端口（这里用一个正在监听的端口模拟「用不了」）。"""
+    import socket
+    from server import main
+    busy = socket.socket()
+    busy.bind(("127.0.0.1", 0))
+    busy.listen()
+    bp = busy.getsockname()[1]
+    free = socket.socket()
+    free.bind(("127.0.0.1", 0))
+    fp = free.getsockname()[1]
+    free.close()
+    try:
+        assert main.pick_port("127.0.0.1", bp, [fp]) == fp
+        assert main.pick_port("127.0.0.1", fp, [bp]) == fp
+    finally:
+        busy.close()
+
+
+def test_launcher_ports_match_config():
+    import re
+    from server import settings
+    s = settings.load_config(reload=True)["server"]
+    vbs = (ROOT / "启动股票.vbs").read_text(encoding="ascii")
+    ports = [int(x) for x in re.search(r"ports = Array\(([^)]*)\)", vbs).group(1).split(",")]
+    alt = [int(x) for x in re.search(r'altPorts = "([^"]*)"', vbs).group(1).split(",")]
+    assert ports == [s["port"], *s["fallback_ports"]] and alt == list(s["fallback_ports"])
+    assert "&alt=" in vbs and "IsOurs" in vbs

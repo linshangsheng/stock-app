@@ -2,14 +2,19 @@
 ' - starts "python -m server.main" hidden (log: data\server.log) if not already running
 ' - opens the animated splash screen (splash.html, a local file) right away; it waits for the backend
 '   and then switches to the app, so there is no silent wait after double-clicking
+' - port 8000 by default; if Windows has reserved it (Hyper-V / WSL, WinError 10013) or another program
+'   uses it, the backend switches to a fallback port and the splash screen finds it automatically
 ' - creates the desktop shortcut "Stock App" on first run, and keeps its icon pointing at app.ico
 ' Keep this file ASCII-only: VBScript cannot read UTF-8 Chinese text.
 Option Explicit
-Dim sh, fso, dir, url, http, running, lnk, desktop, ico, lnkPath, splash, i
+Dim sh, fso, dir, url, running, lnk, desktop, ico, lnkPath, splash, i, p, ports, altPorts
 Set sh = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 dir = fso.GetParentFolderName(WScript.ScriptFullName)
 sh.CurrentDirectory = dir
+' keep in sync with server.port / server.fallback_ports in server/config.yaml
+ports = Array(8000, 18000, 28000)
+altPorts = "18000,28000"
 url = "http://127.0.0.1:8000/"
 ico = dir & "\app.ico"
 
@@ -31,17 +36,32 @@ End If
 Err.Clear
 On Error GoTo 0
 
-' ---- backend ----
+' True if this app's backend answers at base (checks the "build" field of /api/ping)
+Function IsOurs(base)
+  Dim x
+  IsOurs = False
+  On Error Resume Next
+  Set x = CreateObject("MSXML2.XMLHTTP")
+  x.Open "GET", base & "api/ping", False
+  x.Send
+  If Err.Number = 0 Then
+    If x.Status = 200 Then
+      If InStr(x.responseText, """build""") > 0 Then IsOurs = True
+    End If
+  End If
+  Err.Clear
+  On Error GoTo 0
+End Function
+
+' ---- backend: already running on any of the ports? ----
 running = False
-On Error Resume Next
-Set http = CreateObject("MSXML2.XMLHTTP")
-http.Open "GET", url & "api/ping", False
-http.Send
-If Err.Number = 0 Then
-  If http.Status = 200 Then running = True
-End If
-Err.Clear
-On Error GoTo 0
+For Each p In ports
+  If IsOurs("http://127.0.0.1:" & p & "/") Then
+    url = "http://127.0.0.1:" & p & "/"
+    running = True
+    Exit For
+  End If
+Next
 
 If Not running Then
   If Not fso.FolderExists(dir & "\data") Then fso.CreateFolder dir & "\data"
@@ -51,7 +71,7 @@ End If
 ' ---- window: splash first (an app window without tabs / address bar, maximized) ----
 ' the page goes fullscreen on first click, Esc exits
 If fso.FileExists(dir & "\splash.html") Then
-  splash = "file:///" & Replace(Replace(dir, "\", "/"), " ", "%20") & "/splash.html?url=" & url
+  splash = "file:///" & Replace(Replace(dir, "\", "/"), " ", "%20") & "/splash.html?url=" & url & "&alt=" & altPorts
   On Error Resume Next
   sh.Run "msedge --app=""" & splash & """ --start-maximized", 1, False
   If Err.Number = 0 Then WScript.Quit
@@ -66,16 +86,14 @@ End If
 If Not running Then
   For i = 1 To 60
     WScript.Sleep 1000
-    On Error Resume Next
-    Set http = CreateObject("MSXML2.XMLHTTP")
-    http.Open "GET", url & "api/ping", False
-    http.Send
-    If Err.Number = 0 Then
-      If http.Status = 200 Then Exit For
-    End If
-    Err.Clear
-    On Error GoTo 0
+    For Each p In ports
+      If IsOurs("http://127.0.0.1:" & p & "/") Then
+        url = "http://127.0.0.1:" & p & "/"
+        running = True
+        Exit For
+      End If
+    Next
+    If running Then Exit For
   Next
-  On Error GoTo 0
 End If
 sh.Run url

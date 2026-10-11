@@ -5,6 +5,10 @@
 server:
   host: 127.0.0.1          # 默认只监听本机；改成 0.0.0.0 开放局域网时必须设置 token（1.6）
   port: 8000
+  # 8000 用不了时依次改用这些端口（双击「Stock App」会自动找到，不用改任何设置）。Windows 的 Hyper-V / WSL 会随机保留一段端口，
+  # 有时正好包含 8000（启动日志报 WinError 10013）；18000、28000 不在 Windows 的动态端口范围内，不会被这样保留。
+  # 改这里时同步修改「启动股票.vbs」里的 ports。
+  fallback_ports: [18000, 28000]
   token: ""                # 局域网访问口令；host 非 127.0.0.1 且 token 为空时拒绝启动
   ssl_certfile: ""         # 本地 HTTPS（可选）：证书与私钥路径；见 tools/make_cert.py 与 docs/使用手册.md
   ssl_keyfile: ""

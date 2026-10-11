@@ -7,7 +7,8 @@
 <title>股票 · 趋势波段 — 启动中</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <!-- 启动画面：「启动股票.vbs」一双击就用 Edge 应用窗口打开本页（本地文件，不依赖后端），
-     一边播放动画一边探测后端 /api/ping，后端就绪后淡出并跳到应用。参数：?url=后端地址（默认 http://127.0.0.1:8000/） -->
+     一边播放动画一边探测后端，后端就绪后淡出并跳到应用。参数：?url=后端地址（默认 http://127.0.0.1:8000/）&alt=备用端口（逗号分隔）。
+     探测用后端的 favicon.svg 当「指纹」：能当图片加载出来的才是本软件（8000 被 Windows 保留时后端会自动改用备用端口）。 -->
 <style>
 :root { --bg0: #04070f; --bg1: #0a1330; --gold: #ffd166; --gold2: #fff1c2; --red: #ff4d5e; --green: #22c98d; --ink: #eef1ff; --muted: #8f9bcc; }
 * { box-sizing: border-box; }
@@ -169,7 +170,7 @@ body.leaving .curtain { opacity: 1; }
   <b>后端没有启动成功</b>（等了 <span id="waited">90</span> 秒）。可以这样排查：<br>
   1. 打开软件目录里的 <code>data\server.log</code>，看最后几行的报错；<br>
   2. 在软件目录打开命令行，运行 <code>python -m server.main</code>，看具体提示（缺依赖时按提示安装）；<br>
-  3. 端口被占用：任务管理器结束所有 Python，再双击「Stock App」。
+  3. 端口问题：任务管理器结束所有 Python，再双击「Stock App」；日志里有 <code>WinError 10013</code> 的话，见使用手册「安装时的常见问题」。
   <div class="row"><button id="retry">再等一会</button><button class="ghost" id="openanyway">直接打开</button></div>
 </div>
 <div class="skip" id="skip" title="Enter / 空格 / 点这里">跳过动画 ⏎</div>
@@ -180,6 +181,10 @@ body.leaving .curtain { opacity: 1; }
 (() => {
   const qs = new URLSearchParams(location.search);
   const APP = (qs.get('url') || 'http://127.0.0.1:8000/').replace(/\/?$/, '/');
+  const ALT = (qs.get('alt') || '').split(',').map(x => x.trim()).filter(Boolean)
+    .map(x => (/^\d+$/.test(x) ? `http://127.0.0.1:${x}/` : x.replace(/\/?$/, '/')));
+  const CANDS = [APP, ...ALT.filter(u => u !== APP)];
+  let TARGET = APP;
   const MIN_SHOW = 2600;              // 动画至少播放这么久（后端早就在运行时也能看完开场）
   const TIMEOUT = 90000;
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -285,10 +290,21 @@ body.leaving .curtain { opacity: 1; }
     const s = Math.round((performance.now() - t0) / 1000);
     msg.innerHTML = s < 3 ? '正在启动本地后端…' : `正在启动本地后端… <em>${s}</em> 秒（首次启动约 5~15 秒）`;
   }, 200);
+  // 本页是本地文件，读不到后端的响应内容：用后端的 favicon.svg 当图片加载，加载成功 = 本软件已就绪
+  function probe(base) {
+    return new Promise(res => {
+      const img = new Image();
+      const to = setTimeout(() => { img.onload = img.onerror = null; res(false); }, 1500);
+      img.onload = () => { clearTimeout(to); res(true); };
+      img.onerror = () => { clearTimeout(to); res(false); };
+      img.src = base + 'favicon.svg?t=' + Date.now();
+    });
+  }
   async function ping() {
-    const ac = new AbortController(); const to = setTimeout(() => ac.abort(), 1500);
-    try { await fetch(APP + 'api/ping?t=' + Date.now(), { mode: 'no-cors', cache: 'no-store', signal: ac.signal }); return true; }
-    catch { return false; } finally { clearTimeout(to); }
+    const ok = await Promise.all(CANDS.map(probe));
+    const k = ok.indexOf(true);
+    if (k >= 0) { TARGET = CANDS[k]; return true; }
+    return false;
   }
   let deadline = t0 + TIMEOUT;
   async function loop() {
@@ -308,7 +324,7 @@ body.leaving .curtain { opacity: 1; }
     clearInterval(tickTimer);
     leaving = true; leaveAt = performance.now();
     document.body.classList.add('leaving');
-    setTimeout(() => location.replace(APP + '?splash=1'), reduce ? 0 : 900);
+    setTimeout(() => location.replace(TARGET + '?splash=1'), reduce ? 0 : 900);
   }
   function fail() {
     clearInterval(tickTimer);
@@ -317,7 +333,7 @@ body.leaving .curtain { opacity: 1; }
     $('err').style.display = 'block';
   }
   $('retry').onclick = () => { $('err').style.display = 'none'; $('boot').style.display = ''; deadline = performance.now() + 60000; ready = false; loop(); };
-  $('openanyway').onclick = () => location.replace(APP);
+  $('openanyway').onclick = () => location.replace(TARGET);
   const skip = () => { if (ready) go(); };
   $('skip').onclick = skip;
   addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') skip(); });

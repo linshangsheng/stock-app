@@ -1254,6 +1254,39 @@ def _prewarm():
             log.exception("prewarm %s failed", m)
 
 
+def _is_ours(port: int) -> bool:
+    """这个端口上跑的是不是本软件（已经在运行就不再启动第二个）。"""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/ping", timeout=1.5) as r:
+            d = json.loads(r.read().decode("utf-8"))
+        return bool(d.get("ok")) and "build" in d
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def pick_port(host: str, preferred: int, fallbacks: list[int]) -> int:
+    """选一个能用的端口：先 preferred（8000），不行再依次试 fallbacks。
+    8000 用不了的常见原因：Windows 的 Hyper-V / WSL 把它划进了「保留端口范围」（WinError 10013），或被别的程序占用。"""
+    import socket
+    bind_host = "0.0.0.0" if host in ("0.0.0.0", "::") else host
+    family = socket.AF_INET6 if ":" in bind_host else socket.AF_INET
+    for p in [preferred, *fallbacks]:
+        if _is_ours(p):
+            raise SystemExit(f"本软件已经在运行：直接打开 http://127.0.0.1:{p}/ 即可（不再启动第二个）")
+        with socket.socket(family, socket.SOCK_STREAM) as so:
+            try:
+                so.bind((bind_host, p))
+            except OSError as e:
+                why = ("Windows 把它划进了保留端口范围（Hyper-V / WSL）" if getattr(e, "winerror", None) == 10013
+                       else "可能被别的程序占用")
+                print(f"端口 {p} 不能用：{why}（{e}），改试下一个。", flush=True)
+                continue
+        return p
+    raise SystemExit(f"端口 {[preferred, *fallbacks]} 都不能用：请在 config.yaml 的 server.fallback_ports 里换几个端口，"
+                     "或按使用手册「安装时的常见问题」解除 Windows 的端口保留。")
+
+
 def main():
     import uvicorn
 
@@ -1269,8 +1302,20 @@ def main():
             if not Path(f).exists():
                 raise SystemExit(f"找不到证书文件：{f}（可用 python tools/make_cert.py 生成自签名证书，见 docs/使用手册.md）")
         kw = {"ssl_certfile": cert, "ssl_keyfile": key}
-        print(f"HTTPS 已启用：https://{host if host not in ('0.0.0.0', '::') else '<本机 IP>'}:{int(os.environ.get('PORT') or s['port'])}/")
-    uvicorn.run(app, host=host, port=int(os.environ.get("PORT") or s["port"]), log_level="info",
+    if os.environ.get("PORT"):                         # 明确指定了端口（测试 / 预览）：照用，不自动换
+        port = int(os.environ["PORT"])
+    else:
+        port = pick_port(host, int(s["port"]), [int(x) for x in (s.get("fallback_ports") or [])])
+        if port != int(s["port"]):
+            print(f"注意：端口 {s['port']} 不能用，本次改用 {port}：浏览器打开 http://127.0.0.1:{port}/"
+                  "（双击「Stock App」会自动找到；手机访问时地址里的端口也要换成它）。", flush=True)
+    try:
+        (settings.data_dir() / "port.txt").write_text(str(port), encoding="utf-8")   # 当前端口，排查问题时看
+    except OSError:
+        pass
+    if kw:
+        print(f"HTTPS 已启用：https://{host if host not in ('0.0.0.0', '::') else '<本机 IP>'}:{port}/")
+    uvicorn.run(app, host=host, port=port, log_level="info",
                 access_log=bool(s.get("access_log", False)), **kw)      # 不逐条记录页面请求（轮询会让日志无限变大）
 
 
