@@ -26,6 +26,10 @@ sys.path.insert(0, str(ROOT))
 CACHE = ROOT / "data" / "cache" / "ma_research"
 OUT = ROOT / "server" / "key_ma_evidence.json"
 MAS = (20, 60, 120, 200, 250)
+MAX_SWITCHES = 12            # 主线每年最多换仓次数（实操约束，事后补充，已在文档中说明）
+# A 股指数（BaoStock，价格指数；2005 年以前 / 发布日以前的历史是指数公司回溯计算的）
+CN_INDICES = [("sh.000016", "SH50", "2004-01-01"), ("sh.000300", "HS300", "2005-01-01"), ("sh.000905", "ZZ500", "2005-01-01"),
+              ("sh.000852", "ZZ1000", "2005-01-01"), ("sz.399006", "CYB", "2010-06-01")]
 BANDS = (0.0, 0.02)
 ZONES = ((-1.0, -0.20), (-0.20, -0.10), (-0.10, 0.0), (0.0, 0.10), (0.10, 0.20), (0.20, 9.0))
 
@@ -43,17 +47,23 @@ def fetch():
         df.index = df.index.strftime("%Y-%m-%d")
         df.to_csv(f)
         print("下载", t, df.index[0], df.index[-1], len(df), flush=True)
-    f = CACHE / "CYB.csv"
-    if not f.exists():
-        import baostock as bs
-        bs.login()
-        rs = bs.query_history_k_data_plus("sz.399006", "date,close", start_date="2010-06-01", end_date=date.today().isoformat(), frequency="d")
+    import baostock as bs
+    logged = False
+    for code, name, start in CN_INDICES:
+        f = CACHE / f"{name}.csv"
+        if f.exists():
+            continue
+        if not logged:
+            bs.login()
+            logged = True
+        rs = bs.query_history_k_data_plus(code, "date,close", start_date=start, end_date=date.today().isoformat(), frequency="d")
         rows = []
         while rs.error_code == "0" and rs.next():
             rows.append(rs.get_row_data())
-        bs.logout()
         pd.DataFrame(rows, columns=["date", "close"]).set_index("date").astype(float).to_csv(f)
-        print("下载 sz.399006", rows[0][0], rows[-1][0], len(rows), flush=True)
+        print("下载", code, rows[0][0], rows[-1][0], len(rows), flush=True)
+    if logged:
+        bs.logout()
 
 
 def rd(n, col="Close"):
@@ -73,8 +83,9 @@ def load():
         r[tr_etf.index[1:]] = tr_etf.iloc[1:].reindex(r.index).dropna()   # 有 ETF 之后用 ETF 复权收益（含股息、扣管理费）
         r = r.reindex(px.index).fillna(0)
         out[key] = (px, r, cash_us.reindex(px.index).ffill().fillna(0), 0.0005)
-    px = rd("CYB", "close")
-    out["cyb"] = (px, px.pct_change().fillna(0), pd.Series(1.02 ** (1 / 252) - 1, index=px.index), 0.001)
+    for key, (_, name, _) in zip(("sh50", "hs300", "zz500", "zz1000", "cyb"), CN_INDICES):
+        px = rd(name, "close")
+        out[key] = (px, px.pct_change().fillna(0), pd.Series(1.02 ** (1 / 252) - 1, index=px.index), 0.001)
     return out
 
 
@@ -125,7 +136,7 @@ def zones(px: pd.Series) -> list[dict]:
 def main():
     fetch()
     data = load()
-    names = {"cyb": "创业板指", "spx": "标普500", "ndx": "纳斯达克100"}
+    names = {"sh50": "上证50", "hs300": "沪深300", "zz500": "中证500", "zz1000": "中证1000", "cyb": "创业板指", "spx": "标普500", "ndx": "纳斯达克100"}
     res = {"generated": date.today().isoformat(), "rule": __doc__.split("\n\n")[1], "indices": {}}
     for key, (px, r, cash, cost) in data.items():
         warm = 250
@@ -147,7 +158,8 @@ def main():
                       f"样本内 {S['is']['cagr']:+.1%} / {S['is']['mdd']:.0%} / {S['is']['sharpe']} | 样本外 {S['oos']['cagr']:+.1%} / {S['oos']['mdd']:.0%} / {S['oos']['sharpe']} | "
                       f"换仓 {sw:4.1f}/年 {'✓ 可操作' if ok else ''}", flush=True)
         ok = [v for v in mas.values() if v["actionable"]]
-        primary = max(ok, key=lambda v: (v["is"]["sharpe"] or 0)) if ok else None     # 只用样本内选主线
+        practical = [v for v in ok if v["switches_per_year"] <= MAX_SWITCHES] or ok   # 主线要能执行：每年换仓不超过 12 次（太频繁实际很难照做）
+        primary = max(practical, key=lambda v: (v["is"]["sharpe"] or 0)) if ok else None     # 只用样本内选主线
         zs, uncond = zones(px)
         print(f"  主线（可操作里样本内 Sharpe 最高）：{primary and str(primary['n']) + '日' + ('±2%' if primary['band'] else '')}")
         print("  距年线分区 → 之后 120 日：" + "  ".join(

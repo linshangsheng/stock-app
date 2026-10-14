@@ -432,15 +432,20 @@ def zone_evidence(conn, br: pd.DataFrame, market: str) -> dict:
     px = _index_px(conn, main)["close"].reindex(br.index).ffill()
     ew = (1 + br["ew_ret"].fillna(0)).cumprod()
     z = br["b20"].map(zone_of)
-    out = {"index": main, "horizons": {}}
+    extra = mv_cfg().get("evidence_extra_us" if market == "US" else "evidence_extra_cn")
+    px2 = _index_px(conn, extra)["close"].reindex(br.index).ffill() if extra else None
+    out = {"index": main, "extra_index": extra if px2 is not None and px2.notna().any() else None, "horizons": {}}
     for h in (20, 60):
-        d = pd.DataFrame({"z": z, "idx": px.shift(-h) / px - 1, "ew": ew.shift(-h) / ew - 1}).dropna()
+        d = pd.DataFrame({"z": z, "idx": px.shift(-h) / px - 1, "ew": ew.shift(-h) / ew - 1,
+                          "x2": (px2.shift(-h) / px2 - 1) if out["extra_index"] else float("nan")})
+        d = d.dropna(subset=["z", "idx", "ew"])
         rows = []
         for i, (name, _) in enumerate(ZONES):
             g = d[d["z"] == i]
             rows.append({"zone": i, "name": name, "days": int(len(g)),
                          "idx_mean": _r(g["idx"].mean()), "idx_win": _r((g["idx"] > 0).mean()),
-                         "ew_mean": _r(g["ew"].mean()), "ew_win": _r((g["ew"] > 0).mean())})
+                         "ew_mean": _r(g["ew"].mean()), "ew_win": _r((g["ew"] > 0).mean()),
+                         "x2_mean": _r(g["x2"].mean()), "x2_win": _r((g["x2"].dropna() > 0).mean()) if g["x2"].notna().any() else None})
         out["horizons"][str(h)] = rows
     out["from"], out["to"] = (br.index[0], br.index[-1]) if len(br) else (None, None)
     return out
@@ -452,7 +457,7 @@ def _r(v, d=4):
 
 # ---- 汇总 -------------------------------------------------------------------------------------
 
-def thermometer(br: pd.DataFrame, ev: dict) -> dict:
+def thermometer(br: pd.DataFrame, ev: dict, market: str = "CN") -> dict:
     last = br.iloc[-1]
     b20 = float(last["b20"])
     z = zone_of(b20)
@@ -469,6 +474,11 @@ def thermometer(br: pd.DataFrame, ev: dict) -> dict:
         3: "情绪偏热：已在赚钱效应中，可以持有，但新开仓宜小、不追高。",
         4: "情绪过热：历史上之后 60 天上涨概率明显偏低。抄底仓止盈；不追高，新开仓宜小。",
     }[z].format(lo=cuts[0])
+    if market == "US" and z == 4:
+        hint = ("情绪过热：近 10 年美股在「普涨」之后并没有变差，强势行情常常延续（和 A 股不同）。不必因为过热就卖，按指数的趋势仓信号执行；"
+                "只是追高的新开仓宜小。")
+    elif market == "US" and z == 3:
+        hint = "情绪偏热：美股近 10 年在这个区间之后表现和平时差不多，按各指数的趋势仓信号执行，不加额外仓位。"
     return {
         "date": br.index[-1], "b20": b20, "b60": _r(last["b60"]), "b200": _r(last["b200"]), "zone": z, "zone_name": ZONES[z][0], "cuts": cuts,
         "up": int(last["up"]), "down": int(last["down"]), "pool": int(last["n"]),
@@ -516,7 +526,7 @@ def build(market: str) -> dict:
         ranks = rotation_ranks(conn, index_list(market), mv_cfg()["index_rule"])
         items = [x for x in (analyze_index(conn, it, br, ranks) for it in index_list(market)) if x]
         portfolio = _portfolio_stats([x.pop("_r") for x in items])
-        data = {"status": "ok", "date": br.index[-1], "data_asof": asof, "thermometer": thermometer(br, ev), "evidence": ev,
+        data = {"status": "ok", "date": br.index[-1], "data_asof": asof, "thermometer": thermometer(br, ev, market), "evidence": ev,
                 "indices": items, "portfolio": portfolio, "rotation": rotation(items), "rule": mv_cfg()["index_rule"],
                 "computed_at": datetime.now().isoformat(timespec="seconds"),
                 "note": "规则输出，不是投资建议。阈值来自 A 股 2016~2026 年数据的样本内选参、样本外检验；样本外抄底交易笔数少，统计不确定性大。"

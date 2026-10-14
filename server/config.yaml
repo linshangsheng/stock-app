@@ -82,6 +82,8 @@ market_view:
   zones: [0.15, 0.35, 0.65, 0.80]   # 全A站上 20 日线比例的分界：冰点 / 偏冷 / 中性 / 偏热 / 过热
   evidence_index_cn: "sh.000300"
   evidence_index_us: "SPY"
+  evidence_extra_cn: "sz.399006"    # 「历史证据」表里再多列一个指数：A 股 = 创业板指
+  evidence_extra_us: "QQQ"          # 美股 = 纳斯达克100（QQQ）
   index_rule:
     cost_per_side: 0.0005           # ETF 单边成本（佣金 + 滑点），ETF 免印花税
     trend:   {weight: 0.5, ma: 20, band: 0.02, top_k: 2, mom_days: 20}
@@ -210,10 +212,14 @@ exits:
 
 # 关键均线（server/key_ma.py；证据：tools/ma_research.py → server/key_ma_evidence.json）：行情页「关键均线」面板。
 # 每条均线（20 / 60 / 120 / 200 / 250 日）单独检验：两段（样本内 / 样本外）都 Sharpe ≥ 一直持有、最大回撤浅 10 个百分点以上才算「可操作」。
-# 标普500 主线 200 日、纳指100 主线 200 日、创业板指主线 20 日 ±2%（= ETF 规则趋势仓）。不给杠杆建议。
+# 主线：标普500 / 纳指100 = 200 日；上证50 = 120 日 ±2%；沪深300 = 120 日；中证500 / 中证1000 / 创业板指 = 20 日 ±2%。主线要求每年换仓 ≤ 12 次。不给杠杆建议。
 key_ma:
   refresh_hours: 3                  # 美股指数多久从 yfinance 更新一次（失败用缓存）
   indices:
+    - {key: sh50,   name: 上证50,    market: CN, symbol: sh.000016, etf: "510050 上证50ETF"}
+    - {key: hs300,  name: 沪深300,   market: CN, symbol: sh.000300, etf: "510300 / 159919 沪深300ETF"}
+    - {key: zz500,  name: 中证500,   market: CN, symbol: sh.000905, etf: "510500 中证500ETF"}
+    - {key: zz1000, name: 中证1000,  market: CN, symbol: sh.000852, etf: "512100 中证1000ETF"}
     - {key: cyb, name: 创业板指,    market: CN, symbol: sz.399006, etf: "159915 创业板ETF"}
     - {key: spx, name: 标普500,     market: US, symbol: "^GSPC",   etf: "513500 标普500ETF（QDII，A 股账户可买，注意溢价）"}
     - {key: ndx, name: 纳斯达克100, market: US, symbol: "^NDX",    etf: "513100 / 159941 纳指ETF（QDII，A 股账户可买，注意溢价）"}

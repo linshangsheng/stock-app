@@ -90,3 +90,16 @@ def test_market_view_api(demo_env):
     assert i["position"] in (0.0, 0.5, 1.0)
     assert ("exit_level" in i["trend"]) and ("buy_level" in i["trend"])
     assert set(i["stats"]) >= {"all", "is", "oos", "washout_trades"}
+
+
+def test_zone_evidence_includes_extra_index(demo_env):
+    """「历史证据」表除主指数外再多一个指数：A股 = 创业板指，美股 = 纳斯达克100（QQQ）。"""
+    from server import settings
+    for m, extra in (("CN", "sz.399006"), ("US", "QQQ")):
+        with settings.market_ctx(m), db.market_db(m) as c:
+            mv.ensure_breadth(c, m)
+            ev = mv.zone_evidence(c, mv.load_breadth(c), m)
+        assert ev["extra_index"] in (extra, None)            # 演示数据里没有 QQQ 时为 None（页面就不显示这一列）
+        if m == "CN":
+            assert ev["extra_index"] == extra
+        assert all("x2_mean" in r and "x2_win" in r for r in ev["horizons"]["60"])

@@ -5,12 +5,14 @@ import { StockChart } from './chart.js';
 import { h, clear, fmtPrice, fmtPct, fmtSigned, fmtAmount, fmtNum, dirClass, code, toast, esc, modal, copyText, download } from './util.js';
 import { openTradeForm } from './portfolio.js';
 import { planCard } from './plan.js';
+import { keystatsCard } from './keystats.js';
 
 let chart = null;
 const SETUP_CN = { breakout: '突破', pullback: '回踩', vcp: '波动收缩突破', oversold: '强势超跌' };
 let seq = 0;
 
-export function destroyDetail() { chart?.destroy(); chart = null; }
+let ksView = null;
+export function destroyDetail() { chart?.destroy(); chart = null; ksView?.destroy(); ksView = null; }
 
 const IND = [
   ['rsi14', 'RSI(14)', v => fmtNum(v, 1)], ['macd_hist', 'MACD 柱', v => fmtSigned(v, 3)], ['vol_ratio', '量比', v => fmtNum(v, 2)],
@@ -23,6 +25,7 @@ const IND = [
 export async function showDetail(ctx, symbol, meta = {}) {
   const el = ctx.detailEl;
   const my = ++seq;
+  ksView?.destroy(); ksView = null;
   clear(el);
   ctx.setMobileDetail(true);
   el.append(h('div', { class: 'empty' }, h('span', { class: 'spinner' }), ' 加载 ', symbol, ' …'));
@@ -101,7 +104,11 @@ export async function showDetail(ctx, symbol, meta = {}) {
   const plan = lv.scan ? planCard(lv.scan, () => showDetail(ctx, symbol, meta)) : null;
   el.append(topBar(ctx), head, plan, ...info, tools, box, h('div', { class: 'pane-body' }, h('h3', { style: 'margin-bottom:8px' }, '关键指标'), ind, finBox, flowBox,
     h('p', { class: 'hint mt' }, '指标全部由后端 features.py 统一计算（口径见需求书 3.6.1），前端只做展示。价格为前复权。')));
-  renderFin(finBox, symbol);
+  if (state.market === 'US') {                         // 美股：Yahoo 关键统计（含 Forward P/E 历史、利润率、增速、自由现金流）
+    ksView?.destroy();
+    ksView = keystatsCard(symbol);
+    finBox.append(ksView.el);
+  } else renderFin(finBox, symbol);
   renderFlow(flowBox, symbol);
   destroyDetail();
   chart = new StockChart(mainEl, subEl);

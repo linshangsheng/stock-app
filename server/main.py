@@ -386,6 +386,41 @@ def analysis_get(market: str = "CN"):
 
 # ---- 选股 ---------------------------------------------------------------------
 
+BENCH_NAMES = {"sh.000300": "沪深300", "SPY": "标普500（SPY）"}
+
+
+def regime_reason(reg: dict, market: str) -> dict:
+    """个股开仓闸门的一句话原因（按当前市场的规则与基准）：正常 = 基准在 50 日线上方且宽度达标；
+    防守 = 基准跌破 200 日线且宽度很低；其余为谨慎。"""
+    rc = settings.cfg()["regime"]
+    bench = BENCH_NAMES.get(rc["benchmark"], rc["benchmark"])
+    d = (reg or {}).get("detail") or {}
+    out = {"market_name": "A股" if market == "CN" else "美股", "benchmark_name": bench}
+    if d.get("bench_close") is None or d.get("bench_ma50") is None or d.get("breadth_ma50") is None:
+        return {**out, "reason": f"{bench} 数据缺失，按谨慎处理"}
+    c, m50, m200, br = d["bench_close"], d["bench_ma50"], d.get("bench_ma200"), d["breadth_ma50"]
+    above50, above200 = c > m50, (m200 is None or c > m200)
+    lo, hi = float(rc["breadth_defensive"]), float(rc["breadth_normal"])
+    trend = f"{bench} {'在 50 日线上方' if above50 else '跌破 50 日线'}" + ("" if above200 else "、也在 200 日线下方")
+    state = (reg or {}).get("state")
+    if state == "NORMAL":
+        why = f"{trend}，宽度 {br:.0%}（≥ {hi:.0%}）"
+    elif state == "DEFENSIVE":
+        why = f"{trend}，宽度只有 {br:.0%}（< {lo:.0%}）"
+    elif state == "CAUTION":
+        if not above50 and br < hi:
+            why = f"{trend}，宽度 {br:.0%}（不到 {hi:.0%}）"
+        elif not above50:
+            why = f"{trend}（宽度 {br:.0%} 达标，但指数不在 50 日线上方）"
+        elif br < hi:
+            why = f"{bench} 在 50 日线上方，但宽度只有 {br:.0%}（不到 {hi:.0%}）"
+        else:
+            why = f"{trend}，宽度 {br:.0%}；波动率指数偏高"
+    else:
+        why = f"{trend}，宽度 {br:.0%}"
+    return {**out, "reason": why}
+
+
 def _run_row(c, run_id: str) -> dict | None:
     r = c.execute("SELECT * FROM scan_runs WHERE run_id=?", (run_id,)).fetchone()
     if not r:
@@ -400,7 +435,8 @@ def _run_row(c, run_id: str) -> dict | None:
     return {"entry_mode": entry_mode or settings.cfg()["execution"]["entry_mode"], "run_id": r["run_id"], "market": r["market"], "scan_date": r["scan_date"], "data_asof": r["data_asof"],
             "config_hash": r["config_hash"], "official": bool(r["official"]), "started_at": r["started_at"], "finished_at": r["finished_at"],
             "gate": {"status": r["data_gate_status"], "checks": gate.get("checks", []), "reasons": gate.get("reasons", [])},
-            "regime": reg or {"state": r["regime"]}, "summary": json.loads(r.get("summary") or "{}"),
+            "regime": {**(reg or {"state": r["regime"]}), **regime_reason(reg or {"state": r["regime"]}, r["market"])},
+            "summary": json.loads(r.get("summary") or "{}"),
             "valid_until": mc.next_trading_day(c, r["scan_date"]), "is_stale": scanner._is_stale(c, r["market"], r["scan_date"])}
 
 
@@ -984,10 +1020,52 @@ def market_view_get(market: str = "CN"):
 
 
 @app.get("/api/market/key_ma")
-def market_key_ma():
-    """关键均线：创业板指 / 标普500 / 纳斯达克100 的 20 / 60 / 120 / 200 / 250 日均线位置、明天的触发价、按回测证据给出的操作建议。"""
+def market_key_ma(market: str = "CN"):
+    """关键均线（按市场：A股 = 创业板指；美股 = 标普500 / 纳斯达克100）：20 / 60 / 120 / 200 / 250 日均线位置、明天的触发价、
+    按回测证据给出的操作建议。"""
     from . import key_ma
-    return _wrap("CN", **key_ma.build())
+    market = _market(market)
+    return _wrap(market, **key_ma.build(market=market))
+
+
+@app.get("/api/market/vix")
+def market_vix(market: str = "US"):
+    """VIX 恐慌指数（只在美股提供）：水平、分区、历史分位、期限结构、近一年走势与历史统计。"""
+    from . import vix
+    market = _market(market)
+    if market != "US":
+        return _wrap(market, status="unsupported", message="VIX 是美股的恐慌指数，A 股没有对应的指标。")
+    return _wrap(market, **vix.build())
+
+
+@app.get("/api/keystats")
+def keystats_one(symbol: str, market: str = "US", force: bool = False):
+    """美股关键统计（Yahoo Key Statistics）：Forward P/E 及其历史、利润率、营收与盈利增速、自由现金流等，24 小时缓存。"""
+    from . import keystats
+    market = _market(market)
+    if market != "US":
+        return _wrap(market, status="unsupported", message="关键统计只提供美股（A 股的基本面见「基本面」卡片）。")
+    src = get_source("US")
+    try:
+        with db.market_db("US") as c:
+            return _wrap(market, status="ok", **keystats.get_one(c, symbol, src, force))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"关键统计数据源不可用：{type(e).__name__}: {str(e)[:160]}")
+    finally:
+        if hasattr(src, "close"):
+            src.close()
+
+
+@app.get("/api/keystats/batch")
+def keystats_batch(symbols: str, market: str = "US"):
+    """持仓 / 自选的「基本面」表：缓存里有的立即返回，缺的在后台逐只补齐（页面轮询 pending 直到清空）。"""
+    from . import keystats
+    market = _market(market)
+    syms = [s for s in symbols.split(",") if s][:60]
+    if market != "US":
+        return _wrap(market, status="unsupported", rows={}, pending=[], failed={}, message="关键统计只提供美股。")
+    with db.market_db(market) as c:
+        return _wrap(market, status="ok", **keystats.get_many(c, syms))
 
 
 @app.get("/api/factor/plan")
@@ -1249,7 +1327,7 @@ def _prewarm():
                 from . import factor_portfolio as fpm
                 fpm.refresh_summary(m, background=True)
                 from . import key_ma                       # 关键均线：顺便把美股指数拉到缓存（两次请求）
-                key_ma.build()
+                key_ma.build(market="US")
         except Exception:  # noqa: BLE001 - 预热失败不影响服务，按需时再算
             log.exception("prewarm %s failed", m)
 

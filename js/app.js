@@ -58,6 +58,7 @@ async function route() {
   const name = parts[0] || 'screener';
   const deepSymbol = parts[1] ? decodeURIComponent(parts[1]) : null;      // #/screener/sh.600519：从行情 / 资讯页点进个股详情
   const view = VIEWS[name] || VIEWS.screener;
+  ctx.gen = (ctx.gen || 0) + 1;              // 每次进入页面（含切换 A股 / 美股）加一：旧页面迟到的数据不能再画到新页面上
   current?.cleanup?.();
   ctx.cleanup?.(); ctx.cleanup = null;
   destroyDetail();

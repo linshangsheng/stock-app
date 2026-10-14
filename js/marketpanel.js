@@ -1,6 +1,6 @@
 // 市场温度 + 宽基指数 / ETF 择时（选股页摘要、行情页完整版共用）。数据全部来自 /api/market/view，前端不做计算。
 // 「温度」= 全A站上 20 日线的股票比例：A 股市场级信号是逆向的——冰点之后历史上涨概率最高，过热之后最低（见后端 market_view.py）。
-import { get } from './api.js';
+import { get, state } from './api.js';
 import { h, clear, fmtPct, fmtNum, dirClass } from './util.js';
 import { lineChart, themeColors } from './chart.js';
 
@@ -138,14 +138,18 @@ export function marketFull(d) {
 
   // ④ 历史证据
   const ev = d.evidence;
-  const evT = hz => h('table', { class: 'mini' }, h('thead', {}, h('tr', {}, ['温度区间', '天数', `${idxName(d, ev.index)} 平均`, '上涨概率', '全A等权 平均', '上涨概率'].map((x, k) => h('th', { class: k ? 'r' : '' }, x)))),
+  const xName = ev.extra_index ? idxName(d, ev.extra_index) : null;       // 再多列一个指数（A股 = 创业板指，美股 = 纳斯达克100）
+  const evT = hz => h('div', { class: 'tbl-wrap' }, h('table', { class: 'mini' }, h('thead', {}, h('tr', {}, ['温度区间', '天数', `${idxName(d, ev.index)} 平均`, '上涨概率', ...(xName ? [`${xName} 平均`, '上涨概率'] : []), '全A等权 平均', '上涨概率'].map((x, k) => h('th', { class: k ? 'r' : '' }, x)))),
     h('tbody', {}, ev.horizons[hz].map(r => h('tr', { class: r.zone === t.zone ? 'hl' : '' }, h('td', {}, zonePill(r.zone, r.name)), h('td', { class: 'num r' }, r.days),
       h('td', { class: 'num r ' + dirClass(r.idx_mean) }, fmtPct(r.idx_mean, 1)), h('td', { class: 'num r' }, pct0(r.idx_win)),
-      h('td', { class: 'num r ' + dirClass(r.ew_mean) }, fmtPct(r.ew_mean, 1)), h('td', { class: 'num r' }, pct0(r.ew_win))))));
+      ...(xName ? [h('td', { class: 'num r ' + dirClass(r.x2_mean) }, fmtPct(r.x2_mean, 1)), h('td', { class: 'num r' }, pct0(r.x2_win))] : []),
+      h('td', { class: 'num r ' + dirClass(r.ew_mean) }, fmtPct(r.ew_mean, 1)), h('td', { class: 'num r' }, pct0(r.ew_win)))))));
   out.append(h('div', { class: 'card mt' },
     h('div', { class: 'card-title' }, h('h3', {}, '历史证据：处在各温度区间之后的涨跌'), h('span', { class: 'hint' }, `${ev.from} ~ ${ev.to}`)),
-    h('div', { class: 'grid c2' }, h('div', {}, h('div', { class: 'small muted' }, '之后 20 个交易日'), evT('20')), h('div', {}, h('div', { class: 'small muted' }, '之后 60 个交易日'), evT('60'))),
-    h('p', { class: 'hint mt-s' }, '读法：A 股的市场情绪是「逆向」的——大家都在跌（冰点）之后反而更容易涨，普涨（过热）之后更容易跌。这是统计倾向，不是保证；单次结果可能相反。'),
+    h('div', { class: 'small muted' }, '之后 20 个交易日'), evT('20'), h('div', { class: 'small muted mt' }, '之后 60 个交易日'), evT('60'),
+    h('p', { class: 'hint mt-s' }, state.market === 'US'
+      ? '读法（美股）：近 10 年美股的「逆向」没有 A 股明显——冰点（普跌）之后确实更容易涨（60 天平均约 +7%），但过热（普涨）之后并没有变差，强势行情常常延续。所以美股的温度只用来判断「恐慌时可以分批」，不要用它判断「过热要卖」。样本只有约 10 年，是统计倾向，不是保证。'
+      : '读法（A 股）：市场情绪是「逆向」的——大家都在跌（冰点）之后反而更容易涨，普涨（过热）之后更容易跌。这是统计倾向，不是保证；单次结果可能相反。'),
     h('p', { class: 'hint' }, d.note)));
 
   // ⑤ 风格轮动

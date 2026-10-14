@@ -8,6 +8,7 @@ import { openTradeForm } from './portfolio.js';
 import { loadMarketView, marketBrief } from './marketpanel.js';
 import { loadFactorPlan, factorTab, factorLine, factorEvidenceBlock } from './factor.js';
 import { loadKeyMa, keyMaBrief } from './keyma.js';
+import { loadVix, vixBrief } from './vix.js';
 
 const REGIME = { NORMAL: ['正常', '正常开仓'], CAUTION: ['谨慎', '仓位上限减半，只做最强候选'], DEFENSIVE: ['防守', '不开新仓'], UNKNOWN: ['未知', '基准数据缺失，按谨慎处理'] };
 const SETUP_ORDER = ['oversold', 'vcp', 'breakout', 'pullback'];
@@ -18,6 +19,8 @@ export const screener = {
   async mount(ctx) {
     const S = { tab: 'list', data: null, preview: false, sel: null };
     const el = ctx.listEl;
+    const gen = ctx.gen;
+    const alive = () => ctx.gen === gen;     // 切换市场 / 页面后，这一份页面的后台请求回来也不再画（否则 A股的数据会盖住美股）
     ctx.refreshList = () => load();
 
     async function load(preview = false) {
@@ -31,7 +34,8 @@ export const screener = {
           get('/jobs').catch(() => null),
           get('/portfolio/health').catch(() => null),
         ]);
-      } catch (e) { clear(el); el.append(h('div', { class: 'empty' }, h('div', { class: 'big' }, '无法加载'), e.message)); return; }
+      } catch (e) { if (!alive()) return; clear(el); el.append(h('div', { class: 'empty' }, h('div', { class: 'big' }, '无法加载'), e.message)); return; }
+      if (!alive()) return;
       S.data = d; S.jobs = jobs; S.health = health;
       render();
       loadFp();
@@ -41,10 +45,12 @@ export const screener = {
     let fpTimer = null, fpTries = 0;
     async function loadFp() {
       clearTimeout(fpTimer);
+      if (state.market !== 'CN') { S.fp = null; return; }          // 低风险组合只在 A 股提供
       try { S.fp = await loadFactorPlan(); } catch (e) { S.fp = { status: 'error', message: e.message }; }
+      if (!alive()) return;
       if (S.data && document.body.contains(el)) render();
       if (S.tab === 'factor' && !ctx.currentSymbol && document.body.contains(el)) showFpEvidence();
-      if (S.fp?.backtest?.status === 'computing' && fpTries++ < 8) fpTimer = setTimeout(() => { if (document.body.contains(el)) loadFp(); }, 20000);
+      if (S.fp?.backtest?.status === 'computing' && fpTries++ < 8) fpTimer = setTimeout(() => { if (alive()) loadFp(); }, 20000);
       else fpTries = 0;
     }
 
@@ -56,8 +62,12 @@ export const screener = {
     const kmSlot = h('div', {});
     (async () => {
       try { S.km = await loadKeyMa(); } catch { S.km = null; }
+      if (!alive()) return;
       const b = keyMaBrief(S.km);
-      if (b) kmSlot.replaceChildren(b);
+      if (b) kmSlot.append(b);
+      if (state.market === 'US') {                         // 美股：再加一行 VIX
+        try { const v = vixBrief(await loadVix()); if (v && alive()) kmSlot.append(v); } catch { /* VIX 失败不影响概览 */ }
+      }
     })();
     function showOverview() {
       if (!wide()) return;
@@ -91,6 +101,7 @@ export const screener = {
     ctx.showOverview = showRight;
     (async () => {
       try { S.mv = await loadMarketView(); } catch (e) { S.mv = { status: 'error', message: e.message }; }
+      if (!alive()) return;
       clear(brief); brief.append(marketBrief(S.mv));
       if (S.data) render();
       if (!ctx.currentSymbol && S.right !== 'factor') showRight();
@@ -112,7 +123,7 @@ export const screener = {
         mv?.portfolio?.health?.status === '警告' ? h('div', { class: 'alert bad small mt-s' }, '⚠ ETF 规则：', mv.portfolio.health.text) : null,
         line('📊', '宽基 ETF', etfActs == null ? '市场温度计算中…' : etfActs.length ? etfActs.join('；') + '（开盘按市价成交，高开低开都一样）' : '5 个指数都没有买卖信号，不操作',
           () => { location.hash = '#/market'; }),
-        line('🧺', '低风险组合' + (al?.sleeve ? `（${fmtMoney(al.sleeve)}，${S.fp.params.n} 只）` : ''), fl.body, () => { S.tab = 'factor'; render(); if (!ctx.currentSymbol) showRight(); }),
+        state.market === 'CN' ? line('🧺', '低风险组合' + (al?.sleeve ? `（${fmtMoney(al.sleeve)}，${S.fp.params.n} 只）` : ''), fl.body, () => { S.tab = 'factor'; render(); if (!ctx.currentSymbol) showRight(); }) : null,
         line('📈', swing0 ? '个股波段（默认不分钱，只观察）' : '个股波段', buys.length ? buys.map(c => `${c.name}${swing0 ? '' : ' 开盘买' + (c.op?.planned_shares ? ' ' + c.op.planned_shares + ' 股' : '')}（止损 ${fmtPrice(c.stop_price)}）`).join('；') + (swing0 ? ' —— 想练手再看，点这里' : ' —— 点这里看高开 / 低开各买多少')
           : (run?.is_stale ? '这份清单已过期，等今天收盘后的新清单' : '今天没有符合条件的股票'),
           buys.length ? () => { S.sel = buys[0].symbol; showDetail(ctx, buys[0].symbol); } : null),
@@ -141,7 +152,7 @@ export const screener = {
     }
 
     function tabsBar() {
-      const tabs = [['list', '观察清单'], ['factor', '低风险组合'], ['exec', '次日执行'], ['filter', '条件筛选'], ['hist', '历史回看']];
+      const tabs = [['list', '观察清单'], ...(state.market === 'CN' ? [['factor', '低风险组合']] : []), ['exec', '次日执行'], ['filter', '条件筛选'], ['hist', '历史回看']];
       return h('div', { class: 'tabs', style: 'padding:0 8px;margin:0;align-items:center' }, ...tabs.map(([k, l]) =>
         h('button', { class: S.tab === k ? 'on' : '', onclick: () => { const was = S.tab; S.tab = k; render(); if (!ctx.currentSymbol && (was === 'factor') !== (k === 'factor')) showRight(); } }, l)),
         null);
@@ -151,7 +162,8 @@ export const screener = {
       const b = e.currentTarget; b.disabled = true; b.textContent = '计算中…';
       try {
         await post('/scan/run', {}, { timeout: 300000 });
-        try { S.mv = await loadMarketView(); clear(brief); brief.append(marketBrief(S.mv)); } catch { /* 市场温度失败不影响清单 */ }
+        if (!alive()) return;
+        try { S.mv = await loadMarketView(); if (!alive()) return; clear(brief); brief.append(marketBrief(S.mv)); } catch { /* 市场温度失败不影响清单 */ }
         toast('已重新计算', 'ok');
         await load();
       } catch (err) { toast(err.message, 'bad'); b.disabled = false; b.textContent = '↻ 重新计算'; }
@@ -390,8 +402,10 @@ function statusBar(d, jobs, health, ctx, recompute) {
   return h('div', { class: 'status-bar' },
     cell('数据状态', h('span', { class: 'badge ' + (gate === 'PASS' ? 'ok' : gate ? 'bad' : '') , title: gateTip }, gate === 'PASS' ? '完整性 通过' : gate ? '数据不完整' : '—'),
       h('span', { class: 'num small muted' }, jobs?.data_asof || d.data_asof || '—')),
-    cell('个股开仓闸门', reg ? h('span', { class: 'pill-state ' + reg, title: REGIME[reg]?.[1] }, REGIME[reg]?.[0] || reg) : '—',
-      run?.regime?.detail?.breadth_ma50 != null ? h('span', { class: 'small muted num', title: '站上 MA50 的股票占比（交易池）' }, '宽度 ' + fmtPct(run.regime.detail.breadth_ma50, 0, false)) : null),
+    cell(`个股开仓闸门（${run?.regime?.market_name || (state.market === 'US' ? '美股' : 'A股')}）`,
+      reg ? h('span', { class: 'pill-state ' + reg, title: REGIME[reg]?.[1] }, REGIME[reg]?.[0] || reg) : '—',
+      run?.regime?.reason ? h('span', { class: 'small muted', title: '正常：基准指数在 50 日线上方且宽度（站上 50 日线的股票比例）≥ 45%；防守：基准跌破 200 日线且宽度 < 25%；其余为谨慎' }, run.regime.reason)
+        : run?.regime?.detail?.breadth_ma50 != null ? h('span', { class: 'small muted num', title: '站上 MA50 的股票占比（交易池）' }, '宽度 ' + fmtPct(run.regime.detail.breadth_ma50, 0, false)) : null),
     cell('扫描 run_id', h('span', { class: 'num small', title: run ? `config ${run.config_hash}` : '' }, run ? run.run_id.slice(-18) : '—'),
       run ? h('span', { class: 'small muted' }, `收盘日 ${shortDate(run.scan_date)} → 有效至 ${run.valid_until ? shortDate(run.valid_until) : '—'}`) : null,
       recompute ? h('button', { class: 'btn sm', title: '按当前参数和账户资金，重新计算今天的观察清单与市场温度（约 30~60 秒）', onclick: recompute }, '↻ 重新计算') : null),

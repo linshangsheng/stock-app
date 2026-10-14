@@ -5,7 +5,7 @@ const VERSION = 'v1.1.0';
 const SHELL = `stock-shell-${VERSION}`;
 const DATA = `stock-data-${VERSION}`;
 const SHELL_FILES = ['/', '/index.html', '/css/style.css', '/js/app.js', '/js/api.js', '/js/db.js', '/js/util.js', '/js/chart.js', '/js/detail.js',
-  '/js/screener.js', '/js/watchlist.js', '/js/portfolio.js', '/js/backtest.js', '/js/settings.js', '/js/parse.js', '/js/app-shared.js', '/js/market.js', '/js/marketpanel.js', '/js/plan.js', '/js/news.js', '/js/factor.js', '/js/keyma.js', '/js/about.js',
+  '/js/screener.js', '/js/watchlist.js', '/js/portfolio.js', '/js/backtest.js', '/js/settings.js', '/js/parse.js', '/js/app-shared.js', '/js/market.js', '/js/marketpanel.js', '/js/plan.js', '/js/news.js', '/js/factor.js', '/js/keyma.js', '/js/vix.js', '/js/about.js',
   '/vendor/lightweight-charts.standalone.production.js', '/manifest.json', '/icon.svg', '/favicon.svg', '/icons/icon-192.png'];
 
 self.addEventListener('install', e => {

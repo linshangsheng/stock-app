@@ -4,18 +4,22 @@ import { h, clear, fmtPrice, fmtPct, fmtSigned, fmtAmount, dirClass, code, toast
 import { showDetail } from './detail.js';
 import { parseWatchlist, fileToText } from './parse.js';
 import { prefs } from './db.js';
+import { keystatsTable } from './keystats.js';
 
 export const watchlist = {
   layout: 'split',
   async mount(ctx) {
     const el = ctx.listEl;
-    const S = { items: [], sort: prefs.get('wl.sort', 'added'), q: '', sel: null, live: false, liveQuotes: {} };
+    const gen = ctx.gen;
+    const alive = () => ctx.gen === gen;     // 切换市场后，旧市场迟到的数据不再画
+    const S = { items: [], sort: prefs.get('wl.sort', 'added'), q: '', sel: null, live: false, liveQuotes: {}, view: 'quote' };
 
     let liveTimer = null;
     async function pollLive() {
       if (!S.live || !S.items.length) return;
       try {
         const r = await get('/quote/live', { symbols: S.items.map(i => i.symbol).join(',') }, { cache: false });
+        if (!alive()) { clearInterval(liveTimer); return; }
         const prev = S.liveQuotes || {}; S.liveQuotes = r.quotes || {}; S.flash = new Set(Object.keys(S.liveQuotes).filter(k => prev[k] && prev[k].price !== S.liveQuotes[k].price)); render(); S.flash = new Set();
       } catch { /* 盘中刷新失败不影响盘后数据 */ }
     }
@@ -23,10 +27,11 @@ export const watchlist = {
       S.live = on; prefs.set('wl.live', on); clearInterval(liveTimer);
       if (on) { pollLive(); liveTimer = setInterval(() => { if (!document.hidden) pollLive(); }, 60000); } else { S.liveQuotes = {}; render(); }
     }
-    ctx.cleanup = () => clearInterval(liveTimer);
+    ctx.cleanup = () => { clearInterval(liveTimer); S.ks?.destroy(); };
 
     async function load() {
-      try { const d = await get('/watchlist'); S.items = d.items; S.stale = d._stale; } catch (e) { clear(el); el.append(h('div', { class: 'empty' }, e.message)); return; }
+      try { const d = await get('/watchlist'); S.items = d.items; S.stale = d._stale; } catch (e) { if (alive()) { clear(el); el.append(h('div', { class: 'empty' }, e.message)); } return; }
+      if (!alive()) return;
       render();
     }
     ctx.refreshList = load;
@@ -44,9 +49,19 @@ export const watchlist = {
           h('button', { class: 'btn sm', onclick: () => download('watchlist.json', JSON.stringify(S.items.map(i => ({ symbol: i.symbol, note: i.note, added_at: i.added_at })), null, 1)) }, '导出')),
         h('div', { id: 'wl-suggest' }));
       el.append(head);
+      if (state.market === 'US') {                         // 美股：行情 / 基本面（Yahoo 关键统计）切换
+        head.append(h('div', { class: 'seg mt-s' }, [['quote', '行情'], ['fund', '基本面']].map(([k, l]) =>
+          h('button', { class: S.view === k ? 'on' : '', onclick: () => { S.view = k; render(); } }, l))));
+      }
       if (S.stale) el.append(h('div', { class: 'alert warn', style: 'margin:10px 16px' }, '数据延迟（离线快照）'));
       if (!S.items.length) {
         el.append(h('div', { class: 'empty' }, h('div', { class: 'big' }, '添加你的第一只股票'), h('div', {}, '在上方搜索代码或名称，或从「选股」页一键加入候选。')));
+        return;
+      }
+      if (state.market === 'US' && S.view === 'fund') {
+        S.ks?.destroy();
+        S.ks = keystatsTable(S.items.map(i => i.symbol), Object.fromEntries(S.items.map(i => [i.symbol, i.name])), sym => { S.sel = sym; showDetail(ctx, sym); });
+        el.append(S.ks.el);
         return;
       }
       const key = { pct: i => i.quote?.change_pct ?? -9, amount: i => i.quote?.amount ?? -1, price: i => i.quote?.close ?? -1, added: i => i.added_at };

@@ -65,14 +65,38 @@ def test_api_builds_three_indices_offline(demo_env, monkeypatch):
         return pd.DataFrame({"date": s.index, "close": s.values})
 
     monkeypatch.setattr(key_ma, "_fetch_us", fake)
-    j = TestClient(main.app).get("/api/market/key_ma").json()
-    got = {x["key"]: x for x in j["indices"]}
-    assert set(got) == {"cyb", "spx", "ndx"}
+    cl = TestClient(main.app)
+    cn = cl.get("/api/market/key_ma", params={"market": "CN"}).json()          # A股：上证50 / 沪深300 / 中证500 / 中证1000 / 创业板指
+    assert [x["key"] for x in cn["indices"]] == ["sh50", "hs300", "zz500", "zz1000", "cyb"]
+    assert all(x["status"] in ("ok", "no_data") for x in cn["indices"])
+    assert set(cn["other_market"]) == {"标普500", "纳斯达克100"}
+    us = cl.get("/api/market/key_ma", params={"market": "US"}).json()          # 美股：只看标普500 / 纳斯达克100
+    got = {x["key"]: x for x in us["indices"]}
+    assert set(got) == {"spx", "ndx"} and set(us["other_market"]) == {"上证50", "沪深300", "中证500", "中证1000", "创业板指"}
     for k in ("spx", "ndx"):
         assert got[k]["status"] == "ok" and len(got[k]["lines"]) == 5
         assert sum(1 for x in got[k]["lines"] if x["role"] == "primary") == 1
-    assert got["cyb"]["status"] in ("ok", "no_data")
     # 第二次读缓存，不再请求
     monkeypatch.setattr(key_ma, "_fetch_us", lambda *a: (_ for _ in ()).throw(RuntimeError("不应再请求")))
-    j2 = TestClient(main.app).get("/api/market/key_ma").json()
+    j2 = cl.get("/api/market/key_ma", params={"market": "US"}).json()
     assert {x["key"]: x["status"] for x in j2["indices"]}["spx"] == "ok"
+
+
+def test_regime_reason_names_market_benchmark_and_cause():
+    from server import main, settings
+    base = {"bench_close": 100.0, "bench_ma50": 105.0, "bench_ma200": 110.0, "breadth_ma50": 0.38}
+    with settings.market_ctx("CN"):
+        r = main.regime_reason({"state": "CAUTION", "detail": base}, "CN")
+    assert r["market_name"] == "A股" and "沪深300" in r["reason"] and "跌破 50 日线" in r["reason"] and "38%" in r["reason"]
+    with settings.market_ctx("US"):
+        r = main.regime_reason({"state": "CAUTION", "detail": {**base, "bench_close": 120.0, "breadth_ma50": 0.31}}, "US")
+    assert r["market_name"] == "美股" and "SPY" in r["reason"] and "宽度只有 31%" in r["reason"]
+    with settings.market_ctx("CN"):
+        r = main.regime_reason({"state": "NORMAL", "detail": {**base, "bench_close": 120.0, "breadth_ma50": 0.5}}, "CN")
+    assert "≥ 45%" in r["reason"]
+
+
+def test_allocation_has_no_factor_sleeve_in_us():
+    from server import factor_portfolio as fp
+    cn, us = fp.allocation("CN"), fp.allocation("US")
+    assert cn["factor"] > 0 and us["factor"] == 0 and abs(us["etf"] + us["swing"] - 1) < 1e-9

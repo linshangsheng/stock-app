@@ -37,10 +37,13 @@ def fp_cfg() -> dict:
     return settings.cfg()["factor_portfolio"]
 
 
-def allocation() -> dict:
-    """资金方案：宽基 ETF / 低风险组合 / 个股波段 三块的比例（个股波段 = 剩下的部分）。"""
+def allocation(market: str | None = None) -> dict:
+    """资金方案：宽基 ETF / 低风险组合 / 个股波段 三块的比例（个股波段 = 剩下的部分）。
+    低风险组合只在 A 股提供：美股账户里这部分归个股波段。"""
     a = settings.cfg().get("allocation") or {}
     etf, fac = float(a.get("etf", 0) or 0), float(a.get("factor", 0) or 0)
+    if (market or settings.current_market()) != "CN":
+        fac = 0.0
     return {"etf": etf, "factor": fac, "swing": round(max(0.0, 1 - etf - fac), 4)}
 
 

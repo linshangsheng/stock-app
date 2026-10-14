@@ -266,6 +266,24 @@ table.fp-cmp td:first-child { white-space: nowrap; }
 .brand { cursor: pointer; border-radius: 8px; } .brand:hover { background: var(--panel-2); }
 /* 导航栏 Logo（彩色图标，不随主题变色） */
 .brand img { display: block; border-radius: 6px; flex: none; }
+/* 美股关键统计 */
+.ks-focus { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.ks-block { border: 1px solid var(--line); border-radius: var(--radius); padding: 9px 11px; background: var(--panel); }
+.ks-head { font-size: 14px; font-weight: 700; margin: 4px 0; line-height: 1.4; }
+.ks-ul { margin: 4px 0 0; padding-left: 16px; font-size: 12px; line-height: 1.6; color: var(--muted); }
+.ks-all { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+.ks-grp { display: flex; flex-direction: column; gap: 2px; }
+.ks-kv { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; padding: 2px 0; border-bottom: 1px dashed var(--line); } .ks-kv b { text-align: right; }
+.ks-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; margin-top: 6px; }
+.ks-c { display: flex; flex-direction: column; gap: 1px; } .ks-c .k { font-size: 11px; color: var(--muted); } .ks-c .v { font-size: 13px; font-weight: 600; }
+.ks-pos { position: relative; height: 6px; width: 64px; margin-left: auto; border-radius: 3px; background: var(--panel-2); } .ks-pos i { position: absolute; top: -2px; width: 4px; height: 10px; border-radius: 2px; background: var(--accent); transform: translateX(-2px); }
+@media (max-width: 640px) { .ks-focus { grid-template-columns: 1fr; } }
+/* VIX */
+.vix-zones { display: grid; grid-template-columns: repeat(6, 1fr); gap: 3px; }
+.vix-zones .vz { display: flex; flex-direction: column; align-items: center; padding: 5px 2px; border-radius: 6px; color: #fff; font-size: 11px; opacity: .45; }
+.vix-zones .vz.on { opacity: 1; box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px currentColor; transform: translateY(-1px); } .vix-zones .vz b { font-size: 12px; }
+.vix .big-num { font-size: 30px; }
+@media (max-width: 640px) { .vix-zones { grid-template-columns: repeat(3, 1fr); } }
 /* 关键均线 */
 .km-idx > summary { list-style: none; cursor: pointer; } .km-idx > summary::-webkit-details-marker { display: none; }
 .km-idx > summary::before { content: '▸ '; color: var(--muted); } .km-idx[open] > summary::before { content: '▾ '; }

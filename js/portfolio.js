@@ -5,6 +5,7 @@ import { h, clear, fmtPrice, fmtPct, fmtNum, fmtMoney, fmtSigned, dirClass, code
 import { showDetail } from './detail.js';
 import { parseTrades, fileToText } from './parse.js';
 import { toCSV } from './parse.js';
+import { keystatsTable } from './keystats.js';
 
 const SETUPS = [['', '未标注'], ['factor', '低风险组合（不设止损）'], ['vcp', '波动收缩突破'], ['breakout', '突破'], ['pullback', '回踩'], ['oversold', '强势超跌']];
 const EXIT_REASONS = ['止损', '止盈', '移动止盈', '时间退出', '信号反转', '事件', '调仓', '主观'];
@@ -73,6 +74,8 @@ export const portfolio = {
   layout: 'split',
   async mount(ctx) {
     const el = ctx.listEl;
+    const gen = ctx.gen;
+    const alive = () => ctx.gen === gen;     // 切换市场后，旧市场迟到的数据不再画
     const S = { tab: 'pos', health: null, trades: null, account: null };
     ctx.refreshList = load;
 
@@ -84,6 +87,7 @@ export const portfolio = {
         S.health = null; S.err = e.message;
         try { const [a, t] = await Promise.all([get('/account'), get('/trades')]); S.account = a.account; S.trades = t; } catch { /* 保持空 */ }
       }
+      if (!alive()) return;
       render(); overview();
     }
 
@@ -96,9 +100,10 @@ export const portfolio = {
         h('div', { class: 'row wrap mt-s small muted num' },
           h('span', {}, '净值 ', h('b', {}, a.equity ? fmtMoney(a.equity) : '未录入')), h('span', {}, '单笔风险 ', h('b', {}, fmtPct(a.risk_per_trade, 2, false))),
           h('button', { class: 'btn sm ghost', onclick: accountDlg }, '账户参数')),
-        h('div', { class: 'tabs mt-s', style: 'margin-bottom:0' }, [['pos', '持仓体检'], ['trades', '交易日志']].map(([k, l]) =>
+        h('div', { class: 'tabs mt-s', style: 'margin-bottom:0' }, [['pos', '持仓体检'], ...(state.market === 'US' ? [['fund', '基本面']] : []), ['trades', '交易日志']].map(([k, l]) =>
           h('button', { class: S.tab === k ? 'on' : '', onclick: () => { S.tab = k; render(); } }, l)))));
-      if (S.tab === 'pos') renderPositions(); else renderTrades();
+      S.ks?.destroy(); S.ks = null;
+      if (S.tab === 'pos') renderPositions(); else if (S.tab === 'fund') renderFund(); else renderTrades();
     }
 
     function renderPositions() {
@@ -122,6 +127,12 @@ export const portfolio = {
           (p.flags || []).length ? h('div', { class: 'small muted' }, p.flags.join('；')) : null,
           h('div', { class: 'row', style: 'margin-top:4px' }, h('span', { class: 'btn sm', onclick: e => { e.stopPropagation(); openTradeForm({ symbol: p.symbol, name: p.name, side: 'sell', price: p.price, qty: p.qty, setup: p.setup || '', exit_reason: fac ? '调仓' : '', onDone: load }); } }, '记录卖出'))));
       }
+    }
+
+    function renderFund() {                                // 美股：持仓的关键统计对比（Yahoo）
+      const ps = S.health?.positions || [];
+      S.ks = keystatsTable(ps.map(p => p.symbol), Object.fromEntries(ps.map(p => [p.symbol, p.name])), sym => showDetail(ctx, sym));
+      el.append(S.ks.el);
     }
 
     function renderTrades() {

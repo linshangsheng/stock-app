@@ -5,7 +5,7 @@ import { h, fmtNum, fmtPct, dirClass } from './util.js';
 import { lineChart, themeColors } from './chart.js';
 
 export async function loadKeyMa() {
-  return get('/market/key_ma', {}, { cache: false, timeout: 120000, market: false });
+  return get('/market/key_ma', {}, { cache: false, timeout: 120000 });     // 按当前市场：A股 = 创业板指，美股 = 标普500 / 纳斯达克100
 }
 
 const ROLE = { primary: ['主线', 'accent'], actionable: ['辅助', 'ok'], reference: ['仅参考', ''] };
@@ -19,7 +19,7 @@ export function keyMaBrief(d) {
     h('div', { class: 'row between' }, h('b', { class: 'small' }, '长线趋势（关键均线）'), h('a', { href: '#/market', class: 'small' }, '每条均线的操作 →')),
     ...d.indices.map(i => i.status !== 'ok' ? h('div', { class: 'tiny muted' }, `${i.name}：${i.message || '暂无数据'}`)
       : h('div', { class: 'km-row' },
-        h('span', { class: 'km-nm' }, i.name), h('span', { class: 'badge ' + (i.holding ? 'ok' : 'warn') }, i.holding ? '持有' : '空仓'),
+        h('span', { class: 'km-nm' }, i.name), stateBadge(i),
         h('span', { class: 'tiny muted' }, i.headline.replace(/^(持有|空仓等待)：/, '')))));
 }
 
@@ -27,15 +27,21 @@ export function keyMaBrief(d) {
 export function keyMaCard(d) {
   const charts = [];
   const out = h('div', { class: 'card mt km' });
-  out.append(h('div', { class: 'card-title' }, h('h3', {}, '关键均线：创业板指 / 标普500 / 纳斯达克100'), h('span', { class: 'hint' }, '点开指数看每条均线怎么操作')));
+  const names = (d?.indices || []).map(i => i.name).join(' / ');
+  out.append(h('div', { class: 'card-title' }, h('h3', {}, '关键均线' + (names ? '：' + names : '')), h('span', { class: 'hint' }, '点开指数看每条均线怎么操作')));
   if (!d || d.status !== 'ok') { out.append(h('div', { class: 'hint' }, d?.message || '暂不可用')); return { el: out, init() {}, destroy() {} }; }
+  if (d.other_market?.length) out.append(h('p', { class: 'hint' }, `${d.other_market.join('、')} 的关键均线在${d.market === 'CN' ? '「美股」' : '「A股」'}里：左上角切换市场查看。`));
   out.append(h('div', { class: 'alert small' },
-    h('b', {}, '怎么读：'), '每条均线都单独做过长历史回测（创业板 2011~、标普 1951~、纳指 1986~，前 60% 挑、后 40% 验）。',
+    h('b', {}, '怎么读：'), '每条均线都单独做过长历史回测（A 股指数 2005~2011 年起、标普 1951~、纳指 1986~，前 60% 挑、后 40% 验）。',
     h('b', {}, '主线'), ' = 按它买卖最好的一条，照它操作；', h('b', {}, '辅助'), ' = 也通过了检验，用来确认；', h('b', {}, '仅参考'),
     ' = 单独按它买卖没有更好，只看不操作。均线只看收盘价：盘中跌破又收回不算。',
     h('br'), h('span', { class: 'muted' }, d.note)));
   for (const i of d.indices) out.append(indexBlock(i, charts));
   return { el: out, init() {}, destroy() { for (const c of charts.splice(0)) c?.destroy?.(); } };
+}
+
+function stateBadge(i) {
+  return i.holding == null ? h('span', { class: 'badge' }, '只看不做') : h('span', { class: 'badge ' + (i.holding ? 'ok' : 'warn') }, i.holding ? '持有' : '空仓');
 }
 
 function indexBlock(i, charts) {
@@ -59,7 +65,7 @@ function indexBlock(i, charts) {
   det.append(h('summary', {},
     h('span', { class: 'km-sum' },
       h('b', {}, i.name), h('span', { class: 'num' }, px(i.close)), h('span', { class: 'num small ' + dirClass(i.chg_1d) }, fmtPct(i.chg_1d, 2)),
-      h('span', { class: 'badge ' + (i.holding ? 'ok' : 'warn') }, i.holding ? '持有' : '空仓'),
+      stateBadge(i),
       h('span', { class: 'small km-head' }, i.headline))));
   const ev = i.evidence || {};
   det.append(h('div', { class: 'tiny muted mt-s' }, `数据截至 ${i.asof}（${i.source || ''}${i.stale ? '，可能不是最新' : ''}）· 对应 ETF：${i.etf || '—'}`),

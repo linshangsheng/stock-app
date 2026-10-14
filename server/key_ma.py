@@ -4,7 +4,8 @@
 证据结论（长历史、样本内 60% / 样本外 40%，判定标准事先定好：两段都 Sharpe ≥ 一直持有、最大回撤浅 10 个百分点以上）：
   * 标普500：200 / 250 日均线可操作，20 / 60 / 120 日不行（样本外变差）；主线 200 日
   * 纳斯达克100：只有 200 日均线勉强通过；主线 200 日
-  * 创业板指：20 日均线 ±2%（就是软件 ETF 规则的趋势仓）最好，年线（250 日）和 60 日 ±2% 也通过
+  * A 股指数（2005 年起）：上证50 主线 120 日 ±2%；沪深300 主线 120 日；中证500 / 中证1000 / 创业板指主线 20 日 ±2%（主线要求每年换仓不超过 12 次）
+    （各指数的可操作线以 server/key_ma_evidence.json 为准，由 tools/ma_research.py 生成）
 规则不使用杠杆：杠杆版本回撤 -70% ~ -95%，且 A 股账户买不到杠杆 ETF。
 """
 from __future__ import annotations
@@ -210,10 +211,13 @@ def analyze(item: dict, close: pd.Series, ev: dict) -> dict:
                         for d, v in hist.items()]}
 
 
-def build(fetch=None) -> dict:
+def build(fetch=None, market: str | None = None) -> dict:
+    """market 给定时只算这个市场的指数（A股 = 创业板指；美股 = 标普500 / 纳斯达克100）。"""
     ev_all = evidence()
     out = []
-    for item in km_cfg().get("indices", []):
+    items = [i for i in km_cfg().get("indices", []) if market is None or i.get("market", "CN") == market]
+    others = [i["name"] for i in km_cfg().get("indices", []) if market is not None and i.get("market", "CN") != market]
+    for item in items:
         try:
             s, info = history(item, fetch)
             if len(s) < 260:
@@ -225,5 +229,5 @@ def build(fetch=None) -> dict:
         except Exception as e:  # noqa: BLE001
             log.exception("key_ma %s failed", item.get("key"))
             out.append({"key": item.get("key"), "name": item.get("name"), "status": "error", "message": f"{type(e).__name__}: {e}"})
-    return {"status": "ok", "indices": out, "evidence_generated": ev_all.get("generated"),
+    return {"status": "ok", "indices": out, "evidence_generated": ev_all.get("generated"), "other_market": others,
             "note": "规则输出，不构成投资建议。均线只看收盘价；不使用杠杆（杠杆版本历史回撤 -70% ~ -95%，A 股账户也买不到杠杆 ETF）。"}

@@ -198,6 +198,23 @@ async def run(base: str, out: Path, width: int, height: int):
             await asyncio.sleep(1)
             if await p.js("return !!document.querySelector('#about .about');"):
                 await p.tall_shot(out / "28-设置-关于.png", "#about", width, height)
+            # 美股：VIX 面板、个股关键统计（Yahoo，首次要等 20~30 秒）
+            await p.js("localStorage.setItem('sa.market', JSON.stringify('US'));")
+            await p.goto(base + "/#/market", 3)
+            await p.cmd("Page.reload", ignoreCache=True)
+            await asyncio.sleep(14)
+            r = await p.rect(".vix")
+            if r:
+                await p.tall_shot(out / "29-美股行情-VIX.png", ".vix", width, height)
+            await p.goto(base + "/#/screener/AAPL", 4)
+            await p.cmd("Page.reload", ignoreCache=True)
+            for _ in range(24):
+                await asyncio.sleep(5)
+                if await p.js("return !!document.querySelector('.ks .ks-focus');"):
+                    break
+            await asyncio.sleep(2)
+            await p.tall_shot(out / "30-美股关键统计.png", ".ks", width, height)
+            await p.js("localStorage.setItem('sa.market', JSON.stringify('CN'));")
             # 启动画面：指向一个不存在的端口，让它停在「等待后端」的画面
             await p.goto(base + "/splash.html?url=http://127.0.0.1:9/", 6)
             await p.shot(out / "27-启动画面.png")
