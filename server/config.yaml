@@ -33,6 +33,7 @@ throttle:
   akshare:  {min_delay: 1.5, max_delay: 3.0, backoff_base: 10, backoff_max: 80, breaker_failures: 3, breaker_pause: 600}
   yfinance: {min_delay: 2.0, max_delay: 5.0, backoff_base: 10, backoff_max: 80, breaker_failures: 3, breaker_pause: 600}
   eastmoney: {min_delay: 2.0, max_delay: 4.0, backoff_base: 20, backoff_max: 120, breaker_failures: 3, breaker_pause: 1800}   # 东财行情 / 数据中心：有 IP 级限流（M0 实测：连续密集请求后被断开），宁可慢
+  tencent:  {min_delay: 0.3, max_delay: 0.8, backoff_base: 10, backoff_max: 60, breaker_failures: 3, breaker_pause: 600}    # 腾讯批量报价：一次 80 只，单次约 1~2 秒（2026-10-15 实测全部 A 股 60 个请求约 1~2 分钟）
   cninfo:   {min_delay: 1.0, max_delay: 2.5, backoff_base: 10, backoff_max: 80, breaker_failures: 3, breaker_pause: 600}
   sec:      {min_delay: 0.25, max_delay: 0.6, backoff_base: 10, backoff_max: 80, breaker_failures: 3, breaker_pause: 600}   # SEC 要求 ≤ 10 次/秒
 
@@ -293,6 +294,7 @@ events:
 jobs:
   poll_interval_minutes: 10         # 运行期间检查缺失交易日 / 探测当日数据是否可用的间隔
   probe_start_minutes: 20           # 收盘后多久开始探测当日数据（探测只查 1 个基准指数，很便宜）
+  quotes_settle_minutes: 35         # A 股：收盘后多久起，批量报价可以当作当日正式日线（科创板 / 创业板盘后固定价格交易 15:30 结束）
   data_ready_after_close_minutes: 90  # 无观测数据时的保守默认（探测失败时用于提示「超过预期仍未就绪」）
   scan_on_startup: true
   prewarm: true                 # 启动后后台预热市场温度与全市场面板（约 40 秒、2 GB 内存），打开页面不用等

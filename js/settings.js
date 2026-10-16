@@ -28,7 +28,7 @@ export const settingsView = {
       const pr = j.job?.progress;
       secData.append(h('div', { class: 'card-title' }, h('h2', {}, '数据与更新状态'), h('span', { class: 'badge ' + (j.has_data ? 'ok' : 'warn') }, j.has_data ? '已有数据' : '尚未初始化')),
         h('div', { class: 'grid c4' }, kv('数据截止', j.data_asof || '—'), kv('最近已收盘交易日', j.last_closed_trading_day || '—'), kv('交易日历来源', j.calendar_source === 'fallback' ? '兜底（仅周末，节假日不识别！）' : j.calendar_source === 'source' ? '数据源' : '—', j.calendar_source === 'fallback' ? 'down' : ''),
-          kv('初始化范围', j.init_sample ? `随机 ${j.init_sample.count} 只` : '全部'), kv('数据源', (cfg.datasource?.[state.market.toLowerCase()] === 'demo') ? '合成演示数据' : (state.market === 'US' ? 'yfinance + Nasdaq Trader' : 'BaoStock（日线）+ 东方财富（全市场快照）'))),
+          kv('初始化范围', j.init_sample ? `随机 ${j.init_sample.count} 只` : '全部'), kv('数据源', (cfg.datasource?.[state.market.toLowerCase()] === 'demo') ? '合成演示数据' : (state.market === 'US' ? 'yfinance + Nasdaq Trader' : '腾讯批量报价（每日收盘）+ BaoStock（历史 / 补缺 / 抽查）'))),
         j.calendar_source === 'fallback' ? h('div', { class: 'alert warn mt-s' }, '交易日历取自兜底（周一至周五），节假日会被当作交易日——完整性闸门可能误报缺失。请检查网络后重新初始化日历。') : null,
         run ? h('div', { class: 'mt' }, h('div', { class: 'row between small' }, h('span', {}, h('span', { class: 'spinner' }), ` 运行中：${run} ${j.job.message || ''}`), pr ? h('span', { class: 'num' }, `${pr.task} ${pr.done}/${pr.total}`) : null),
           pr ? h('div', { class: 'progress mt-s' }, h('div', { style: `width:${Math.round(100 * pr.done / Math.max(pr.total, 1))}%` })) : null,
@@ -37,9 +37,17 @@ export const settingsView = {
           h('button', { class: 'btn primary', disabled: run ? true : null, onclick: () => initDlg(j) }, j.has_data ? '补全 / 继续初始化' : '初始化数据'),
           h('button', { class: 'btn', disabled: run || !j.has_data ? true : null, onclick: async () => { const r = await post('/jobs/daily', {}); toast(r.message, r.ok ? 'ok' : 'bad'); startPoll(); } }, '运行盘后任务链'),
           h('button', { class: 'btn', disabled: run || !j.has_data ? true : null, onclick: async () => { const r = await post('/jobs/catch_up', {}); toast(r.message, r.ok ? 'ok' : 'bad'); startPoll(); } }, '补跑缺失交易日'),
-          h('button', { class: 'btn', disabled: !j.has_data ? true : null, onclick: async () => { toast('扫描中…'); try { await post('/scan/run', {}, { timeout: 300000 }); toast('扫描完成', 'ok'); } catch (e) { toast(e.message, 'bad'); } } }, '仅选股扫描')));
-      for (const [t, v] of Object.entries(j.job?.last || {})) {
-        secData.append(h('div', { class: 'small mt-s ' + (v.ok ? 'muted' : ''), style: v.ok ? '' : 'color:var(--red)' }, `上次 ${t}：${v.at.replace('T', ' ')} ${v.ok ? '成功' : '失败 ' + v.error}`));
+          h('button', { class: 'btn', disabled: !j.has_data ? true : null, onclick: async () => { toast('扫描中…'); try { await post('/scan/run', {}, { timeout: 300000 }); toast('扫描完成', 'ok'); } catch (e) { toast(e.message, 'bad'); } } }, '仅选股扫描')),
+        j.has_data ? h('p', { class: 'hint mt-s' }, state.market === 'US'
+          ? '每天的更新是自动的：软件开着时，美股收盘后（北京时间早上）会自动更新并出清单，不用点按钮。「补全 / 继续初始化」只在第一次安装、很久没打开或想刷新股票名单时用；点了之后也会接着更新到最新交易日。'
+          : '每天的更新是自动的：软件开着时，A 股收盘约 35 分钟后（15:35 起）自动用批量报价更新（约 1~2 分钟）并出清单，不用点按钮。错过当晚、直到第二天 9:15 以后才打开时，缺的那天只能逐只从 BaoStock 补（约 50 分钟）；周末打开不受影响。「补全 / 继续初始化」只在第一次安装、很久没打开或想刷新股票名单时用；点了之后也会接着更新到最新交易日。') : null);
+      const TASK = { init: '补全 / 初始化', daily: '盘后任务链', catch_up: '自动更新（补跑）', backup: '备份' };
+      const secs = s => (s >= 60 ? `${Math.floor(s / 60)} 分 ${String(Math.round(s % 60)).padStart(2, '0')} 秒` : `${Math.round(s)} 秒`);
+      for (const [k, v] of Object.entries(j.job?.last || {})) {
+        const [t, m] = k.split(':');
+        secData.append(h('div', { class: 'small mt-s ' + (v.ok ? 'muted' : ''), style: v.ok ? '' : 'color:var(--red)' },
+          `上次${TASK[t] || t}（${m === 'US' ? '美股' : 'A股'}）：${v.at.replace('T', ' ')} ${v.ok ? '成功' : '失败 ' + v.error}${v.secs != null ? ' · 用时 ' + secs(v.secs) : ''}`,
+          v.timing?.length ? h('div', { class: 'tiny muted' }, v.timing.map(([n, x]) => `${n} ${secs(x)}`).join(' · ')) : null));
       }
       if (j.gate) secData.append(h('details', { class: 'mt', open: j.gate.status !== 'PASS' }, h('summary', {}, `数据完整性闸门（${j.gate.day}）：${j.gate.status}`),
         h('table', {}, h('tbody', {}, j.gate.checks.map(c => h('tr', {}, h('td', { style: 'width:20px' }, c.ok ? '✓' : c.hard ? '✗' : '!'), h('td', {}, c.name), h('td', { class: 'small muted' }, c.msg), h('td', { class: 'num small' }, String(c.value))))))));

@@ -21,7 +21,7 @@ import math
 import os
 import re
 import threading
-from datetime import datetime
+from datetime import date, datetime
 
 import numpy as np
 import pandas as pd
@@ -503,9 +503,16 @@ def bt_equity(sleeve: float | None) -> float:
 
 
 def summary_key(asof: str, equity: float) -> str:
+    """回测摘要的缓存键：参数 / 分给组合的资金变了立即重算；数据日按「周」计——2018 年至今的长回测多一天数据结论不变，
+    没必要每天花约 2 分钟重算（盘后任务链里最慢的一步），每周第一次更新时重算一次。"""
     c = fp_cfg()
     keys = ("score", "n", "rebalance_days", "buffer", "anchor", "backtest_start", "oos_start", "skip_unaffordable")
-    raw = json.dumps({"asof": asof, "eq": equity, "p": {k: c.get(k) for k in keys}, "v": 3}, sort_keys=True)
+    try:
+        y, w, _ = date.fromisoformat(asof).isocalendar()
+        period = f"{y}-W{w:02d}"
+    except ValueError:
+        period = asof
+    raw = json.dumps({"asof": period, "eq": equity, "p": {k: c.get(k) for k in keys}, "v": 4}, sort_keys=True)
     return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 

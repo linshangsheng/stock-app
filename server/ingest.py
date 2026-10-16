@@ -1,7 +1,9 @@
 """数据入库流程（3.26.2）：先过滤、再拉取、后增量。
   1) 证券名单（多个历史交易日并集，含已退市） -> L1 过滤
   2) 首次初始化：分批限速拉取 10 年日线 + 复权因子（fetch_state 断点续跑）
-  3) 每个交易日收盘后增量；快照追加的当日 K 线标记 is_temp=1，次日由历史接口对账覆盖
+  3) 每个交易日收盘后增量：A 股主路径是腾讯批量报价（全部约 1~2 分钟，写正式日线，每天抽查 20 只与 BaoStock 对比）；
+     报价拿不到 / 隔了不止一个交易日 / 新进入的股票，才逐只走 BaoStock（每只约 0.5 秒，全市场约 50 分钟）。
+     东财快照追加的当日 K 线标记 is_temp=1，次日由历史接口对账覆盖（备用路径）
 全部写入由 INSERT OR REPLACE 保证幂等；只增不删。"""
 from __future__ import annotations
 
@@ -12,7 +14,7 @@ from typing import Callable
 import pandas as pd
 
 from . import db, market_calendar as mc, markets, settings, universe
-from .datasource_cn import BAR_COLS, get_source, EastmoneySource
+from .datasource_cn import BAR_COLS, get_source, EastmoneySource, TencentSource
 from .throttle import CircuitOpen
 
 ProgressCb = Callable[[str, int, int], None]
@@ -35,7 +37,14 @@ def ensure_calendar(conn, src, market: str = "CN", years: int | None = None) -> 
     except Exception:
         rows, source = [], "fallback"
     if not rows:
-        rows, source = mc.weekday_fallback(start, end), "fallback"   # 节假日不识别，已在 meta 标注
+        have = conn.execute("SELECT MAX(date) FROM market_calendar").fetchone()[0]
+        if have and have >= today:                     # 上游暂时不可用：保留已有的真实日历，不能用「周一至周五」把节假日盖掉
+            return "kept"
+        conn.executemany("INSERT OR IGNORE INTO market_calendar(date,is_open,is_half_day) VALUES(?,?,?)",
+                         mc.weekday_fallback(start, end))  # 只补缺的日期（节假日不识别，已在 meta 标注）
+        if not have:
+            db.set_meta(conn, "calendar_source", "fallback")
+        return "fallback"
     mc.store_calendar(conn, rows)
     db.set_meta(conn, "calendar_source", source)
     return source
@@ -155,9 +164,12 @@ def clear_sample(conn) -> None:
 def refresh_industry_us(conn, src, limit: int | None = None, stop: Callable[[], bool] | None = None,
                         progress: ProgressCb | None = None, only: set[str] | None = None) -> int:
     """美股行业 / Sector（yfinance info，逐股接口，只对 L1 幸存者拉取，可断点续跑；当前快照，历史偏差同 3.14）。"""
-    todo = [r[0] for r in conn.execute(
+    recent = (date.today() - timedelta(days=30)).isoformat()
+    todo = [r[0] for r in conn.execute(                      # 30 天内查过但 Yahoo 没有行业的（基金 / SPAC 等）不再每次重查
         "SELECT s.symbol FROM securities s LEFT JOIN industry_map m ON m.symbol=s.symbol "
-        "WHERE s.in_l1=1 AND s.status!='delisted' AND m.symbol IS NULL ORDER BY s.symbol").fetchall()]
+        "LEFT JOIN fetch_state f ON f.symbol=s.symbol AND f.task='industry' "
+        "WHERE s.in_l1=1 AND s.status!='delisted' AND m.symbol IS NULL AND (f.updated_at IS NULL OR f.updated_at < ?) "
+        "ORDER BY s.symbol", (recent,)).fetchall()]
     if only is not None:
         todo = [x for x in todo if x in only]
     if limit:
@@ -173,10 +185,13 @@ def refresh_industry_us(conn, src, limit: int | None = None, stop: Callable[[], 
             conn.commit()
             raise
         except Exception:  # noqa: BLE001
+            set_state(conn, sym, "industry", "error")
             continue
         if ind or sec:
             record_industry(conn, sym, ind or sec, sec, asof)
             n += 1
+        else:
+            set_state(conn, sym, "industry", "none")
         if i % 50 == 0:
             conn.commit()
         if progress:
@@ -443,24 +458,35 @@ def init_history(conn, src, market: str = "CN", limit: int | None = None, years:
     return {"requested": len(todo), "ok": ok, "failed": fail}
 
 
-def refresh_indices(conn, src, market: str = "CN", years: int | None = None) -> int:
-    """指数日线（不受 L1 / L2 过滤）。"""
+def refresh_indices(conn, src, market: str = "CN", years: int | None = None, quotes_src=None) -> int:
+    """指数日线（不受 L1 / L2 过滤）。单个指数失败（含熔断）只跳过它，不让整条任务链失败——缺了哪个基准由完整性闸门判断。
+    A 股：BaoStock 当天还没给出（通常傍晚才有）的指数，用腾讯收盘报价先补上当日一行；次日从 BaoStock 重取最近几天时自动覆盖。"""
     years = years or int(settings.cfg()["history_years"])
     last = mc.last_closed_trading_day(conn, market) or mc.today_str(market)
     start = (date.fromisoformat(last) - timedelta(days=int(365.25 * years))).isoformat()
     n = 0
-    for sym in markets.gate_benchmarks(market) + markets.aux_indices(market):
+    syms = list(dict.fromkeys(markets.gate_benchmarks(market) + markets.aux_indices(market)))
+    for sym in syms:
         row = conn.execute("SELECT MAX(date) FROM index_bar WHERE symbol=?", (sym,)).fetchone()
         s0 = (date.fromisoformat(row[0]) - timedelta(days=5)).isoformat() if row and row[0] else start
         try:
             df = src.index_bars(sym, s0, last)
-        except CircuitOpen:
-            raise
-        except Exception:
+        except Exception:  # noqa: BLE001 - 包括熔断：熔断期间后面的调用会立即失败，代价很小
             continue
         conn.executemany("INSERT OR REPLACE INTO index_bar(symbol,date,open,high,low,close,volume,amount) VALUES(?,?,?,?,?,?,?,?)",
                          [(sym, r.date, r.open, r.high, r.low, r.close, r.volume, r.amount) for r in df.itertuples()])
         n += len(df)
+    if quotes_src is not None and market == "CN" and quotes_settled(market, last):
+        miss = [s for s in syms if not conn.execute("SELECT 1 FROM index_bar WHERE symbol=? AND date=?", (s, last)).fetchone()]
+        if miss:
+            try:
+                q = quotes_src.index_quotes(miss)
+                q = q[(q["date"] == last) & (q["close"] > 0)]
+                conn.executemany("INSERT OR REPLACE INTO index_bar(symbol,date,open,high,low,close,volume,amount) VALUES(?,?,?,?,?,?,?,?)",
+                                 [(r.symbol, r.date, r.open, r.high, r.low, r.close, r.volume, r.amount) for r in q.itertuples()])
+                n += len(q)
+            except Exception:  # noqa: BLE001 - 报价也拿不到：闸门会报缺少基准，下一轮再试
+                pass
     conn.commit()
     return n
 
@@ -482,17 +508,77 @@ def snapshot_safe(conn, market: str, day: str) -> bool:
     return day == (mc.last_closed_trading_day(conn, market) or day)
 
 
+def quotes_settled(market: str, day: str, now: datetime | None = None) -> bool:
+    """收盘报价能不能当作 day 的正式日线：day 早于市场今天，或今天已过收盘 + quotes_settle_minutes（默认 35 分钟——
+    科创板 / 创业板的盘后固定价格交易到 15:30 才结束，之前取的量和额不全）。报价本身的日期另外逐只核对。"""
+    n = mc.now_in_market(market, now)
+    if day < n.date().isoformat():
+        return True
+    wait = int(settings.cfg()["jobs"].get("quotes_settle_minutes", 35))
+    return n >= datetime.combine(n.date(), mc.MARKETS[market]["close"], tzinfo=n.tzinfo) + timedelta(minutes=wait)
+
+
+def append_quotes(conn, q: pd.DataFrame, syms: list[str], last_row: dict, day: str) -> tuple[dict, list[str]]:
+    """用收盘后的批量报价写 day 的正式日线（is_temp=0，source=tencent），只用于「库里正好停在前一个交易日」的股票。
+    复权因子：交易所的「昨收」已按除权除息调整——与库里前一日收盘一致 = 没有除权，沿用原因子；更低 = 当天除权，
+    新因子 = 原因子 × 库里前收 ÷ 交易所昨收（与 BaoStock 的后复权因子同口径，2026-10-15 的 20 只除权股逐只核对一致）。
+    换手率：用前一日的「量 ÷ 换手率」（= BaoStock 口径的流通股本）推算，与 BaoStock 一致（腾讯自己的换手率个别股票口径不同）。
+    返回 (统计, 交给 BaoStock 逐只取的股票：没有当日报价 / 检查不通过 / 昨收比库里还高等说不清的情况)。"""
+    by = q.drop_duplicates("symbol").set_index("symbol") if len(q) else pd.DataFrame()
+    rest: list[str] = []
+    recs = []
+    n_ex = n_sus = 0
+    for s in syms:
+        if s not in by.index:
+            rest.append(s)
+            continue
+        r = by.loc[s]
+        _, c0, f0, v0, t0 = last_row[s]
+        if not bool(r["ok"]) or r["quote_date"] != day or not c0 or not f0 or not (r["prev_close"] > 0):
+            rest.append(s)
+            continue
+        ratio = c0 / r["prev_close"]
+        if abs(ratio - 1) <= 0.001:
+            factor = f0
+        elif 1 < ratio <= 3 and not bool(r["suspended"]):
+            factor, n_ex = f0 * ratio, n_ex + 1
+        else:                                                  # 昨收比库里的收盘还高、差得离谱、或停牌期间除权：交给 BaoStock
+            rest.append(s)
+            continue
+        is_st = 1 if "ST" in str(r["name"]).upper() else 0
+        if bool(r["suspended"]):                               # 与 BaoStock 停牌行同格式：价格 = 前收，量 / 额 / 换手为空
+            n_sus += 1
+            px = float(r["close"])
+            recs.append((s, day, px, px, px, px, None, None, None, factor, 0, is_st, None, "tencent", 0))
+            continue
+        turn = float(r["volume"]) / (v0 / t0) if (v0 and t0 and factor == f0) else (None if pd.isna(r["turnover"]) else float(r["turnover"]))
+        recs.append((s, day, float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"]), float(r["volume"]), float(r["amount"]),
+                     turn, factor, 1, is_st, None, "tencent", 0))
+    conn.executemany(
+        "INSERT OR REPLACE INTO daily_bar(symbol,date,open,high,low,close,volume,amount,turnover,adj_factor,"
+        "trade_status,is_st,adj_close,source,is_temp) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", recs)
+    for rec in recs:
+        set_state(conn, rec[0], "daily", "ok", day, 0)
+    if recs:                                                   # 记下「报价日」，供次日抽查（不用在 1.6 GB 的日线表里按来源全表扫描）
+        days = json.loads(db.get_meta(conn, "quote_days", "[]") or "[]")
+        db.set_meta(conn, "quote_days", json.dumps(sorted(set(days) | {day})[-30:]))
+    conn.commit()
+    return {"from_quotes": len(recs), "ex_rights": n_ex, "suspended": n_sus}, rest
+
+
 def update_incremental(conn, src, market: str = "CN", upto: str | None = None,
                        progress: ProgressCb | None = None, stop: Callable[[], bool] | None = None,
-                       snapshot_fn: Callable[[], pd.DataFrame] | None = None) -> dict:
-    """增量追加：对 L1 内每只股票，从库内最后日期之后拉到 upto（历史接口，上游为 BaoStock）。
-    为避免每日数千次请求：若已有 AkShare 快照可用且只差 upto 当日，走快照追加（is_temp=1，次日对账覆盖）。"""
+                       snapshot_fn: Callable[[], pd.DataFrame] | None = None,
+                       quotes_fn: Callable[[list[str]], pd.DataFrame] | None = None) -> dict:
+    """增量追加：对 L1 内每只股票，从库内最后日期之后拉到 upto。
+    A 股顺序：① 只差 upto 一天的股票用收盘批量报价（quotes_fn，腾讯，全部约 1~2 分钟）；② 东财快照（is_temp=1，次日对账，备用）；
+    ③ 其余的（隔了几天 / 报价不全 / 说不清的除权）逐只走 BaoStock（每只约 0.5 秒）。"""
     upto = upto or mc.last_closed_trading_day(conn, market)
     if not upto:
         return {"mode": "none"}
     syms = [r[0] for r in conn.execute("SELECT symbol FROM securities WHERE in_l1=1 AND status!='delisted'").fetchall()]
-    last_row = {r[0]: (r[1], r[2], r[3]) for r in conn.execute(
-        "SELECT symbol, date, close, adj_factor FROM daily_bar WHERE (symbol, date) IN "
+    last_row = {r[0]: (r[1], r[2], r[3], r[4], r[5]) for r in conn.execute(
+        "SELECT symbol, date, close, adj_factor, volume, turnover FROM daily_bar WHERE (symbol, date) IN "
         "(SELECT symbol, MAX(date) FROM daily_bar GROUP BY symbol)").fetchall()}
     last_have = {s: v[0] for s, v in last_row.items()}
     # 只增量更新「已有历史」的股票；新进入 L1 的股票由 init_history 回补完整历史（避免只补一天造成历史残缺）
@@ -501,18 +587,38 @@ def update_incremental(conn, src, market: str = "CN", upto: str | None = None,
         return {"mode": "up_to_date", "updated": 0}
     if hasattr(src, "daily_bars_batch"):                       # 美股：批量增量 + 拆股重新调整检测
         return update_incremental_batch(conn, src, market, need, last_row, upto, progress, stop)
-    gap_days = max(len(mc.trading_days(conn, last_have[s], upto)) for s in need[:50]) if need else 0
-    if gap_days <= 2 and snapshot_fn is not None and snapshot_safe(conn, market, upto):
-        try:
-            snap = snapshot_fn()
-            if len(snap) > 0.8 * len(need):                    # 快照明显不全（接口异常）则不用，回退到历史接口
-                return {"mode": "snapshot", **append_snapshot(conn, snap, upto)}
-        except CircuitOpen:
-            pass
-        except Exception:  # noqa: BLE001
-            pass                                               # 快照失败 -> 回退到历史接口（BaoStock，每只 1 次请求）
-    ok = fail = 0
-    for i, sym in enumerate(need, 1):
+    info: dict = {}
+    todo = need
+    if quotes_fn is not None and quotes_settled(market, upto):
+        cal = mc.trading_days(conn, None, upto)
+        prev_td = cal[-2] if len(cal) >= 2 and cal[-1] == upto else None
+        one = [s for s in need if last_have[s] == prev_td]
+        if one:
+            if progress:
+                progress("quotes", 0, len(one))
+            try:
+                q = quotes_fn(one)
+                good = int(((q["ok"]) & (q["quote_date"] == upto)).sum()) if len(q) else 0
+                if good >= 0.5 * len(one):                     # 不到一半有当日收盘报价 = 报价不是这一天的（例如新交易日已开盘）
+                    st, rest = append_quotes(conn, q, one, last_row, upto)
+                    info = {"mode": "quotes", **st}
+                    one_set = set(one)
+                    todo = rest + [s for s in need if s not in one_set]
+                else:
+                    info["quotes_skipped"] = f"只有 {good}/{len(one)} 只拿到 {upto} 的收盘报价"
+            except Exception as e:  # noqa: BLE001 - 报价不可用：走下面的备用路径
+                info["quotes_error"] = f"{type(e).__name__}: {str(e)[:120]}"
+    if info.get("mode") != "quotes":
+        gap_days = max(len(mc.trading_days(conn, last_have[s], upto)) for s in need[:50]) if need else 0
+        if gap_days <= 2 and snapshot_fn is not None and snapshot_safe(conn, market, upto):
+            try:
+                snap = snapshot_fn()
+                if len(snap) > 0.8 * len(need):                # 快照明显不全（接口异常）则不用，回退到历史接口
+                    return {"mode": "snapshot", **info, **append_snapshot(conn, snap, upto)}
+            except Exception:  # noqa: BLE001 - 快照失败 -> 回退到历史接口（BaoStock，每只 1 次请求）
+                pass
+    ok = fail = deferred = 0
+    for i, sym in enumerate(todo, 1):
         if stop and stop():
             break
         s0 = (date.fromisoformat(last_have[sym]) + timedelta(days=1)).isoformat()
@@ -523,6 +629,9 @@ def update_incremental(conn, src, market: str = "CN", upto: str | None = None,
             ok += 1
         except CircuitOpen:
             conn.commit()
+            if info.get("mode") == "quotes":                   # 绝大多数已由报价写入：BaoStock 暂时不可用就先跳过剩下几只，下一轮再补
+                deferred = len(todo) - i + 1
+                break
             raise
         except Exception as e:  # noqa: BLE001
             set_state(conn, sym, "daily", f"error: {str(e)[:100]}")
@@ -530,9 +639,10 @@ def update_incremental(conn, src, market: str = "CN", upto: str | None = None,
         if i % 50 == 0:
             conn.commit()
         if progress:
-            progress("update_incremental", i, len(need))
+            progress("update_incremental", i, len(todo))
     conn.commit()
-    return {"mode": "history", "updated": ok, "failed": fail}
+    return {"mode": info.get("mode", "history"), **info, "updated": ok + info.get("from_quotes", 0), "baostock": ok, "failed": fail,
+            **({"deferred": deferred} if deferred else {})}
 
 
 def update_incremental_batch(conn, src, market: str, need: list[str], last_row: dict, upto: str,
@@ -542,10 +652,30 @@ def update_incremental_batch(conn, src, market: str, need: list[str], last_row: 
     重叠日本身也用新取到的数据覆盖：Yahoo 收盘后不久给出的当日 K 线是初步数据（开盘价常落在最高 / 最低价之外），
     第二天再取时已经修正——顺手覆盖掉，不让初步数据一直留在库里。"""
     ok = resync = fail = 0
-    for i in range(0, len(need), BATCH):
+    empty: list[str] = []
+    still_empty: list[str] = []
+    retry_pass = False
+    retried = 0
+
+    def chunks():
+        nonlocal retry_pass, retried
+        for i in range(0, len(need), BATCH):
+            yield need[i:i + BATCH], min(i + BATCH, len(need))
+        # 第二遍：第一遍里个别股票没返回数据——多半是 Yahoo 限流（yfinance 把它显示成「possibly delisted」），
+        # 不是真的没有数据。换成小批、单线程再取一次，不再悄悄跳过（以前会让完整性闸门一直卡在覆盖率不足）。
+        if empty and not (stop and stop()):
+            retry_pass = True
+            again = list(empty)
+            retried = len(again)
+            empty.clear()
+            if hasattr(src, "_threads"):
+                src._threads = False
+            for i in range(0, len(again), 20):
+                yield again[i:i + 20], len(need)
+
+    for chunk, done in chunks():
         if stop and stop():
             break
-        chunk = need[i:i + BATCH]
         start = min(last_row[s][0] for s in chunk)
         try:
             got = src.daily_bars_batch(chunk, start, upto)
@@ -560,6 +690,10 @@ def update_incremental_batch(conn, src, market: str, need: list[str], last_row: 
         for sym in chunk:
             bars = got.get(sym)
             if bars is None or bars.empty:
+                if retry_pass:
+                    still_empty.append(sym)
+                else:
+                    empty.append(sym)
                 continue
             last_d, last_close = last_row[sym][0], last_row[sym][1]
             overlap = bars[bars["date"] == last_d]
@@ -588,8 +722,9 @@ def update_incremental_batch(conn, src, market: str, need: list[str], last_row: 
             ok += 1
         conn.commit()
         if progress:
-            progress("update_incremental", min(i + BATCH, len(need)), len(need))
-    return {"mode": "batch", "updated": ok, "resynced_after_split": resync, "failed": fail}
+            progress("update_incremental", done, len(need))
+    return {"mode": "batch", "updated": ok, "resynced_after_split": resync, "failed": fail,
+            **({"retried_empty": retried, "still_empty": len(still_empty)} if retried else {})}
 
 
 def refetch_recent(conn, src, market: str, symbols: list[str], upto: str, days: int = 5) -> dict:
@@ -834,16 +969,90 @@ def ensure_events(conn, provider, symbols: list[str], market: str = "CN", force:
 
 # ---- 当日数据可用性探测 / 自学习（3.26.5：以「数据可用」为准，不以固定时刻为准）---------------
 
-def probe_day_available(src, market: str, day: str) -> bool:
-    """只查 1 个基准指数的当日日线：有返回即认为上游已提供当日数据（探测很便宜，可以频繁做）。"""
+def probe_day_available(src, market: str, day: str, quotes_src=None) -> bool:
+    """只查 1 个基准指数的当日日线：有返回即认为上游已提供当日数据（探测很便宜，可以频繁做）。
+    A 股另看腾讯收盘报价：BaoStock 通常傍晚才有当日数据，收盘 35 分钟后报价就是当日的正式收盘，不必干等。"""
     sym = markets.gate_benchmarks(market)[0]
     try:
         df = src.index_bars(sym, day, day)
+        if df is not None and len(df) > 0 and str(df["date"].iloc[-1]) == day:
+            return True
     except CircuitOpen:
-        raise
+        if quotes_src is None:
+            raise
     except Exception:  # noqa: BLE001
-        return False
-    return df is not None and len(df) > 0 and str(df["date"].iloc[-1]) == day
+        pass
+    if quotes_src is not None and quotes_settled(market, day):
+        try:
+            q = quotes_src.index_quotes([sym])
+            return len(q) > 0 and q["date"].iloc[0] == day
+        except Exception:  # noqa: BLE001
+            return False
+    return False
+
+
+def cn_snapshot(codes: list[str]) -> pd.DataFrame:
+    """A 股全市场快照（L1 粗筛用）：腾讯批量报价优先（约 1~2 分钟），拿不全再试东财（东财在部分网络下会被断开）。"""
+    try:
+        snap = TencentSource().snapshot(codes)
+        if len(snap) >= 0.8 * len(codes):
+            return snap
+    except Exception:  # noqa: BLE001
+        pass
+    return EastmoneySource().snapshot(codes)
+
+
+def quotes_enabled(conn) -> bool:
+    """报价通道是否可用：抽查发现明显不一致时会暂停 7 天（meta quotes_disabled_until）。"""
+    until = db.get_meta(conn, "quotes_disabled_until")
+    return not until or until < date.today().isoformat()
+
+
+def spot_check_quotes(conn, src, n: int = 20, stop: Callable[[], bool] | None = None) -> dict | None:
+    """抽查报价写入的日线：取最近一个还没查过的「报价日」（早于今天，BaoStock 肯定已有），随机 n 只与 BaoStock 逐字段对比。
+    不一致的用 BaoStock 覆盖；不一致超过 10% 就暂停报价通道 7 天（回到逐只 BaoStock）并留下记录。每天约 20 个请求、10 秒左右。"""
+    today = mc.today_str("CN")
+    checked = set(json.loads(db.get_meta(conn, "quote_check_days", "[]") or "[]"))
+    days = sorted((d for d in json.loads(db.get_meta(conn, "quote_days", "[]") or "[]") if d < today), reverse=True)[:5]
+    day = next((d for d in days if d not in checked), None)
+    if not day:
+        return None
+    rows = conn.execute("SELECT symbol, open, high, low, close, volume, amount, adj_factor FROM daily_bar "
+                        "WHERE date=? AND source='tencent' AND trade_status=1 ORDER BY RANDOM() LIMIT ?", (day, n)).fetchall()
+    n_ok, bad = 0, []
+    for r in rows:
+        if stop and stop():
+            return None
+        prev = conn.execute("SELECT close, adj_factor FROM daily_bar WHERE symbol=? AND date<? ORDER BY date DESC LIMIT 1", (r[0], day)).fetchone()
+        try:
+            b = src.daily_bars(r[0], day, day, **({"prev_close": prev[0], "prev_factor": prev[1]} if prev else {}))
+        except CircuitOpen:
+            return None                                       # BaoStock 不可用：下次再查
+        except Exception:  # noqa: BLE001
+            continue
+        if b.empty:
+            continue
+        x = b.iloc[0]
+        rel = lambda a, v: abs(float(a) / float(v) - 1) if v else 1.0  # noqa: E731
+        if (max(rel(x[k], r[i]) for i, k in ((1, "open"), (2, "high"), (3, "low"), (4, "close"))) > 0.0015
+                or rel(x["volume"], r[5]) > 0.005 or rel(x["amount"], r[6]) > 0.005 or rel(x["adj_factor"], r[7]) > 1e-4):
+            bad.append(r[0])
+            save_bars(conn, r[0], b, src.name)
+        n_ok += 1
+    if not n_ok:
+        return None
+    rate = len(bad) / n_ok
+    res = {"date": day, "checked": n_ok, "diff": len(bad), "diff_symbols": bad[:10], "at": _now()}
+    hist = json.loads(db.get_meta(conn, "quote_check", "[]") or "[]")
+    db.set_meta(conn, "quote_check", json.dumps((hist + [res])[-30:], ensure_ascii=False))
+    db.set_meta(conn, "quote_check_days", json.dumps(sorted(checked | {day})[-30:]))
+    if rate > 0.1:
+        until = (date.today() + timedelta(days=7)).isoformat()
+        db.set_meta(conn, "quotes_disabled_until", until)
+        db.log_job(conn, "quote_check", "warn", f"报价抽查 {day}：{len(bad)}/{n_ok} 只与 BaoStock 不一致，报价通道暂停到 {until}（期间逐只用 BaoStock）")
+        res["disabled_until"] = until
+    conn.commit()
+    return res
 
 
 def record_ready_observation(conn, market: str, day: str, now=None) -> int | None:

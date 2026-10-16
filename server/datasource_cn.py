@@ -303,6 +303,108 @@ class EastmoneySource:
         raise RuntimeError(f"东财快照不可用：{last_err}")
 
 
+class TencentSource:
+    """腾讯行情批量报价（qt.gtimg.cn）：一次请求 80 只，全部 A 股约 60 个请求、1~2 分钟。盘后增量的主路径。
+    2026-10-15 实测（收盘后取，与库里 BaoStock 当日日线 4889 只逐字段对比）：开 / 高 / 低 / 收、成交额、ST 全部一致；
+    成交量一致（科创板单位是「股」、其余是「手」——按「成交额 ÷ 量」落在当日价格区间来判断单位，不靠板块规则）；
+    「昨收」是交易所按除权调整后的前收：与库里前一日收盘对不上的 20 只，正好是当天 BaoStock 复权因子变化的 20 只。
+    停牌股 status = S、量为 0、价格 = 昨收。字段位置（~ 分隔）：1 名称、3 现价、4 昨收、5 开、6 量、30 时间 YYYYMMDDhhmmss、
+    33 高、34 低、35 价/量/额(元)、38 换手率(%)、40 状态、44 流通市值(亿)。上游是网页接口、可能变化：解析时做一致性检查，
+    不通过的行交给 BaoStock；整批明显不对时调用方整体降级。"""
+    name = "tencent"
+    URL = "https://qt.gtimg.cn/q="
+    BATCH = 80
+
+    def __init__(self):
+        self.th = throttle.get("tencent")
+
+    @staticmethod
+    def code(symbol: str) -> str:
+        return symbol.replace(".", "")
+
+    def _get(self, symbols: list[str]) -> str:
+        import requests
+
+        def once():
+            r = requests.get(self.URL + ",".join(self.code(s) for s in symbols), timeout=20,
+                             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"})
+            r.raise_for_status()
+            txt = r.content.decode("gbk", errors="replace")
+            if "~" not in txt:
+                raise throttle.RateLimited("腾讯行情返回空数据")
+            return txt
+
+        return self.th.call(once, retries=2)
+
+    def _raw(self, symbols: list[str], stop=None, progress=None) -> list[list[str]]:
+        out: list[list[str]] = []
+        for i in range(0, len(symbols), self.BATCH):
+            if stop and stop():
+                break
+            for line in self._get(symbols[i:i + self.BATCH]).split(";"):
+                key, _, body = line.strip().partition("=")
+                f = body.strip('"').split("~")
+                if len(f) > 45 and key.startswith("v_"):
+                    out.append([key[2:4] + "." + key[4:]] + f)
+            if progress:
+                progress("quotes", min(i + self.BATCH, len(symbols)), len(symbols))
+        return out
+
+    def quotes(self, symbols: list[str], stop=None, progress=None) -> pd.DataFrame:
+        """个股报价 -> symbol, name, open, high, low, close, prev_close, volume(股), amount(元), turnover(%), float_mktcap(元),
+        pct(%), quote_date(YYYY-MM-DD), quote_time(hhmmss), suspended, ok（一致性检查通过）。"""
+        return parse_tencent(self._raw(symbols, stop, progress))
+
+    def index_quotes(self, symbols: list[str]) -> pd.DataFrame:
+        """指数报价 -> symbol, date, open, high, low, close, volume(股), amount(元)。价格只有 2 位小数，次日 BaoStock 覆盖。"""
+        rows = []
+        for f in self._raw(symbols):
+            num = lambda i: pd.to_numeric(f[i], errors="coerce")  # noqa: E731
+            pva = f[36].split("/")
+            ts = f[31]
+            rows.append({"symbol": f[0], "date": f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}" if len(ts) >= 8 else None, "time": ts[8:14],
+                         "open": num(6), "high": num(34), "low": num(35), "close": num(4),
+                         "volume": num(7) * 100, "amount": pd.to_numeric(pva[2], errors="coerce") if len(pva) > 2 else None})
+        return pd.DataFrame(rows, columns=["symbol", "date", "time", "open", "high", "low", "close", "volume", "amount"])
+
+    def snapshot(self, codes: list[str]) -> pd.DataFrame:
+        """与 EastmoneySource.snapshot 同结构（L1 粗筛用）：只保留一致性检查通过的行。"""
+        q = self.quotes(codes)
+        return q[q["ok"]].reset_index(drop=True)
+
+
+def parse_tencent(raw: list[list[str]]) -> pd.DataFrame:
+    """腾讯报价行（第 0 列是 symbol，之后是 ~ 分隔的原始字段）-> 标准结构。见 TencentSource 的字段说明。"""
+    cols = ["symbol", "name", "open", "high", "low", "close", "prev_close", "volume", "amount", "turnover", "float_mktcap", "pct",
+            "quote_date", "quote_time", "suspended", "ok"]
+    if not raw:
+        return pd.DataFrame(columns=cols)
+    f = pd.DataFrame(raw)
+    num = lambda i: pd.to_numeric(f[i], errors="coerce")  # noqa: E731 - 原始字段下标 + 1（第 0 列是 symbol）
+    ts = f[31].astype(str)
+    pva = f[36].astype(str).str.split("/")
+    amount = pd.to_numeric(pva.str[2], errors="coerce")
+    o, h, lo, c, pc, vol = num(6), num(34), num(35), num(4), num(5), num(7)
+    status = f[41].astype(str).str.strip() if 41 in f.columns else pd.Series("", index=f.index)
+    suspended = (status == "S") | ((vol.fillna(0) == 0) & (o.fillna(0) == 0))
+    # 量的单位：成交额 ÷ (量 × 100) 落在当日价格区间 = 单位是「手」；成交额 ÷ 量 落在区间 = 单位是「股」（科创板）
+    in_rng = lambda v: (v >= lo * 0.98) & (v <= h * 1.02)  # noqa: E731
+    vw_hand, vw_share = amount / (vol * 100), amount / vol
+    volume = pd.Series(float("nan"), index=f.index)
+    volume[in_rng(vw_hand)] = vol * 100
+    volume[~in_rng(vw_hand) & in_rng(vw_share)] = vol
+    volume[suspended] = 0.0
+    sane = (c > 0) & (pc > 0) & ((o > 0) & (h >= lo) & (h >= o) & (h >= c) & (lo <= o) & (lo <= c) & volume.notna() & (amount > 0))
+    out = pd.DataFrame({
+        "symbol": f[0], "name": f[2], "open": o, "high": h, "low": lo, "close": c, "prev_close": pc,
+        "volume": volume, "amount": amount.where(~suspended), "turnover": num(39), "float_mktcap": num(45) * 1e8, "pct": num(33),
+        "quote_date": ts.str[:4] + "-" + ts.str[4:6] + "-" + ts.str[6:8], "quote_time": ts.str[8:14],
+        "suspended": suspended, "ok": sane | (suspended & (c > 0)),
+    })
+    out = out[out["symbol"].map(board_of).notna()]
+    return out.reset_index(drop=True)[cols]
+
+
 def _secid(symbol: str) -> str:
     ex, _, code_ = symbol.partition(".")
     return ("1." if ex == "sh" else "0.") + code_
