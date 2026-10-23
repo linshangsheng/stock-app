@@ -588,6 +588,23 @@ def jobs_get(market: str = "CN"):
                  logs=logs, backup=backup.backup_status(), throttle=throttle.all_status(), **info)
 
 
+@app.get("/api/datasources/probe")
+def datasources_probe(market: str = "CN"):
+    """A 股数据源体检：BaoStock / 腾讯 / 东方财富各取几天日线，看哪个能连上、要多久（初始化失败时用来排查网络）。"""
+    market = _market(market)
+    if market != "CN" or markets.is_demo(market):
+        return _wrap(market, status="unsupported", results=[])
+    from .datasource_cn_alt import CnMultiSource, SOURCE_NAMES
+    src = CnMultiSource()
+    try:
+        res = src.probe()
+    finally:
+        src.close()
+    for r in res:
+        r["label"] = SOURCE_NAMES.get(r["source"], r["source"])
+    return _wrap(market, status="ok", results=res, usable=[r["label"] for r in res if r["ok"]])
+
+
 @app.post("/api/jobs/{task}")
 def jobs_start(task: str, market: str = "CN", body: dict = Body(default={})):
     market = _need_cn(market)

@@ -119,4 +119,4 @@ def get(name: str) -> Throttle:
 
 
 def all_status() -> list[dict]:
-    return [get(n).status() for n in ("baostock", "akshare", "yfinance", "cninfo", "sec", "eastmoney")]
+    return [get(n).status() for n in ("baostock", "eastmoney_hist", "tencent_hist", "tencent", "yfinance", "cninfo", "sec", "eastmoney")]

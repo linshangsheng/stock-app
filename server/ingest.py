@@ -45,6 +45,8 @@ def ensure_calendar(conn, src, market: str = "CN", years: int | None = None) -> 
         if not have:
             db.set_meta(conn, "calendar_source", "fallback")
         return "fallback"
+    if getattr(src, "last_source", None) == "xshg":         # BaoStock 连不上：用的是上交所日历（离线，2016~2026 与 BaoStock 逐日一致）
+        source = "xshg"
     mc.store_calendar(conn, rows)
     db.set_meta(conn, "calendar_source", source)
     return source
@@ -88,10 +90,12 @@ def refresh_securities(conn, src, market: str = "CN", years: int | None = None,
     done = set(json.loads(db.get_meta(conn, "sec_union_days", "[]") or "[]"))
     n_new = 0
     current: set[str] | None = None
+    fallback = False
     todo = [d for d in days if d not in done or d == last]
     for i, d in enumerate(todo, 1):
         sec = src.list_securities_union([d])
-        if d == last:
+        fallback = getattr(src, "last_source", "baostock") not in ("baostock", "demo")
+        if d == last or fallback:
             current = set(sec["symbol"])
         for r in sec.itertuples():
             if conn.execute("SELECT 1 FROM securities WHERE symbol=?", (r.symbol,)).fetchone():
@@ -100,13 +104,18 @@ def refresh_securities(conn, src, market: str = "CN", years: int | None = None,
                 conn.execute("INSERT INTO securities(symbol,name,board,status,in_l1) VALUES(?,?,?,?,1)",
                              (r.symbol, r.name, r.board, "active"))
                 n_new += 1
+        if fallback:                                           # 备用源只有当前名单：已退市股票补不回来，等 BaoStock 恢复后的下一次「补全」再补
+            db.set_meta(conn, "securities_fallback", _now())
+            conn.commit()
+            break
         done.add(d)
         db.set_meta(conn, "sec_union_days", json.dumps(sorted(done)))
         conn.commit()
         if progress:
             progress("securities_union", i, len(todo))
-    # 仅出现在历史并集而不在最新列表里的，标记为已退市（精确的上市 / 退市日期由 security_basic 在拉取历史时补全）
-    if current:
+    # 仅出现在历史并集而不在最新列表里的，标记为已退市（精确的上市 / 退市日期由 security_basic 在拉取历史时补全）。
+    # 名单来自备用源（腾讯扫描，不含长期停牌股）时不改动已有股票的状态，免得把长期停牌的误标为退市
+    if current and not fallback:
         conn.execute("UPDATE securities SET status='delisted' WHERE status='active' AND symbol NOT IN (%s)"
                      % ",".join("?" * len(current)), list(current))
         conn.execute("UPDATE securities SET status='active' WHERE status='delisted' AND delist_date IS NULL AND symbol IN (%s)"
@@ -248,6 +257,8 @@ def refresh_industry(conn, src) -> int:
     if hasattr(src, "list_current_securities"):
         return refresh_industry_us(conn, src)
     df = src.industry_map()
+    if df is None or df.empty:                                 # 数据源暂时取不到（BaoStock 连不上）：不记刷新日期，下次再取
+        return 0
     asof = date.today().isoformat()
     n = 0
     for r in df.itertuples():
@@ -259,6 +270,17 @@ def refresh_industry(conn, src) -> int:
 
 
 # ---- 日线写入 -----------------------------------------------------------------
+
+def _fix_st(conn, symbol: str, bars: pd.DataFrame, src) -> pd.DataFrame:
+    """备用数据源（腾讯 / 东方财富）的日线没有逐日 ST 标记：按当前名称（含 ST 即为 ST）补上——近似，历史上摘帽 / 戴帽的日子会不准。"""
+    if bars is None or bars.empty or getattr(src, "last_source", "baostock") in ("baostock", "demo"):
+        return bars
+    r = conn.execute("SELECT name FROM securities WHERE symbol=?", (symbol,)).fetchone()
+    if r and r[0]:
+        bars = bars.copy()
+        bars["is_st"] = 1 if "ST" in str(r[0]).upper() else 0
+    return bars
+
 
 def save_bars(conn, symbol: str, bars: pd.DataFrame, source: str, is_temp: int = 0) -> int:
     if bars is None or bars.empty:
@@ -426,6 +448,7 @@ def init_history(conn, src, market: str = "CN", limit: int | None = None, years:
             s0 = max(start, ld) if ld else start
             s1 = min(last, dd) if dd else last
             bars = src.daily_bars(sym, s0, s1)
+            bars = _fix_st(conn, sym, bars, src)
             save_bars(conn, sym, bars, src.name)
             ev = bars.attrs.get("adj_events")
             if ev is None:                                   # 数据源没带出复权因子事件（演示源等）：单独取一次
@@ -624,6 +647,7 @@ def update_incremental(conn, src, market: str = "CN", upto: str | None = None,
         s0 = (date.fromisoformat(last_have[sym]) + timedelta(days=1)).isoformat()
         try:
             bars = src.daily_bars(sym, s0, upto, prev_close=last_row[sym][1], prev_factor=last_row[sym][2])
+            bars = _fix_st(conn, sym, bars, src)
             save_bars(conn, sym, bars, src.name)
             set_state(conn, sym, "daily", "ok", bars["date"].max() if len(bars) else None, 0)
             ok += 1

@@ -27,8 +27,8 @@ export const settingsView = {
       const run = j.job?.running;
       const pr = j.job?.progress;
       secData.append(h('div', { class: 'card-title' }, h('h2', {}, '数据与更新状态'), h('span', { class: 'badge ' + (j.has_data ? 'ok' : 'warn') }, j.has_data ? '已有数据' : '尚未初始化')),
-        h('div', { class: 'grid c4' }, kv('数据截止', j.data_asof || '—'), kv('最近已收盘交易日', j.last_closed_trading_day || '—'), kv('交易日历来源', j.calendar_source === 'fallback' ? '兜底（仅周末，节假日不识别！）' : j.calendar_source === 'source' ? '数据源' : '—', j.calendar_source === 'fallback' ? 'down' : ''),
-          kv('初始化范围', j.init_sample ? `随机 ${j.init_sample.count} 只` : '全部'), kv('数据源', (cfg.datasource?.[state.market.toLowerCase()] === 'demo') ? '合成演示数据' : (state.market === 'US' ? 'yfinance + Nasdaq Trader' : '腾讯批量报价（每日收盘）+ BaoStock（历史 / 补缺 / 抽查）'))),
+        h('div', { class: 'grid c4' }, kv('数据截止', j.data_asof || '—'), kv('最近已收盘交易日', j.last_closed_trading_day || '—'), kv('交易日历来源', j.calendar_source === 'fallback' ? '兜底（仅周末，节假日不识别！）' : j.calendar_source === 'xshg' ? '上交所日历（离线，BaoStock 连不上时）' : j.calendar_source === 'source' ? '数据源' : '—', j.calendar_source === 'fallback' ? 'down' : ''),
+          kv('初始化范围', j.init_sample ? `随机 ${j.init_sample.count} 只` : '全部'), kv('数据源', (cfg.datasource?.[state.market.toLowerCase()] === 'demo') ? '合成演示数据' : (state.market === 'US' ? 'yfinance + Nasdaq Trader' : 'BaoStock（历史，连不上时自动换腾讯 / 东方财富）+ 腾讯批量报价（每日收盘）'))),
         j.calendar_source === 'fallback' ? h('div', { class: 'alert warn mt-s' }, '交易日历取自兜底（周一至周五），节假日会被当作交易日——完整性闸门可能误报缺失。请检查网络后重新初始化日历。') : null,
         run ? h('div', { class: 'mt' }, h('div', { class: 'row between small' }, h('span', {}, h('span', { class: 'spinner' }), ` 运行中：${run} ${j.job.message || ''}`), pr ? h('span', { class: 'num' }, `${pr.task} ${pr.done}/${pr.total}`) : null),
           pr ? h('div', { class: 'progress mt-s' }, h('div', { style: `width:${Math.round(100 * pr.done / Math.max(pr.total, 1))}%` })) : null,
@@ -51,6 +51,19 @@ export const settingsView = {
       }
       if (j.gate) secData.append(h('details', { class: 'mt', open: j.gate.status !== 'PASS' }, h('summary', {}, `数据完整性闸门（${j.gate.day}）：${j.gate.status}`),
         h('table', {}, h('tbody', {}, j.gate.checks.map(c => h('tr', {}, h('td', { style: 'width:20px' }, c.ok ? '✓' : c.hard ? '✗' : '!'), h('td', {}, c.name), h('td', { class: 'small muted' }, c.msg), h('td', { class: 'num small' }, String(c.value))))))));
+      if (state.market === 'CN') {                       // A 股数据源体检：初始化失败（如「CircuitOpen: baostock」）时看哪个源能连上
+        const box = h('div', { class: 'small mt-s' });
+        secData.append(h('div', { class: 'row wrap mt' }, h('button', { class: 'btn sm', onclick: async e => {
+          e.target.disabled = true; box.replaceChildren(h('span', { class: 'spinner' }), ' 正在检测（每个源取几天数据，约 5~60 秒）…');
+          try {
+            const r = await get('/datasources/probe', {}, { cache: false, timeout: 180000 });
+            box.replaceChildren(...r.results.map(x => h('div', {}, h('span', { class: 'badge ' + (x.ok ? 'ok' : 'bad') }, x.ok ? '可用' : '不可用'), ` ${x.label} · ${x.seconds} 秒`,
+              x.ok ? '' : h('span', { class: 'muted' }, ` · ${x.error || ''}`))),
+              h('div', { class: 'hint mt-s' }, r.usable.length ? `初始化 / 补全会按 BaoStock → 腾讯 → 东方财富 的顺序自动选用能连上的：本次会用「${r.usable[0]}」。` : '三个数据源都连不上：请检查网络（公司网络 / 代理可能拦截），换个网络或稍后再试。'));
+          } catch (err) { box.replaceChildren(h('span', { class: 'down' }, err.message)); }
+          e.target.disabled = false;
+        } }, '检测 A 股数据源'), h('span', { class: 'hint' }, 'BaoStock 常在北京时间下午到晚上连不上；连不上时软件会自动改用腾讯 / 东方财富。')), box);
+      }
       secData.append(h('details', { class: 'mt' }, h('summary', {}, '上游限速 / 熔断状态（反封 IP，3.26.3）'), h('div', { class: 'row wrap' }, (j.throttle || []).map(t => h('span', { class: 'badge ' + (t.breaker_open ? 'bad' : 'ok') }, `${t.name}：${t.breaker_open ? '熔断 ' + t.breaker_remaining_s + 's' : '正常'} · 请求 ${t.calls}`)))),
         h('details', {}, h('summary', {}, '最近任务日志'), h('div', { class: 'small' }, (j.logs || []).map(l => h('div', { class: 'muted num' }, `${l.ts.replace('T', ' ')}  ${l.job}  ${l.status}  ${l.detail || ''}`)))));
       if (run && !pollTimer) startPoll();

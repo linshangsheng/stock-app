@@ -53,9 +53,16 @@ class BaoStockSource:
     def _login(self):
         import baostock as bs
 
+        import socket
+
         self._bs = bs
-        with contextlib.redirect_stdout(io.StringIO()):
-            lg = bs.login()
+        old = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(float(settings.cfg().get("datasource", {}).get("baostock_timeout", 20)))   # BaoStock 服务器不响应时 login 会一直卡住（2026-10-23 实测）：给它建的连接设超时
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                lg = bs.login()
+        finally:
+            socket.setdefaulttimeout(old)
         if lg.error_code != "0":
             raise RuntimeError(f"baostock login failed: {lg.error_msg}")
         self._logged_in = True
@@ -150,6 +157,12 @@ class BaoStockSource:
         if need_events:
             ev = self.adj_factor_events(symbol, "1990-01-01", end)
             out["adj_factor"] = attach_adj_factor(out["date"], ev)
+            if prev_factor is not None and len(ev):
+                # 增量：按「库里上一天的因子 × BaoStock 的相对变化」接续——这只股票的历史可能来自别的数据源（后复权基准不同），直接用绝对值会出现假跳空
+                i = int(pd.Index(ev["date"]).searchsorted(out["date"].iloc[0], side="left")) - 1
+                base = float(ev["factor"].iloc[i]) if i >= 0 else 1.0
+                if base:
+                    out["adj_factor"] = out["adj_factor"] * (float(prev_factor) / base)
         else:
             out["adj_factor"] = float(prev_factor)
         res = out[BAR_COLS].copy()
@@ -467,4 +480,5 @@ def get_source(market: str = "CN"):
         from .datasource_demo import DemoSource
 
         return DemoSource()
-    return BaoStockSource()
+    from .datasource_cn_alt import CnMultiSource                  # BaoStock 为主，连不上时自动换东方财富 / 腾讯（见 datasource_cn_alt）
+    return CnMultiSource()

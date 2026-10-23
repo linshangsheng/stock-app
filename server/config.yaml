@@ -24,7 +24,8 @@ init:
 
 # 数据源：cn 可选 baostock | demo（demo 为合成数据，仅用于离线演示与界面验证，写入 data/demo/）
 datasource:
-  cn: baostock
+  cn: baostock                       # baostock（连不上时自动换东方财富 / 腾讯，见 server/datasource_cn_alt.py）| demo
+  baostock_timeout: 20               # BaoStock 服务器不响应时等多少秒（以前 login 会无限卡住）
   us: yfinance                       # yfinance | demo
 
 # 3.26.3 反爬 / 防封 IP：随机延迟 + 指数退避 + 熔断（单位：秒）
@@ -34,6 +35,8 @@ throttle:
   yfinance: {min_delay: 2.0, max_delay: 5.0, backoff_base: 10, backoff_max: 80, breaker_failures: 3, breaker_pause: 600}
   eastmoney: {min_delay: 2.0, max_delay: 4.0, backoff_base: 20, backoff_max: 120, breaker_failures: 3, breaker_pause: 1800}   # 东财行情 / 数据中心：有 IP 级限流（M0 实测：连续密集请求后被断开），宁可慢
   tencent:  {min_delay: 0.3, max_delay: 0.8, backoff_base: 10, backoff_max: 60, breaker_failures: 3, breaker_pause: 600}    # 腾讯批量报价：一次 80 只，单次约 1~2 秒（2026-10-15 实测全部 A 股 60 个请求约 1~2 分钟）
+  tencent_hist:   {min_delay: 0.3, max_delay: 0.8, backoff_base: 10, backoff_max: 60, breaker_failures: 4, breaker_pause: 600}   # 腾讯日K（BaoStock 的备用源）
+  eastmoney_hist: {min_delay: 1.0, max_delay: 2.0, backoff_base: 15, backoff_max: 90, breaker_failures: 3, breaker_pause: 1200}  # 东方财富日K（akshare 用的接口；有 IP 限流）
   cninfo:   {min_delay: 1.0, max_delay: 2.5, backoff_base: 10, backoff_max: 80, breaker_failures: 3, breaker_pause: 600}
   sec:      {min_delay: 0.25, max_delay: 0.6, backoff_base: 10, backoff_max: 80, breaker_failures: 3, breaker_pause: 600}   # SEC 要求 ≤ 10 次/秒
 

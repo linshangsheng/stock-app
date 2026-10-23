@@ -106,13 +106,28 @@ class JobManager:
         demo = markets.is_demo(market)
         try:
             with db.market_db(market) as c:
+                if hasattr(src, "probe"):                                # A 股：先把几个数据源各试一次，选能用的（BaoStock → 东方财富 → 腾讯）
+                    with self._step(out, "检测数据源"):
+                        self._set(message="检测数据源（BaoStock / 东方财富 / 腾讯，各取几天数据）")
+                        out["sources"] = src.probe()
+                        ok = [r["source"] for r in out["sources"] if r["ok"]]
+                        if not ok:
+                            raise RuntimeError("A 股数据源都连不上：" + "；".join(f"{r['source']}: {r['error']}" for r in out["sources"])
+                                               + "。请检查网络（公司网络 / 代理可能拦截），稍后再试。")
+                        from .datasource_cn_alt import SOURCE_NAMES
+                        if ok[0] != "baostock":
+                            db.log_job(c, "init", "info", f"BaoStock 不可用（{src.down.get('baostock', '')[:80]}），本次改用：{SOURCE_NAMES.get(ok[0], ok[0])}")
+                            c.commit()
                 with self._step(out, "交易日历"):
                     out["calendar"] = ingest.ensure_calendar(c, src, market)
                 with self._step(out, "证券名单"):
                     self._set(message="证券名单" + ("（多个历史交易日并集，含已退市）" if market == "CN" else "（Nasdaq Trader 清单：普通股）"))
                     out["securities_new"] = ingest.refresh_securities(c, src, market, progress=self._progress, fast=bool(sample))
                     if market == "CN":
-                        out["industry"] = ingest.refresh_industry(c, src)
+                        try:                                              # 行业分类只有 BaoStock 提供：取不到就先跳过（行业强弱按缺失处理），下次补全再取
+                            out["industry"] = ingest.refresh_industry(c, src)
+                        except Exception as e:  # noqa: BLE001
+                            out["industry_error"] = str(e)[:200]
                 snap = None
                 if market == "CN" and not demo and not sample:          # 随机抽样模式：不需要全市场快照 / 预筛（省流量）
                     with self._step(out, "全市场快照"):
@@ -318,7 +333,10 @@ class JobManager:
             res["l1_refresh"] = universe.apply_l1(c, snap, market=market)
             if db.get_meta(c, "init_complete") == "1":                            # 新进入 L1 的股票：回补历史（可中断续跑）
                 res["l1_backfill"] = ingest.init_history(c, src, market, progress=self._progress, stop=self._stop.is_set)
-        ingest.refresh_industry(c, src)
+        try:
+            ingest.refresh_industry(c, src)
+        except Exception as e:  # noqa: BLE001 - 行业分类只有 BaoStock 提供，取不到不影响任务链
+            res["industry_error"] = str(e)[:200]
 
     def _reconcile(self, market: str, src) -> dict | None:
         """次日用历史接口覆盖前一日的快照临时数据并对账（3.25.1）。放在任务链末尾：不阻塞选股，耗时长（每只 1 次请求）可中断续跑。"""
