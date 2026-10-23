@@ -278,6 +278,13 @@ table.fp-cmp td:first-child { white-space: nowrap; }
 .ks-c { display: flex; flex-direction: column; gap: 1px; } .ks-c .k { font-size: 11px; color: var(--muted); } .ks-c .v { font-size: 13px; font-weight: 600; }
 .ks-pos { position: relative; height: 6px; width: 64px; margin-left: auto; border-radius: 3px; background: var(--panel-2); } .ks-pos i { position: absolute; top: -2px; width: 4px; height: 10px; border-radius: 2px; background: var(--accent); transform: translateX(-2px); }
 @media (max-width: 640px) { .ks-focus { grid-template-columns: 1fr; } }
+/* 行情页顶部合成图（K 线 + 市场温度 + 恐慌指数） */
+.combo-wrap { position: relative; }
+.combo-wrap + .combo-wrap { border-top: 1px dashed var(--line); }
+.combo-legend { font-size: 12px; padding: 4px 2px 2px; min-height: 20px; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
+.combo-pane { width: 100%; }
+.combo .card-title { flex-wrap: wrap; gap: 6px; } .combo .seg button { white-space: nowrap; }
+.qv-row + .qv-row { border-top: 1px dashed var(--line); padding-top: 10px; }
 /* VIX */
 .vix-zones { display: grid; grid-template-columns: repeat(6, 1fr); gap: 3px; }
 .vix-zones .vz { display: flex; flex-direction: column; align-items: center; padding: 5px 2px; border-radius: 6px; color: #fff; font-size: 11px; opacity: .45; }

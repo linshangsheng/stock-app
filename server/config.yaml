@@ -81,6 +81,7 @@ gate:
 # 市场温度与指数 / ETF 择时（market_view.py）。默认值按 A 股 2016~2026 日线校准：前 60% 样本内选参、后 40% 样本外检验
 market_view:
   zones: [0.15, 0.35, 0.65, 0.80]   # 全A站上 20 日线比例的分界：冰点 / 偏冷 / 中性 / 偏热 / 过热
+  combo: {cn_index: sz.399006, us_index: "^NDX"}   # 行情页顶部合成图（K 线 + 市场温度 + 恐慌指数）用的指数：A 股创业板指、美股纳斯达克100
   evidence_index_cn: "sh.000300"
   evidence_index_us: "SPY"
   evidence_extra_cn: "sz.399006"    # 「历史证据」表里再多列一个指数：A 股 = 创业板指

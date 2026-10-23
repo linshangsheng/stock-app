@@ -33,7 +33,9 @@ def aux_indices(market: str) -> list[str]:
     extra = settings.cfg()["gate"].get("sector_etfs_us", []) if market == US else []
     mv = settings.cfg().get("market_view", {}).get("indices_us" if market == US else "indices_cn", [])
     bench = set(gate_benchmarks(market))
-    return list(dict.fromkeys([*extra, *(i["symbol"] for i in mv if i["symbol"] not in bench)]))
+    combo = (settings.cfg().get("market_view") or {}).get("combo") or {}                  # 行情页合成图用的指数（美股 = 纳斯达克100 ^NDX）
+    cx = [combo[k] for k in (("us_index",) if market == US else ("cn_index",)) if combo.get(k)]
+    return list(dict.fromkeys([*extra, *(i["symbol"] for i in mv if i["symbol"] not in bench), *(x for x in cx if x not in bench)]))
 
 
 def currency(market: str) -> str:

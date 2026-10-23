@@ -212,6 +212,9 @@ class JobManager:
                                                               snapshot_fn=snap_fn, quotes_fn=quotes_fn)
                 with self._step(res, "指数日线"):
                     res["index_rows"] = ingest.refresh_indices(c, src, market, quotes_src=tx)
+                if tx is not None:                                                 # A 股恐慌指数 QVIX：后台取最新几行（第三方站点慢，不阻塞任务链）
+                    from . import qvix
+                    qvix.refresh_async()
                 have = c.execute("SELECT MAX(date) FROM daily_bar").fetchone()[0]
                 if have is None or have < day:
                     res["status"] = "waiting_data"

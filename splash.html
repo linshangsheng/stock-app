@@ -168,9 +168,10 @@ body.leaving .curtain { opacity: 1; }
 </div>
 <div class="err" id="err">
   <b>后端没有启动成功</b>（等了 <span id="waited">90</span> 秒）。可以这样排查：<br>
-  1. 打开软件目录里的 <code>data\server.log</code>，看最后几行的报错；<br>
-  2. 在软件目录打开命令行，运行 <code>python -m server.main</code>，看具体提示（缺依赖时按提示安装）；<br>
-  3. 端口问题：任务管理器结束所有 Python，再双击「Stock App」；日志里有 <code>WinError 10013</code> 的话，见使用手册「安装时的常见问题」。
+  1. 新电脑第一次用：先双击软件目录里的「<b>安装.bat</b>」安装运行所需的组件（只需要一次），装完再打开；<br>
+  2. 打开软件目录里的 <code>data\server.log</code>，看最后几行的报错（缺组件时会写明缺哪个、怎么装）；<br>
+  3. 在软件目录打开命令行，运行 <code>python -m server.main</code>，看具体提示；<br>
+  4. 端口问题：任务管理器结束所有 Python，再双击「Stock App」；日志里有 <code>WinError 10013</code> 的话，见使用手册「安装时的常见问题」。
   <div class="row"><button id="retry">再等一会</button><button class="ghost" id="openanyway">直接打开</button></div>
 </div>
 <div class="skip" id="skip" title="Enter / 空格 / 点这里">跳过动画 ⏎</div>

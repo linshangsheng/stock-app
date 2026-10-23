@@ -198,6 +198,15 @@ async def run(base: str, out: Path, width: int, height: int):
             await asyncio.sleep(1)
             if await p.js("return !!document.querySelector('#about .about');"):
                 await p.tall_shot(out / "28-设置-关于.png", "#about", width, height)
+            # A 股：行情页顶部合成图、A 股恐慌指数面板
+            await p.js("localStorage.setItem('sa.market', JSON.stringify('CN'));")
+            await p.goto(base + "/#/market", 3)
+            await p.cmd("Page.reload", ignoreCache=True)
+            await asyncio.sleep(12)
+            if await p.rect(".combo"):
+                await p.tall_shot(out / "31-行情-合成图.png", ".combo", width, height)
+            if await p.rect(".card.vix"):
+                await p.tall_shot(out / "32-A股行情-恐慌指数.png", ".card.vix", width, height)
             # 美股：VIX 面板、个股关键统计（Yahoo，首次要等 20~30 秒）
             await p.js("localStorage.setItem('sa.market', JSON.stringify('US'));")
             await p.goto(base + "/#/market", 3)

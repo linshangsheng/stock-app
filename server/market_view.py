@@ -90,8 +90,12 @@ def ensure_breadth(conn, market: str = "CN") -> int:
     data_last = conn.execute("SELECT MAX(date) FROM daily_bar").fetchone()[0]
     if not data_last:
         return 0
-    if last and last >= data_last and conn.execute("SELECT 1 FROM market_breadth WHERE date=?", (data_last,)).fetchone():
-        return 0
+    row = conn.execute("SELECT n FROM market_breadth WHERE date=?", (data_last,)).fetchone()
+    if last and last >= data_last and row:
+        # 当天的温度是在数据还不全时算的（例如美股早上 Yahoo 只给了一部分股票）：数据补齐后要重算，不能一直停在残缺的值上
+        have = conn.execute("SELECT COUNT(*) FROM daily_bar WHERE date=?", (data_last,)).fetchone()[0]
+        if not have or row[0] >= 0.95 * have:
+            return 0
     if last:
         days = mc.trading_days(conn, None, data_last)
         k = days.index(last) if last in days else len(days) - 1

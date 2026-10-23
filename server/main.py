@@ -14,7 +14,11 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
-import numpy as np
+from .deps import require as _require_deps
+
+_require_deps()                                    # 缺第三方依赖时给出中文说明并退出（新电脑没运行「安装.bat」的最常见情况）
+
+import numpy as np  # noqa: E402
 import pandas as pd
 from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.routing import APIRoute
@@ -1018,6 +1022,24 @@ def market_view_get(market: str = "CN"):
                            "stock_risk_per_trade": acct.get("risk_per_trade") or settings.cfg()["portfolio"]["risk_per_trade"]}
         d["indices"] = [{**i, "hold_amount": round(per_index * i["position"], 2)} for i in d["indices"]]
     return _wrap(market, **d)
+
+
+@app.get("/api/market/combo")
+def market_combo(market: str = "CN"):
+    """行情页顶部合成图：指数日 K 线（A 股创业板指 / 美股纳斯达克100）+ 市场温度 + 恐慌指数（A 股 QVIX / 美股 VIX），按交易日对齐。"""
+    from . import combo
+    market = _market(market)
+    return _wrap(market, **combo.build(market))
+
+
+@app.get("/api/market/qvix")
+def market_qvix(market: str = "CN"):
+    """A 股恐慌指数（期权隐含波动率 QVIX：沪深300ETF、创业板ETF 期权）：水平、分区、历史分位、近一年走势与历史统计。"""
+    from . import qvix
+    market = _market(market)
+    if market != "CN":
+        return _wrap(market, status="unsupported", message="美股的恐慌指数是 VIX。")
+    return _wrap(market, **qvix.build())
 
 
 @app.get("/api/market/key_ma")

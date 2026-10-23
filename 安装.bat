@@ -7,6 +7,8 @@ cd /d "%~dp0"
 title 股票 · 趋势波段 - 安装
 set QUIET=0
 if /i "%~1"=="/quiet" set QUIET=1
+set NOLAUNCH=0
+if /i "%~1"=="/nolaunch" set NOLAUNCH=1
 
 echo ==========================================================
 echo   股票 · 趋势波段 —— 安装运行所需的组件（只需要做一次）
@@ -16,8 +18,10 @@ echo.
 rem ---- 1. 检查 Python ----
 python -c "import sys" >nul 2>nul
 if errorlevel 1 goto nopython
-python -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)"
+python -c "import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)"
 if errorlevel 1 goto oldpython
+python -c "import sys; sys.exit(0 if sys.version_info < (3, 15) else 1)"
+if errorlevel 1 goto newpython
 for /f "delims=" %%v in ('python -c "import sys; print(sys.version.split()[0])"') do set PYV=%%v
 for /f "delims=" %%p in ('python -c "import sys; print(sys.executable)"') do set PYEXE=%%p
 echo [1/3] 已找到 Python %PYV%
@@ -50,6 +54,7 @@ echo   第一次打开后，按软件里的提示到「设置」页初始化数据。
 echo ==========================================================
 echo.
 if "%QUIET%"=="1" goto end
+if "%NOLAUNCH%"=="1" goto done
 choice /c YN /m "现在就启动软件吗"
 if errorlevel 2 goto end
 start "" wscript "%~dp0启动股票.vbs"
@@ -59,7 +64,8 @@ goto end
 echo [错误] 没有找到可用的 Python。
 echo.
 echo   1. 打开 https://www.python.org/downloads/windows/
-echo      下载 Python 3.12 的「Windows installer (64-bit)」并运行；
+echo      找到 Python 3.12.10（或 3.13、3.14），下载「Windows installer (64-bit)」并运行；
+echo      注意：不要装 3.15（太新，部分组件还没有安装包）；
 echo   2. 安装界面最下面一定要勾选「Add python.exe to PATH」，再点「Install Now」；
 echo   3. 装好后关掉本窗口，重新双击「安装.bat」。
 echo.
@@ -75,17 +81,33 @@ start "" https://www.python.org/downloads/windows/
 goto fail
 
 :oldpython
-echo [错误] Python 版本太旧，需要 3.10 或以上（推荐 3.12）。
-echo   到 https://www.python.org/downloads/windows/ 下载 Python 3.12 安装，
+echo [错误] Python %PYV% 版本太旧，需要 3.12、3.13 或 3.14（推荐 3.12.10）。
+echo   到 https://www.python.org/downloads/windows/ 下载 Python 3.12.10 安装，
 echo   安装时勾选「Add python.exe to PATH」，再重新双击「安装.bat」。
+goto fail
+
+:newpython
+echo [错误] Python %PYV% 太新：软件用到的 numpy、pandas、PyYAML 还没有为它发布安装包，
+echo        在普通电脑上装不上（需要从源代码编译）。
+echo.
+echo   请改装 Python 3.12.10（或 3.13、3.14）：
+echo   1. 设置 → 应用 → 找到「Python %PYV%」→ 卸载；
+echo   2. 打开 https://www.python.org/downloads/windows/ ，找到 Python 3.12.10，
+echo      下载「Windows installer (64-bit)」，安装时勾选「Add python.exe to PATH」；
+echo   3. 装好后关掉本窗口，重新双击「安装.bat」。
+echo.
+if "%QUIET%"=="1" goto fail
+choice /c YN /m "现在打开 Python 下载页吗"
+if errorlevel 2 goto fail
+start "" https://www.python.org/downloads/windows/
 goto fail
 
 :pipfail
 echo.
 echo [错误] 依赖没有装好。可以这样排查：
 echo   1. 检查网络后重新双击「安装.bat」（下载中断时重试一般就好）；
-echo   2. 如果提示需要「Microsoft Visual C++」或编译失败：说明 Python 版本太新、
-echo      还没有现成的安装包——卸载后改装 Python 3.12 再试；
+echo   2. 如果提示需要「Microsoft Visual C++」或编译失败：说明 Python 版本不合适、
+echo      没有现成的安装包——卸载后改装 Python 3.12.10 再试；
 echo   3. 公司网络有代理时，请在家里或手机热点下安装。
 goto fail
 
@@ -94,6 +116,10 @@ echo.
 if "%QUIET%"=="0" pause
 endlocal
 exit /b 1
+
+:done
+endlocal
+exit /b 0
 
 :end
 if "%QUIET%"=="0" pause
