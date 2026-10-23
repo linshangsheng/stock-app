@@ -531,6 +531,17 @@ def snapshot_safe(conn, market: str, day: str) -> bool:
     return day == (mc.last_closed_trading_day(conn, market) or day)
 
 
+def _update_universe(conn, market: str) -> list[str]:
+    """每天要更新的股票。A 股：全部在市的主板 / 创业板 / 科创板股票，而不只是入库池（L1）——市场温度按「全 A」统计、冰点 15% 等分界也按全 A 校准；
+    以前只更新 L1，每周刷新 L1 后被粗筛剔出的约 1300 只（低价 / 小市值 / 成交清淡，平时比大盘弱）从此没有新数据，温度悄悄变成只算 L1，
+    读数系统性偏高 2~3 个百分点（2026-10-22 发现）。用批量报价时多更新这些股票只多约 25 秒。美股仍只更新 L1。"""
+    if market == "CN":
+        boards = markets.universe_cfg(market).get("boards") or []
+        q = "SELECT symbol FROM securities WHERE status!='delisted' AND (in_l1=1" + (" OR board IN (%s))" % ",".join("?" * len(boards)) if boards else ")")
+        return [r[0] for r in conn.execute(q, boards).fetchall()]
+    return [r[0] for r in conn.execute("SELECT symbol FROM securities WHERE in_l1=1 AND status!='delisted'").fetchall()]
+
+
 def quotes_settled(market: str, day: str, now: datetime | None = None) -> bool:
     """收盘报价能不能当作 day 的正式日线：day 早于市场今天，或今天已过收盘 + quotes_settle_minutes（默认 35 分钟——
     科创板 / 创业板的盘后固定价格交易到 15:30 才结束，之前取的量和额不全）。报价本身的日期另外逐只核对。"""
@@ -599,7 +610,7 @@ def update_incremental(conn, src, market: str = "CN", upto: str | None = None,
     upto = upto or mc.last_closed_trading_day(conn, market)
     if not upto:
         return {"mode": "none"}
-    syms = [r[0] for r in conn.execute("SELECT symbol FROM securities WHERE in_l1=1 AND status!='delisted'").fetchall()]
+    syms = _update_universe(conn, market)
     last_row = {r[0]: (r[1], r[2], r[3], r[4], r[5]) for r in conn.execute(
         "SELECT symbol, date, close, adj_factor, volume, turnover FROM daily_bar WHERE (symbol, date) IN "
         "(SELECT symbol, MAX(date) FROM daily_bar GROUP BY symbol)").fetchall()}

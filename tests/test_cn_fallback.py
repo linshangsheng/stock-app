@@ -97,3 +97,18 @@ def test_baostock_incremental_factor_is_relative(monkeypatch):
     monkeypatch.setattr(src, "_query", fake)
     b = src.daily_bars("sh.600000", "2024-07-18", "2024-07-18", prev_close=10.0, prev_factor=2.0)
     assert b["adj_factor"].tolist() == pytest.approx([2.2])
+
+
+def test_daily_update_covers_all_active_a_shares_not_only_l1(demo_env):
+    """市场温度按全 A 统计：每周刷新入库池（L1）后被粗筛剔出的股票，每天也要继续更新，否则温度悄悄变成只算 L1（2026-10-22 的问题）。"""
+    from server.datasource_cn import get_source
+    src = get_source()
+    with db.market_db("CN") as c:
+        asof = db.get_meta(c, "data_asof")
+        sym = c.execute("SELECT symbol FROM securities WHERE in_l1=1 AND status!='delisted' AND board IS NOT NULL LIMIT 1").fetchone()[0]
+        c.execute("UPDATE securities SET in_l1=0 WHERE symbol=?", (sym,))
+        c.execute("DELETE FROM daily_bar WHERE date=?", (asof,))
+        c.commit()
+        assert sym in ingest._update_universe(c, "CN")
+        ingest.update_incremental(c, src, "CN", asof)
+        assert c.execute("SELECT 1 FROM daily_bar WHERE symbol=? AND date=?", (sym, asof)).fetchone()
