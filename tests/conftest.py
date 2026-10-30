@@ -21,6 +21,7 @@ def _reload_settings(demo: bool):
     # 机制测试（成交规则 / 无未来函数 / 回填）需要足够多的信号：合成数据上启用全部经典形态。
     # 生产默认只启用回测证据支持的形态（config.yaml setups.enabled），与这里无关。
     settings.cfg()["setups"]["enabled"] = ["breakout", "pullback", "vcp"]
+    settings.cfg()["universe"]["us"]["index_members_only"] = False      # 演示数据是虚构代码，不在真实的标普 / 纳指名单里；这条规则单独测（test_cn_fallback）
     return settings
 
 

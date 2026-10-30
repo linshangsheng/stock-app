@@ -39,6 +39,16 @@ def build_context(conn, day: str, market: str = "CN", lookback: int = LOOKBACK):
     panel = load_panel(conn, days[0] if days else None, day, market=market)
     boards, list_dates, names = universe.load_security_meta(conn)
     l2, cond, flags = universe.l2_mask(panel, boards, list_dates, return_parts=True, market=market)
+    if market == "US" and markets.universe_cfg(market).get("index_members_only"):
+        from . import us_index                                   # 观察清单只选标普500 ∪ 纳斯达克100（取不到名单就不限制，不能因此扫不出东西）
+        try:
+            mem = us_index.members()
+        except Exception:  # noqa: BLE001
+            mem = set()
+        if mem:
+            is_mem = np.array([sym in mem for sym in panel.symbols], dtype=bool)
+            cond["index_member"] = pd.DataFrame(np.broadcast_to(is_mem, (len(panel.dates), len(panel.symbols))), index=l2.index, columns=l2.columns)
+            l2 = l2 & cond["index_member"]
     bench = load_bench(conn, settings.cfg()["regime"]["benchmark"], day)
     vix = load_bench(conn, "^VIX", day) if market == "US" else None
     industry = load_industry(conn)

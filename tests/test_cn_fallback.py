@@ -112,3 +112,21 @@ def test_daily_update_covers_all_active_a_shares_not_only_l1(demo_env):
         assert sym in ingest._update_universe(c, "CN")
         ingest.update_incremental(c, src, "CN", asof)
         assert c.execute("SELECT 1 FROM daily_bar WHERE symbol=? AND date=?", (sym, asof)).fetchone()
+
+
+def test_us_scan_universe_limited_to_index_members(us_env, monkeypatch):
+    """美股观察清单只在标普500 ∪ 纳斯达克100 里选：名单取不到时不限制（不能因此什么都扫不出）；写法统一成库里的 BRK-B 形式。"""
+    from server import scanner, settings, us_index
+    assert us_index.norm("brk.b") == "BRK-B"
+    with db.market_db("US") as c:
+        day = db.get_meta(c, "data_asof")
+        settings.cfg()["universe"]["us"]["index_members_only"] = False
+        base = scanner.build_context(c, day, market="US")
+        n_all = int(base["l2"].iloc[-1].sum())
+        pick = set(list(base["l2"].columns[base["l2"].iloc[-1]])[:5])
+        settings.cfg()["universe"]["us"]["index_members_only"] = True
+        monkeypatch.setattr(us_index, "members", lambda: pick)
+        ctx = scanner.build_context(c, day, market="US")
+        assert set(ctx["l2"].columns[ctx["l2"].iloc[-1]]) == pick and ctx["cond"]["index_member"].iloc[-1].sum() == 5
+        monkeypatch.setattr(us_index, "members", lambda: set())
+        assert int(scanner.build_context(c, day, market="US")["l2"].iloc[-1].sum()) == n_all

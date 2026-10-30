@@ -115,7 +115,7 @@ export const settingsView = {
       secPool.append(h('div', { class: 'card-title' }, h('h2', {}, '股票池（L1 入库池 / L2 交易池）'), h('span', { class: 'hint' }, '只增不删：被剔除只标记 inactive，历史永不删除')),
         h('div', { class: 'grid c4' }, kv('证券总数', u.securities), kv('L1 入库池', u.l1), kv('其中已退市（保留）', u.delisted_kept), kv('今日 L2 交易池', u.l2 ?? '—')),
         u.l1_stats?.asof ? h('p', { class: 'hint mt-s' }, `L1 更新于 ${u.l1_stats.asof}：板块剔除 ${u.l1_stats.board}，价格 ${u.l1_stats.price}，市值 ${u.l1_stats.mktcap}，成交额 ${u.l1_stats.amount}${u.l1_stats.snapshot_used === false ? '（未使用全市场快照：AkShare 不可用，L1 不做价格/市值/成交额粗筛，由 L2 逐日兜底）' : ''}`) : null,
-        u.l2_exclusions ? h('div', { class: 'mt' }, h('h3', {}, '今日 L2 各条件剔除数量（逐项独立统计，用于校准阈值）'), h('div', { class: 'row wrap mt-s' }, Object.entries(u.l2_exclusions).map(([k, v]) => h('span', { class: 'tag gray' }, `${({ tradable: '当日可交易', list_age: '上市天数', price: '股价', liquidity: '成交额', suspend: '停牌天数', oneword: '一字板', not_st: '非 ST' })[k] || k}：剔除 ${v}`)))) : null,
+        u.l2_exclusions ? h('div', { class: 'mt' }, h('h3', {}, '今日 L2 各条件剔除数量（逐项独立统计，用于校准阈值）'), h('div', { class: 'row wrap mt-s' }, Object.entries(u.l2_exclusions).map(([k, v]) => h('span', { class: 'tag gray' }, `${({ tradable: '当日可交易', list_age: '上市天数', price: '股价', liquidity: '成交额', suspend: '停牌天数', oneword: '一字板', not_st: '非 ST', index_member: '不在标普500 / 纳指100' })[k] || k}：剔除 ${v}`)))) : null,
         h('details', { class: 'mt' }, h('summary', {}, '阈值（config.yaml，需编辑文件后重启；L2 不使用市值——免费源无历史市值序列）'), h('pre', { class: 'code' }, JSON.stringify(th, null, 2))));
     }
 
