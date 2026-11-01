@@ -85,6 +85,21 @@ def members() -> set[str]:
     return set(d["sp500"]) | set(d["ndx"])
 
 
+def status() -> dict:
+    """设置页展示用：只读本地缓存 / 自带快照，不联网（/jobs 会被页面反复轮询）。"""
+    d = _read(_cache_file())
+    src = "cache"
+    if not d:
+        d, src = _read(SEED), "seed"
+    if not d:
+        return {"total": 0, "source": "none", "updated": None, "age_days": None, "stale": True}
+    t = d.get("fetched_at") or 0
+    age = (time.time() - t) / 86400 if t else None
+    return {"sp500": len(d["sp500"]), "ndx": len(d["ndx"]), "total": len(set(d["sp500"]) | set(d["ndx"])), "source": src,
+            "updated": time.strftime("%Y-%m-%d", time.localtime(t)) if t else None,
+            "age_days": round(age) if age is not None else None, "stale": age is None or age > TTL_DAYS + 7}
+
+
 def summary() -> dict:
     d = refresh()
     s, n = set(d["sp500"]), set(d["ndx"])

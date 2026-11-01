@@ -29,6 +29,9 @@ export const settingsView = {
       secData.append(h('div', { class: 'card-title' }, h('h2', {}, '数据与更新状态'), h('span', { class: 'badge ' + (j.has_data ? 'ok' : 'warn') }, j.has_data ? '已有数据' : '尚未初始化')),
         h('div', { class: 'grid c4' }, kv('数据截止', j.data_asof || '—'), kv('最近已收盘交易日', j.last_closed_trading_day || '—'), kv('交易日历来源', j.calendar_source === 'fallback' ? '兜底（仅周末，节假日不识别！）' : j.calendar_source === 'xshg' ? '上交所日历（离线，BaoStock 连不上时）' : j.calendar_source === 'source' ? '数据源' : '—', j.calendar_source === 'fallback' ? 'down' : ''),
           kv('初始化范围', j.init_sample ? `随机 ${j.init_sample.count} 只` : '全部'), kv('数据源', (cfg.datasource?.[state.market.toLowerCase()] === 'demo') ? '合成演示数据' : (state.market === 'US' ? 'yfinance + Nasdaq Trader' : 'BaoStock（历史，连不上时自动换腾讯 / 东方财富）+ 腾讯批量报价（每日收盘）'))),
+        j.index_members ? h('p', { class: 'hint mt-s' + (j.index_members.stale ? ' down' : '') },
+          `美股选股范围（标普500 ∪ 纳斯达克100）：${j.index_members.total} 只 · 名单更新于 ${j.index_members.updated || '未知（软件自带快照）'}`
+          + (j.index_members.stale ? '，已超过 5 周没更新（可能一直联网失败），名单可能过时' : '，每月自动更新一次')) : null,
         j.calendar_source === 'fallback' ? h('div', { class: 'alert warn mt-s' }, '交易日历取自兜底（周一至周五），节假日会被当作交易日——完整性闸门可能误报缺失。请检查网络后重新初始化日历。') : null,
         run ? h('div', { class: 'mt' }, h('div', { class: 'row between small' }, h('span', {}, h('span', { class: 'spinner' }), ` 运行中：${run} ${j.job.message || ''}`), pr ? h('span', { class: 'num' }, `${pr.task} ${pr.done}/${pr.total}`) : null),
           pr ? h('div', { class: 'progress mt-s' }, h('div', { style: `width:${Math.round(100 * pr.done / Math.max(pr.total, 1))}%` })) : null,

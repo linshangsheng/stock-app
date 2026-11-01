@@ -1,6 +1,7 @@
 // 行情页（M6，4.2）：全市场行情总览（盘后日线）——指数、市场宽度与环境状态、行业 / 板块涨跌、涨跌幅 / 放量 / 强势排行。
 // 行业强弱由库内个股日收益等权合成（3.14）；排行只在当日交易池 L2 内统计。数据全部来自后端，前端不做计算。
 import { get, state } from './api.js';
+import { prefs } from './db.js';
 import { h, clear, fmtPrice, fmtPct, fmtNum, dirClass, code } from './util.js';
 import { loadMarketView, marketFull } from './marketpanel.js';
 import { loadKeyMa, keyMaCard } from './keyma.js';
@@ -19,8 +20,17 @@ export const marketView = {
     const vixBox = h('div', {});
     const comboBox = h('div', { class: 'mb' }, h('div', { class: 'card' }, h('span', { class: 'spinner' }), ' 加载 K 线 · 市场温度 · 恐慌指数…'));
     const kmBox = h('div', {}, h('div', { class: 'card mt' }, h('span', { class: 'spinner' }), ' 加载关键均线（创业板指 / 标普500 / 纳斯达克100）…'));
+    // 页面太长，分三个标签：合成图（指数 K 线 · 市场温度 · 恐慌指数）/ 指数择时与均线 / 个股与行业。各块照旧异步加载，图表在隐藏的标签里靠 ResizeObserver 在显示时自动撑满宽度。
+    const PAGE_TABS = [['combo', '市场温度与行情', [comboBox]], ['timing', '指数择时与均线', [mvBox, vixBox, kmBox]], ['stocks', '个股与行业', [body]]];
+    let cur = prefs.get('marketTab', 'combo'); if (!PAGE_TABS.some(t => t[0] === cur)) cur = 'combo';
+    const panels = PAGE_TABS.map(([k, , kids]) => h('div', { hidden: k !== cur ? true : null }, ...kids));
+    const tabBar = h('div', { class: 'tabs' }, PAGE_TABS.map(([k, label], i) => h('button', { class: k === cur ? 'on' : '', onclick: () => {
+      prefs.set('marketTab', k);
+      [...tabBar.children].forEach((b, j) => b.classList.toggle('on', j === i));
+      panels.forEach((p, j) => { p.hidden = j !== i; });
+    } }, label)));
     el.append(h('div', { class: 'pane-body page' }, h('div', { class: 'row between mb' }, h('h1', {}, state.market === 'US' ? '美股行情' : 'A股行情'), h('span', { class: 'hint', id: 'mk-asof' })),
-      comboBox, mvBox, vixBox, kmBox, h('h2', { class: 'mt', style: 'margin-top:22px' }, '个股与行业'), body));
+      tabBar, ...panels));
     (async () => {                                       // 顶部合成图：指数 K 线 + 市场温度 + 恐慌指数
       let d;
       try { d = await loadCombo(); } catch (e) { d = { status: 'error', message: e.message }; }

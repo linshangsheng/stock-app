@@ -593,6 +593,9 @@ def jobs_get(market: str = "CN"):
                 "init_sample": (lambda d: {"n": d["n"], "count": len(d["symbols"]), "at": d.get("at")} if d else None)(json.loads(db.get_meta(c, "init_sample") or "null")),
                 "init_sample_default": int(settings.cfg().get("init", {}).get("sample_size", 0) or 0),
                 "data_ready_observed": ingest.ready_stats(c, market), "industry_history": ingest.industry_history_stats(c)}
+    if market == "US":
+        from . import us_index
+        info["index_members"] = us_index.status()
     return _wrap(market, job=manager.snapshot(), gate=gate, last_run=dict(last_run) if last_run else None,
                  logs=logs, backup=backup.backup_status(), throttle=throttle.all_status(), **info)
 

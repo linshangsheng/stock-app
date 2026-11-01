@@ -2,7 +2,7 @@
 // lightweight-charts v4 不支持多面板：三个图表实例按「逻辑位置」同步缩放 / 拖动，十字光标用 setCrosshairPosition 联动。
 import { get } from './api.js';
 import { h, fmtNum } from './util.js';
-import { themeColors } from './chart.js';
+import { themeColors, makeChart, disposeChart, onThemeChange } from './chart.js';
 
 export async function loadCombo() {
   return get('/market/combo', {}, { cache: false, timeout: 120000 });
@@ -27,11 +27,10 @@ export function comboCard(d) {
   if (!hasPanic) legends[2].textContent = '恐慌指数：数据还在下载（第一次使用约需几分钟），稍后刷新页面即可看到。';
   out.append(h('p', { class: 'hint mt-s' }, d.note));
   const charts = [];
-  let ro = null;
+  let ro = null, offTheme = null;
   const n = d.dates.length;
 
   function init() {
-    const L = window.LightweightCharts;
     const c = themeColors();
     const base = (height, showTime) => ({
       height, width: boxes[0].clientWidth,
@@ -43,10 +42,11 @@ export function comboCard(d) {
       handleScale: { axisPressedMouseMove: { time: true, price: false } },
     });
     const mobile = window.innerWidth < 640;
-    const ch = [L.createChart(boxes[0], base(mobile ? 220 : 300, false)), L.createChart(boxes[1], base(mobile ? 110 : 130, false)), L.createChart(boxes[2], base(mobile ? 120 : 150, true))];
+    const ch = [makeChart(boxes[0], base(mobile ? 220 : 300, false)), makeChart(boxes[1], base(mobile ? 110 : 130, false)), makeChart(boxes[2], base(mobile ? 120 : 150, true))];
     charts.push(...ch);
     const dt = d.dates;
     const k = ch[0].addCandlestickSeries({ upColor: c.up, downColor: c.down, borderUpColor: c.up, borderDownColor: c.down, wickUpColor: c.up, wickDownColor: c.down, priceLineVisible: false });
+    offTheme = onThemeChange(t => k.applyOptions({ upColor: t.up, downColor: t.down, borderUpColor: t.up, borderDownColor: t.down, wickUpColor: t.up, wickDownColor: t.down }));
     k.setData(dt.map((t, i) => (d.candles[i][3] == null ? { time: t } : { time: t, open: d.candles[i][0], high: d.candles[i][1], low: d.candles[i][2], close: d.candles[i][3] })));
     const line = (chart, vals, color, title) => {
       const s = chart.addLineSeries({ color, lineWidth: 2, priceLineVisible: false, lastValueVisible: true, title });
@@ -118,5 +118,5 @@ export function comboCard(d) {
     ro = new ResizeObserver(() => { const w = boxes[0].clientWidth; ch.forEach(x => x.applyOptions({ width: w })); });
     ro.observe(boxes[0]);
   }
-  return { el: out, init, destroy() { ro?.disconnect(); for (const x of charts.splice(0)) x.remove(); } };
+  return { el: out, init, destroy() { ro?.disconnect(); offTheme?.(); for (const x of charts.splice(0)) disposeChart(x); } };
 }

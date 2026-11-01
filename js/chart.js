@@ -6,6 +6,25 @@ import { esc, fmtPrice, fmtSigned } from './util.js';
 const LWC = () => window.LightweightCharts;
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
+// 所有存活的图表都登记在这里：切换深 / 浅色（或涨跌配色）时统一刷新底色、网格、文字，不用重建图表（也不会丢缩放位置）。
+// 画图一律用 makeChart / disposeChart，不要直接 createChart / remove。
+const live = new Set();
+const themeListeners = new Set();
+export function makeChart(el, opts) { const ch = LWC().createChart(el, opts); live.add(ch); return ch; }
+export function disposeChart(ch) { live.delete(ch); try { ch.remove(); } catch { /* 已销毁 */ } }
+/** 图表之外还有随主题变色的系列（如 K 线涨跌色）时，登记一个回调；返回取消函数。 */
+export function onThemeChange(fn) { themeListeners.add(fn); return () => themeListeners.delete(fn); }
+export function restyleCharts() {
+  const c = themeColors();
+  for (const ch of [...live]) {
+    try {
+      ch.applyOptions({ layout: { background: { type: 'solid', color: c.bg }, textColor: c.text }, grid: { vertLines: { color: c.grid }, horzLines: { color: c.grid } },
+        rightPriceScale: { borderColor: c.grid }, timeScale: { borderColor: c.grid } });
+    } catch { live.delete(ch); }
+  }
+  for (const fn of [...themeListeners]) { try { fn(c); } catch { /* 单个回调出错不影响其他 */ } }
+}
+
 export function themeColors() {
   return { up: css('--up'), down: css('--down'), text: css('--muted'), grid: css('--line'), bg: css('--bg'), accent: css('--accent'),
     warn: css('--warn'), flat: css('--flat') };
@@ -35,8 +54,7 @@ export class StockChart {
   build() {
     const c = themeColors();
     this.destroy();
-    const L = LWC();
-    this.main = L.createChart(this.mainEl, { ...baseOptions(c, this.mainEl.clientHeight || 400), width: this.mainEl.clientWidth });
+    this.main = makeChart(this.mainEl, { ...baseOptions(c, this.mainEl.clientHeight || 400), width: this.mainEl.clientWidth });
     this.candle = this.main.addCandlestickSeries({
       upColor: c.up, downColor: c.down, borderUpColor: c.up, borderDownColor: c.down, wickUpColor: c.up, wickDownColor: c.down,
       priceLineVisible: false,
@@ -49,7 +67,7 @@ export class StockChart {
     this.mainEl.parentElement.append(this.legendEl);
     this.main.subscribeCrosshairMove(p => this._legend(p));
     if (this.subEl) {
-      this.sub = L.createChart(this.subEl, { ...baseOptions(c, this.subEl.clientHeight || 130), width: this.subEl.clientWidth });
+      this.sub = makeChart(this.subEl, { ...baseOptions(c, this.subEl.clientHeight || 130), width: this.subEl.clientWidth });
       this.main.timeScale().subscribeVisibleLogicalRangeChange(r => this._sync(this.main, this.sub, r));
       this.sub.timeScale().subscribeVisibleLogicalRangeChange(r => this._sync(this.sub, this.main, r));
     }
@@ -165,8 +183,8 @@ export class StockChart {
 
   destroy() {
     this._ro?.disconnect();
-    if (this.main) { this.main.remove(); this.main = null; }
-    if (this.sub) { this.sub.remove(); this.sub = null; }
+    if (this.main) { disposeChart(this.main); this.main = null; }
+    if (this.sub) { disposeChart(this.sub); this.sub = null; }
     this.legendEl?.remove(); this.legendEl = null;
     this.priceLines = []; this.maSeries = {}; this.subSeries = [];
   }
@@ -175,8 +193,7 @@ export class StockChart {
 /** 通用折线图（回测权益曲线 / 回撤 / 基准对比）。series: [{name, color, data:[{time,value}], area?:bool}] */
 export function lineChart(el, series, { height = 260, percent = false } = {}) {
   const c = themeColors();
-  const L = LWC();
-  const chart = L.createChart(el, { ...baseOptions(c, height), width: el.clientWidth, rightPriceScale: { borderColor: c.grid } });
+  const chart = makeChart(el, { ...baseOptions(c, height), width: el.clientWidth, rightPriceScale: { borderColor: c.grid } });
   for (const s of series) {
     const ser = s.area
       ? chart.addAreaSeries({ lineColor: s.color, topColor: s.color + '08', bottomColor: s.color + '55', lineWidth: 1, priceLineVisible: false,
@@ -189,5 +206,5 @@ export function lineChart(el, series, { height = 260, percent = false } = {}) {
   chart.timeScale().fitContent();
   const ro = new ResizeObserver(() => chart.applyOptions({ width: el.clientWidth }));
   ro.observe(el);
-  return { chart, destroy() { ro.disconnect(); chart.remove(); } };
+  return { chart, destroy() { ro.disconnect(); disposeChart(chart); } };
 }

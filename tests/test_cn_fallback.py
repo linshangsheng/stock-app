@@ -132,6 +132,21 @@ def test_us_scan_universe_limited_to_index_members(us_env, monkeypatch):
         assert int(scanner.build_context(c, day, market="US")["l2"].iloc[-1].sum()) == n_all
 
 
+def test_us_index_status_is_offline_and_flags_stale(us_env, monkeypatch):
+    """设置页用的 status() 只读本地缓存 / 快照，不联网；缓存超过 5 周标「过期」，没有缓存时用自带快照。"""
+    import json, time
+    from server import us_index
+    monkeypatch.setattr(us_index, "refresh", lambda *a, **k: (_ for _ in ()).throw(AssertionError("status() 不应联网")))
+    s0 = us_index.status()
+    assert s0["source"] == "seed" and s0["total"] > 400                                    # 没有缓存时用自带快照
+    f = us_index._cache_file()
+    f.write_text(json.dumps({"sp500": ["AAA", "BBB"], "ndx": ["BBB", "CCC"], "fetched_at": time.time() - 3 * 86400}), encoding="utf-8")
+    s1 = us_index.status()
+    assert (s1["source"], s1["total"], s1["stale"], s1["age_days"]) == ("cache", 3, False, 3)
+    f.write_text(json.dumps({"sp500": ["AAA"], "ndx": ["BBB"], "fetched_at": time.time() - 60 * 86400}), encoding="utf-8")
+    assert us_index.status()["stale"] is True
+
+
 def test_panic_list_only_on_low_temperature_days(demo_env):
     """恐慌日超跌清单：平时为空；市场温度 < 阈值时才列出站上 200 日线且 RSI14<30 的股票。"""
     from server import scanner

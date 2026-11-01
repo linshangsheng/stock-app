@@ -4,6 +4,7 @@ import { get, api, state, onStatus } from './api.js';
 import { prefs } from './db.js';
 import { $, $$, h, clear, mountIcons, toast, modal, setMarketFmt } from './util.js';
 import { destroyDetail, themeChanged } from './detail.js';
+import { restyleCharts } from './chart.js';
 import { screener } from './screener.js';
 import { watchlist } from './watchlist.js';
 import { portfolio } from './portfolio.js';
@@ -32,14 +33,16 @@ function applyColors() {
   const up = mode === 'red' ? 'red' : mode === 'green' ? 'green' : (state.market === 'CN' ? 'red' : 'green');
   document.documentElement.dataset.up = up;
   themeChanged();
+  restyleCharts();                               // 行情页等其他图表：刷新底色 / 网格 / 文字 / K 线涨跌色
 }
 
 function applyTheme() {
   const t = prefs.get('theme', 'auto');
   const dark = t === 'dark' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-  document.querySelector('meta[name=theme-color]')?.setAttribute('content', dark ? '#0f1115' : '#ffffff');
+  document.querySelector('meta[name=theme-color]')?.setAttribute('content', dark ? '#0a0d13' : '#f2f4f8');
   themeChanged();
+  restyleCharts();                               // 行情页等其他图表：刷新底色 / 网格 / 文字 / K 线涨跌色
 }
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => { if (prefs.get('theme', 'auto') === 'auto') applyTheme(); });
 
@@ -148,8 +151,7 @@ setInterval(checkAlerts, 60000);
 let _build = null;
 const updMsg = h('span', {}, '软件已更新');
 const updBtn = h('button', { class: 'btn sm primary', onclick: () => location.reload() }, '点这里刷新');
-const updBar = h('div', { class: 'alert info', id: 'update-bar', hidden: true, style: 'position:fixed;left:50%;top:8px;transform:translateX(-50%);z-index:71;box-shadow:var(--shadow);display:flex;gap:10px;align-items:center;max-width:92vw' },
-  updMsg, updBtn);
+const updBar = h('div', { class: 'alert info', id: 'update-bar', hidden: true }, updMsg, updBtn);        // 样式见 style.css #update-bar（底部居中的提示条，不再盖住页面标题）
 document.body.append(updBar);
 async function checkUpdate() {
   try {
