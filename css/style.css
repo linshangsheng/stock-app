@@ -310,5 +310,5 @@ table.fp-cmp td:first-child { white-space: nowrap; }
 }
 /* 选股页 5 个标签：收紧间距、隐藏横向滚动条（窄屏仍可左右滑） */
 .col-list .tabs { scrollbar-width: none; } .col-list .tabs::-webkit-scrollbar { display: none; }
-.col-list .tabs button { padding: 8px 9px; }
-@media (max-width: 640px) { .col-list .tabs button { padding: 8px 7px; font-size: 12.5px; } }
+.col-list .tabs button { padding: 8px 4px; flex: 1 1 auto; }
+@media (max-width: 640px) { .col-list .tabs button { padding: 8px 4px; font-size: 12.5px; } }

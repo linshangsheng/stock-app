@@ -526,7 +526,16 @@ def scan_history(market: str = "CN", limit: int = 60):
         agg = c.execute("SELECT COUNT(*) n, AVG(o.ret_1d) a1, AVG(o.ret_3d) a3, AVG(o.ret_5d) a5, AVG(o.ret_10d) a10, AVG(o.ret_20d) a20, "
                         "AVG(o.ret_5d>0) w5, AVG(o.ret_20d>0) w20, AVG(o.mae) mae, AVG(o.mfe) mfe FROM scan_outcomes o "
                         "JOIN scan_runs r ON r.run_id=o.run_id WHERE r.market=? AND o.filled=1", (market,)).fetchone()
-    return _wrap(market, runs=runs, overall=dict(agg), note="scan_outcomes 是真实发生的前向收益，是回测之外最无偏的证据（5.4）。")
+        w = lambda col: f"AVG(CASE WHEN {col} IS NULL THEN NULL ELSE {col}>0 END)"  # noqa: E731
+        pk = db.rows(c.execute("SELECT date, COUNT(*) n, SUM(filled=1) n_filled, AVG(b20) b20, AVG(vix) vix, AVG(ret_1d) a1, AVG(ret_3d) a3, AVG(ret_5d) a5, "
+                               f"AVG(ret_10d) a10, AVG(ret_20d) a20, {w('ret_5d')} w5, {w('ret_20d')} w20 FROM panic_picks "
+                               "GROUP BY date ORDER BY date DESC"))
+        pk_all = dict(c.execute("SELECT COUNT(*) n, AVG(ret_1d) a1, AVG(ret_3d) a3, AVG(ret_5d) a5, AVG(ret_10d) a10, AVG(ret_20d) a20, "
+                                f"{w('ret_5d')} w5, {w('ret_20d')} w20, COUNT(ret_5d) n5, COUNT(ret_20d) n20 FROM panic_picks WHERE filled=1").fetchone())
+        for k, col in (("d5", "a5"), ("d20", "a20")):             # 按「恐慌日」算：当天整体平均涨幅为正的日子占比（同一天的股票同涨同跌，只数不是独立样本）
+            vals = [x[col] for x in pk if x[col] is not None]
+            pk_all[k] = {"days": len(vals), "win": (sum(v > 0 for v in vals) / len(vals)) if vals else None}
+    return _wrap(market, runs=runs, overall=dict(agg), panic=pk, panic_overall=pk_all, note="scan_outcomes 是真实发生的前向收益，是回测之外最无偏的证据（5.4）。")
 
 
 @app.post("/api/scan/outcomes")

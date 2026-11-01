@@ -140,6 +140,7 @@ export const screener = {
       S.fpView?.destroy(); S.fpView = null;
       if (S.tab === 'list') renderList(d);
       else if (S.tab === 'factor') renderFactor();
+      else if (S.tab === 'panic') renderPanic(d);
       else if (S.tab === 'exec') renderExec(d);
       else if (S.tab === 'filter') renderFilter();
       else renderHistory();
@@ -152,9 +153,11 @@ export const screener = {
     }
 
     function tabsBar() {
-      const tabs = [['list', '观察清单'], ...(state.market === 'CN' ? [['factor', '低风险组合']] : []), ['exec', '次日执行'], ['filter', '条件筛选'], ['hist', '历史回看']];
-      return h('div', { class: 'tabs', style: 'padding:0 8px;margin:0;align-items:center' }, ...tabs.map(([k, l]) =>
-        h('button', { class: S.tab === k ? 'on' : '', onclick: () => { const was = S.tab; S.tab = k; render(); if (!ctx.currentSymbol && (was === 'factor') !== (k === 'factor')) showRight(); } }, l)),
+      // 左栏很窄：标签用短名（鼠标停留显示全名），均分宽度，放得下就不出现横向滚动
+      const tabs = [['list', '观察清单', '观察清单'], ...(state.market === 'CN' ? [['factor', '低风险', '低风险组合']] : []), ['panic', '恐慌日', '恐慌日'],
+        ['exec', '次日', '次日执行'], ['filter', '筛选', '条件筛选'], ['hist', '历史', '历史回看']];
+      return h('div', { class: 'tabs', style: 'padding:0 8px;margin:0;align-items:center' }, ...tabs.map(([k, l, full]) =>
+        h('button', { class: S.tab === k ? 'on' : '', title: full, onclick: () => { const was = S.tab; S.tab = k; render(); if (!ctx.currentSymbol && (was === 'factor') !== (k === 'factor')) showRight(); } }, l)),
         null);
     }
 
@@ -251,6 +254,45 @@ export const screener = {
             try { await put('/account', { equity: eq, cash: eq, risk_per_trade: d.account?.risk_per_trade ?? 0.0075 }); toast('已保存，正在计算', 'ok'); load(); }
             catch (e) { toast(e.message, 'bad'); }
           } }, '保存并计算')));
+    }
+
+    // 恐慌日：市场温度（站上 20 日线的股票占比）< 15% 的日子，站上 200 日线且 RSI14<30 的超跌股；单独一栏，不进观察清单（config.yaml panic）
+    async function renderPanic(d) {
+      const p = d.run?.summary?.panic;
+      const box = h('div', { style: 'padding:12px 16px' });
+      el.append(box);
+      const pct0 = v => (v == null ? '—' : (v * 100).toFixed(0) + '%');
+      if (!p) box.append(h('div', { class: 'alert warn' }, '最近一次扫描里没有恐慌日数据（这个功能上线之前的扫描）。重新扫描一次即可。'));
+      else if (!p.active) box.append(h('div', { class: 'card soft' }, h('h3', {}, p.trigger === 'vix' ? `今天不是恐慌日（VIX ${p.vix?.toFixed(1) ?? '—'}，触发线 ${p.cut}）` : `今天不是恐慌日（市场温度 ${pct0(p.b20)}，触发线 ${pct0(p.cut)}）`),
+        h('p', { class: 'hint mt-s' }, `${p.evidence} 平时这一栏没有名单，不用做任何事。`)));
+      else {
+        const rows = (p.rows || []).map(r => h('tr', { style: 'cursor:pointer', onclick: () => showDetail(ctx, r.symbol) }, h('td', {}, r.name || r.symbol),
+          h('td', { class: 'small muted' }, code(r.symbol)), h('td', { class: 'num' }, fmtPrice(r.close)), h('td', { class: 'num' }, r.rsi14 == null ? '—' : r.rsi14.toFixed(0)),
+          h('td', { class: 'num ' + dirClass(r.ret_5) }, fmtPct(r.ret_5, 1))));
+        box.append(h('div', { class: 'alert warn' }, h('b', {}, p.trigger === 'vix' ? `恐慌日：VIX ${p.vix?.toFixed(1)}（不低于 ${p.cut}）` : `恐慌日：市场温度 ${pct0(p.b20)}（低于 ${pct0(p.cut)}）`),
+          h('div', { class: 'small', style: 'margin:6px 0' }, `站上 200 日线、RSI14<30 的超跌股共 ${p.total} 只（按成交额从大到小列前 ${(p.rows || []).length} 只）。${p.evidence} 这是历史统计，不是保证；这种日子很少，样本只有十来段行情，建议分批、小仓位。`),
+          h('table', { class: 'tbl small' }, h('thead', {}, h('tr', {}, ['名称', '代码', '收盘', 'RSI14', '5日涨跌'].map(x => h('th', {}, x)))), h('tbody', {}, rows))));
+      }
+      const hist = h('div', { class: 'mt' }, h('span', { class: 'spinner' }));
+      box.append(hist);
+      let r;
+      try { r = await get('/scan/history'); } catch (e) { clear(hist); hist.append(h('div', { class: 'alert bad' }, e.message)); return; }
+      clear(hist);
+      const o = r.panic_overall || {};
+      const kv = (l, v, c) => kvEl(l, v, c);
+      hist.append(h('div', { class: 'card soft' }, h('h3', {}, '恐慌日名单的真实前向收益'),
+        h('div', { class: 'grid c4 mt-s' }, kv('T+5 胜率', o.w5 != null ? fmtPct(o.w5, 0, false) : '—'), kv('T+5 平均', fmtPct(o.a5), dirClass(o.a5)),
+          kv('T+20 胜率', o.w20 != null ? fmtPct(o.w20, 0, false) : '—'), kv('T+20 平均', fmtPct(o.a20), dirClass(o.a20))),
+        h('div', { class: 'grid c4 mt-s' }, kv('T+5 样本（只）', String(o.n5 ?? 0)), kv('T+20 样本（只）', String(o.n20 ?? 0)),
+          kv('T+5 按恐慌日胜率', o.d5?.win != null ? `${fmtPct(o.d5.win, 0, false)}（${o.d5.days} 天）` : '—'),
+          kv('T+20 按恐慌日胜率', o.d20?.win != null ? `${fmtPct(o.d20.win, 0, false)}（${o.d20.days} 天）` : '—')),
+        h('p', { class: 'hint mt-s' }, '只记录这个功能上线之后真正出现的恐慌日：次日开盘买入，T+5 / T+20 = 第 5 / 20 个交易日收盘相对买入价的涨跌（前复权，未扣交易成本）。'
+          + '同一个恐慌日里的股票同涨同跌，只数不是独立样本——看「按恐慌日」那两格更接近真实把握。历史回测约 70% 的 T+5 胜率能否重现，要看这里；样本少时请勿下结论。')));
+      if (!(r.panic || []).length) { hist.append(h('div', { class: 'empty mt' }, '还没有出现过恐慌日的存档。')); return; }
+      hist.append(h('div', { class: 'tbl-wrap mt' }, h('table', {}, h('thead', {}, h('tr', {}, ['恐慌日', state.market === 'US' ? 'VIX' : '温度', '只数', 'T+5 平均', 'T+5 胜率', 'T+20 平均', 'T+20 胜率'].map((t, i) => h('th', { class: i ? 'r' : '' }, t)))),
+        h('tbody', {}, r.panic.map(x => h('tr', {}, h('td', { class: 'num' }, x.date), h('td', { class: 'num' }, state.market === 'US' ? (x.vix?.toFixed(1) ?? '—') : pct0(x.b20)), h('td', { class: 'num' }, x.n),
+          h('td', { class: 'num ' + dirClass(x.a5) }, fmtPct(x.a5, 1)), h('td', { class: 'num' }, x.w5 != null ? fmtPct(x.w5, 0, false) : '待回填'),
+          h('td', { class: 'num ' + dirClass(x.a20) }, fmtPct(x.a20, 1)), h('td', { class: 'num' }, x.w20 != null ? fmtPct(x.w20, 0, false) : '待回填')))))));
     }
 
     function funnelNote(sum) {

@@ -144,6 +144,14 @@ funnel:
   cooldown_days: 5                  # 5.4.1 同标的信号冷却期
   score_method: lowrisk             # 候选排序：lowrisk = 低换手 + 低波动优先（检验支持）；momentum = 旧的 RPS + 行业强弱（检验为负，仅作对照）
 
+# 恐慌日超跌清单：市场温度（站上 20 日线的股票占比）低于 b20_max 的日子，列出「站上 200 日线、RSI14<30」的股票（观察名单，平时为空）。
+# 依据 tools/signal_zoo.py、oversold_deep.py、oversold_breadth.py：这类信号的优势只在全市场普跌日出现；触发日少、样本小。
+panic:
+  enabled: true
+  b20_max: 0.15                     # A 股：市场温度低于此值才算恐慌日
+  us_vix_min: 25                    # 美股：VIX 收盘不低于此值才算恐慌日（tools/panic_vix_compare.py：VIX>=25 的 T+5 胜率 64.6% 对同期 54.1%，温度<15% 为 64.6% 对 58.1%，且触发日多一倍）
+  top_n: 20
+
 # 5.4.1 形态规格（默认值；搜索范围见需求书，仅回测网格使用）
 setups:
   # 默认只启用「波动收缩突破」：A 股 2018~2026 抽样回测（3 组各 1200 只随机样本，样本内 2018~2022 / 样本外 2023~）中，

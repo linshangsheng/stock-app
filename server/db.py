@@ -76,6 +76,11 @@ CREATE TABLE IF NOT EXISTS scan_outcomes(
   ret_1d REAL, ret_3d REAL, ret_5d REAL, ret_10d REAL, ret_20d REAL, mae REAL, mfe REAL, filled INTEGER,
   PRIMARY KEY(run_id, symbol)
 );
+CREATE TABLE IF NOT EXISTS panic_picks(
+  date TEXT NOT NULL, symbol TEXT NOT NULL, name TEXT, close REAL, b20 REAL,
+  ret_1d REAL, ret_3d REAL, ret_5d REAL, ret_10d REAL, filled INTEGER, ret_20d REAL, vix REAL,
+  PRIMARY KEY(date, symbol)
+);
 CREATE TABLE IF NOT EXISTS backtest_runs(
   run_id TEXT PRIMARY KEY, kind TEXT, strategy_id TEXT, market TEXT, config_hash TEXT, data_asof TEXT,
   metrics TEXT, trial_count INTEGER, code_version TEXT, created_at TEXT, config TEXT, result TEXT
@@ -139,6 +144,10 @@ def market_conn(market: str = "CN") -> sqlite3.Connection:
         raise ValueError(f"unknown market {market}")
     conn = _connect(db_path(MARKET_DB[market]))
     conn.executescript(MARKET_SCHEMA)
+    have = {r[1] for r in conn.execute("PRAGMA table_info(panic_picks)")}                       # 2026-11 先上线的旧版本补列
+    for col in ("ret_20d", "vix"):
+        if col not in have:
+            conn.execute(f"ALTER TABLE panic_picks ADD COLUMN {col} REAL")
     return conn
 
 

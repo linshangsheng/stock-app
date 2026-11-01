@@ -130,3 +130,54 @@ def test_us_scan_universe_limited_to_index_members(us_env, monkeypatch):
         assert set(ctx["l2"].columns[ctx["l2"].iloc[-1]]) == pick and ctx["cond"]["index_member"].iloc[-1].sum() == 5
         monkeypatch.setattr(us_index, "members", lambda: set())
         assert int(scanner.build_context(c, day, market="US")["l2"].iloc[-1].sum()) == n_all
+
+
+def test_panic_list_only_on_low_temperature_days(demo_env):
+    """恐慌日超跌清单：平时为空；市场温度 < 阈值时才列出站上 200 日线且 RSI14<30 的股票。"""
+    from server import scanner
+    with db.market_db("CN") as c:
+        day = db.get_meta(c, "data_asof")
+        c.execute("INSERT OR REPLACE INTO market_breadth(date,n,b20) VALUES(?,?,?)", (day, 1000, 0.5))
+        c.commit()
+    calm = scanner.run_scan("CN", persist=False)["summary"]["panic"]
+    assert calm["active"] is False and calm["rows"] == []
+    with db.market_db("CN") as c:
+        c.execute("UPDATE market_breadth SET b20=0.05 WHERE date=?", (day,))
+        c.commit()
+    p = scanner.run_scan("CN", persist=False)["summary"]["panic"]
+    assert p["active"] is True and len(p["rows"]) <= p["total"]
+    assert all({"symbol", "name", "close", "rsi14"} <= set(r) for r in p["rows"])
+
+
+def test_panic_picks_archived_and_outcomes_backfilled(demo_env):
+    """恐慌日清单要能事后检验：正式扫描触发时存档；之后按「次日开盘买入」回填 1/3/5/10 日收益，并出现在历史回看接口里。"""
+    from fastapi.testclient import TestClient
+    from server import main, scanner
+    with db.market_db("CN") as c:
+        days = [r[0] for r in c.execute("SELECT date FROM market_calendar WHERE is_open=1 ORDER BY date DESC LIMIT 15")]
+        d0, sym = days[12], c.execute("SELECT symbol FROM daily_bar WHERE date=? AND trade_status=1 LIMIT 1", (days[12],)).fetchone()[0]
+        c.execute("INSERT INTO panic_picks(date,symbol,name,close,b20) VALUES(?,?,?,?,?)", (d0, sym, "样例", 10.0, 0.1))
+        c.commit()
+    scanner.backfill_outcomes("CN")
+    with db.market_db("CN") as c:
+        r = c.execute("SELECT ret_1d, ret_5d, ret_10d, filled FROM panic_picks WHERE symbol=?", (sym,)).fetchone()
+    assert r["filled"] == 1 and r["ret_1d"] is not None and r["ret_5d"] is not None
+    hist = TestClient(main.app).get("/api/scan/history?market=CN").json()
+    assert hist["panic"][0]["date"] == d0 and hist["panic_overall"]["n"] == 1 and hist["panic_overall"]["d5"]["days"] >= 0
+
+
+def test_us_panic_day_is_triggered_by_vix(us_env):
+    """美股恐慌日看 VIX（>= 25），不看温度；A 股看温度。"""
+    from server import scanner
+    with db.market_db("US") as c:
+        day = db.get_meta(c, "data_asof")
+        c.execute("INSERT OR REPLACE INTO market_breadth(date,n,b20) VALUES(?,?,?)", (day, 1000, 0.05))      # 温度再低也不算
+        c.execute("INSERT OR REPLACE INTO index_bar(symbol,date,close) VALUES('^VIX',?,?)", (day, 18.0))
+        c.commit()
+    calm = scanner.run_scan("US", persist=False)["summary"]["panic"]
+    assert calm["active"] is False and calm["trigger"] == "vix" and calm["vix"] == 18.0
+    with db.market_db("US") as c:
+        c.execute("UPDATE index_bar SET close=31 WHERE symbol='^VIX' AND date=?", (day,))
+        c.commit()
+    p = scanner.run_scan("US", persist=False)["summary"]["panic"]
+    assert p["active"] is True and p["vix"] == 31.0 and len(p["rows"]) <= p["total"]

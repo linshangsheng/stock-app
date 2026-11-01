@@ -102,6 +102,53 @@ def _ensure_earnings_safe(conn, symbols: list[str], market: str = "CN") -> dict:
             src.close()
 
 
+PANIC_EVIDENCE = {
+    "CN": "2018~2026 回测：全市场温度低于 15% 的日子（约 125 天、十来段下跌行情），次日开盘买入这类股票持有 5 个交易日，胜率约 70%"
+          "（样本内、样本外都是 70%；同期随便买一只约 58%）；温度高于 30% 时这类股票胜率只有约 45%，没有优势。持有 20 个交易日没有检验过。",
+    "US": "2018~2026 回测（全部美股）：VIX 收盘不低于 25 的日子，次日开盘买入这类股票持有 5 个交易日，胜率约 65%（样本内 64.5%、样本外 65.0%；"
+          "同期随便买一只约 54%）；VIX 不低于 30 时约 75%，但只有 73 天；VIX 低于 20 时与随机买入没有差别。"
+          "持有 20 个交易日时这类股票的胜率不比同期随便买一只高（大盘自己会反弹），不要拿它当 20 天的依据。",
+}
+
+
+def _panic_trigger(conn, market: str, day: str, pcfg: dict) -> tuple[bool, dict]:
+    """是不是恐慌日。A 股：市场温度 < b20_max；美股：VIX 收盘 >= us_vix_min（美股 VIX 比温度更好：同样的 T+5 胜率，触发日多一倍，对同期基础的优势更大）。"""
+    row = conn.execute("SELECT b20 FROM market_breadth WHERE date=?", (day,)).fetchone()
+    b20 = None if row is None or row["b20"] is None else float(row["b20"])
+    if market == "US":
+        r = conn.execute("SELECT close FROM index_bar WHERE symbol='^VIX' AND date=?", (day,)).fetchone()
+        vix = None if r is None or r["close"] is None else float(r["close"])
+        cut = float(pcfg.get("us_vix_min", 25))
+        return (vix is not None and vix >= cut), {"trigger": "vix", "vix": vix, "cut": cut, "b20": b20}
+    cut = float(pcfg.get("b20_max", 0.15))
+    return (b20 is not None and b20 < cut), {"trigger": "b20", "vix": None, "cut": cut, "b20": b20}
+
+
+def _panic_list(conn, market: str, day: str, ctx: dict, held: set, unfill) -> dict:
+    """恐慌日超跌清单：恐慌日（A 股温度 < 15%；美股 VIX >= 25）列出「站上 200 日线、RSI14 < 30」的股票。
+    研究（tools/signal_zoo.py、oversold_deep.py、oversold_breadth.py、panic_vix_compare.py）显示这类信号的优势只出现在恐慌的日子，
+    平时与随机买入无异，且按个股特征再排序没有帮助——所以平时清单为空，触发时只按成交额从大到小列出（好成交的在前）。
+    只是观察名单：触发日很少，样本小。"""
+    pcfg = settings.cfg().get("panic") or {}
+    top_n = int(pcfg.get("top_n", 20))
+    hit, info = _panic_trigger(conn, market, day, pcfg)
+    out = {"active": False, **info, "rows": [], "total": 0, "evidence": PANIC_EVIDENCE.get(market, "")}
+    if not hit or not pcfg.get("enabled", True):
+        return out
+    feat, l2, panel = ctx["feat"], ctx["l2"], ctx["panel"]
+    F = feat.f
+    m = l2.loc[day] & (F["rsi14"].loc[day] < 30) & (F["close"].loc[day] > F["ma200"].loc[day]) & ~unfill.fillna(False).astype(bool)
+    syms = [s for s in m.index[m.to_numpy()] if s not in held]
+    adv = F["amt_ma20"].loc[day]
+    syms.sort(key=lambda s: -(adv.get(s) if pd.notna(adv.get(s)) else 0))
+    out.update(active=True, total=len(syms))
+    close_raw = panel.raw["close"].loc[day]
+    for s in syms[:top_n]:
+        out["rows"].append({"symbol": s, "name": ctx["names"].get(s, s), "close": float(close_raw[s]), "rsi14": _f(F["rsi14"].loc[day, s]),
+                            "ret_5": _f(F["close"].loc[day, s] / F["close"].shift(5).loc[day, s] - 1)})
+    return out
+
+
 def run_scan(market: str = "CN", scan_date: str | None = None, persist: bool = True,
              include_preview: bool = True) -> dict:
     with settings.market_ctx(market):                       # 按市场取配置：美股参数独立（2.1）
@@ -193,6 +240,8 @@ def _run_scan(market: str, scan_date: str | None, persist: bool, include_preview
                    "earnings_data": earn_info["failed"] == 0 and (earn_info["checked"] > 0 or not syms),
                    "earnings_failed": earn_info["failed"]}
 
+        summary["panic"] = _panic_list(conn, market, last, ctx, held, unfill)
+
         # ② 市场环境闸门（硬）
         port_factor, new_allowed = 1.0, True
         if regime == "DEFENSIVE":
@@ -232,6 +281,12 @@ def _run_scan(market: str, scan_date: str | None, persist: bool, include_preview
                                   json.dumps({k: r[k] for k in ("name", "industry", "close", "atr14", "rps_20", "rps_60", "vol_ratio",
                                                                  "fit", "skip_reason", "entry_ref", "setup_label", "board",
                                                                  "stop_dist_pct", "risk_per_lot", "all_setups", "adv20", "atr_pct", "ind_rps_20")}, ensure_ascii=False)))
+            pn = summary.get("panic") or {}
+            if official and pn.get("active"):
+                conn.execute("DELETE FROM panic_picks WHERE date=? AND ret_1d IS NULL AND filled IS NULL", (day,))
+                for r in pn["rows"]:
+                    conn.execute("INSERT OR IGNORE INTO panic_picks(date,symbol,name,close,b20,vix) VALUES(?,?,?,?,?,?)",
+                                 (day, r["symbol"], r["name"], r["close"], pn["b20"], pn.get("vix")))
             db.set_meta(conn, "last_scan_run", run_id)
         if not official and not include_preview:
             out["candidates"] = []
@@ -360,4 +415,29 @@ def backfill_outcomes(market: str = "CN") -> dict:
                 conn.execute("INSERT OR REPLACE INTO scan_outcomes(run_id,symbol,ret_1d,ret_3d,ret_5d,ret_10d,ret_20d,mae,mfe,filled) "
                              "VALUES(?,?,?,?,?,?,?,?,?,1)", (run_id, sym, vals[1], vals[3], vals[5], vals[10], vals[20], mae, mfe))
                 updated += 1
+        updated += _backfill_panic(conn)
     return {"updated": updated}
+
+
+def _backfill_panic(conn) -> int:
+    """恐慌日清单的前向收益：次日开盘买入，之后第 1 / 3 / 5 / 10 / 20 个交易日收盘（前复权，以信号日因子为基准）。"""
+    n = 0
+    for d, sym in conn.execute("SELECT date, symbol FROM panic_picks WHERE ret_20d IS NULL AND (filled IS NULL OR filled=1)").fetchall():
+        fut = mc.trading_days(conn, d, None)[1:22]
+        if len(fut) < 2:
+            continue
+        bars = pd.read_sql_query("SELECT open, close, adj_factor, trade_status FROM daily_bar WHERE symbol=? AND date>? AND date<=? ORDER BY date",
+                                 conn, params=(sym, d, fut[-1]))
+        if bars.empty:
+            continue
+        base = pd.read_sql_query("SELECT adj_factor FROM daily_bar WHERE symbol=? AND date<=? ORDER BY date DESC LIMIT 1", conn, params=(sym, d))
+        ratio = bars["adj_factor"] / (base["adj_factor"].iloc[0] if len(base) else 1.0)
+        o, c = bars["open"] * ratio, bars["close"] * ratio
+        if bars["trade_status"].iloc[0] <= 0 or not o.iloc[0] > 0:
+            conn.execute("UPDATE panic_picks SET filled=0 WHERE date=? AND symbol=?", (d, sym))
+            continue
+        v = {k: (float(c.iloc[k - 1] / o.iloc[0] - 1) if len(c) >= k else None) for k in (1, 3, 5, 10, 20)}
+        conn.execute("UPDATE panic_picks SET ret_1d=?, ret_3d=?, ret_5d=?, ret_10d=?, ret_20d=?, filled=1 WHERE date=? AND symbol=?",
+                     (v[1], v[3], v[5], v[10], v[20], d, sym))
+        n += 1
+    return n
