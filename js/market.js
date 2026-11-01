@@ -8,6 +8,7 @@ import { loadKeyMa, keyMaCard } from './keyma.js';
 import { loadVix, vixCard } from './vix.js';
 import { loadQvix, qvixCard } from './qvix.js';
 import { loadCombo, comboCard } from './combo.js';
+import { flowPanel } from './flow.js';
 
 const REGIME = { NORMAL: ['正常', '正常开仓'], CAUTION: ['谨慎', '仓位上限减半，只做最强候选'], DEFENSIVE: ['防守', '不开新仓'], UNKNOWN: ['未知', '基准数据缺失'] };
 
@@ -21,16 +22,20 @@ export const marketView = {
     const comboBox = h('div', { class: 'mb' }, h('div', { class: 'card' }, h('span', { class: 'spinner' }), ' 加载 K 线 · 市场温度 · 恐慌指数…'));
     const kmBox = h('div', {}, h('div', { class: 'card mt' }, h('span', { class: 'spinner' }), ' 加载关键均线（创业板指 / 标普500 / 纳斯达克100）…'));
     // 页面太长，分三个标签：合成图（指数 K 线 · 市场温度 · 恐慌指数）/ 指数择时与均线 / 个股与行业。各块照旧异步加载，图表在隐藏的标签里靠 ResizeObserver 在显示时自动撑满宽度。
-    const PAGE_TABS = [['combo', '市场温度与行情', [comboBox]], ['timing', '指数择时与均线', [mvBox, vixBox, kmBox]], ['stocks', '个股与行业', [body]]];
+    const flowBox = h('div', {});                          // 资金流向：第一次点开才加载（要算全市场几十万行日线，约 1~2 秒）
+    const showFlow = () => { if (!this._flow) { this._flow = flowPanel(); flowBox.append(this._flow.el); this._flow.mount(); } };
+    const PAGE_TABS = [['combo', '市场温度与行情', [comboBox]], ['timing', '指数择时与均线', [mvBox, vixBox, kmBox]], ['stocks', '个股与行业', [body]], ['flow', '资金流向', [flowBox]]];
     let cur = prefs.get('marketTab', 'combo'); if (!PAGE_TABS.some(t => t[0] === cur)) cur = 'combo';
     const panels = PAGE_TABS.map(([k, , kids]) => h('div', { hidden: k !== cur ? true : null }, ...kids));
     const tabBar = h('div', { class: 'tabs' }, PAGE_TABS.map(([k, label], i) => h('button', { class: k === cur ? 'on' : '', onclick: () => {
       prefs.set('marketTab', k);
       [...tabBar.children].forEach((b, j) => b.classList.toggle('on', j === i));
       panels.forEach((p, j) => { p.hidden = j !== i; });
+      if (k === 'flow') showFlow();
     } }, label)));
     el.append(h('div', { class: 'pane-body page' }, h('div', { class: 'row between mb' }, h('h1', {}, state.market === 'US' ? '美股行情' : 'A股行情'), h('span', { class: 'hint', id: 'mk-asof' })),
       tabBar, ...panels));
+    if (cur === 'flow') showFlow();
     (async () => {                                       // 顶部合成图：指数 K 线 + 市场温度 + 恐慌指数
       let d;
       try { d = await loadCombo(); } catch (e) { d = { status: 'error', message: e.message }; }
@@ -126,5 +131,5 @@ export const marketView = {
     body.append(h('div', { class: 'card mt' }, h('h3', { style: 'margin-bottom:6px' }, '排行（交易池 L2 内）'), tabs, tbl));
     draw();
   },
-  cleanup() { this._mv?.destroy(); this._mv = null; this._km?.destroy(); this._km = null; this._vix?.destroy(); this._vix = null; this._combo?.destroy(); this._combo = null; },
+  cleanup() { this._flow?.destroy(); this._flow = null; this._mv?.destroy(); this._mv = null; this._km?.destroy(); this._km = null; this._vix?.destroy(); this._vix = null; this._combo?.destroy(); this._combo = null; },
 };

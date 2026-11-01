@@ -421,3 +421,36 @@ table.fp-cmp td:first-child { white-space: nowrap; }
 .pe-item { padding: 10px 0; border-top: var(--hair) solid var(--line); } .pe-item:first-child { border-top: 0; }
 .pe-row { display: grid; grid-template-columns: 40px 1fr; gap: 0 8px; margin-top: 5px; align-items: baseline; }
 .pe-lab { font-size: 11.5px; color: var(--muted); } .pe-main { font-size: 13.5px; }
+
+/* 资金流向：圆心分布（柔和版 5 档色：比「市场温度」略淡，大面积铺开时不刺眼） */
+:root { --fl0: #4f8ccf; --fl1: #93bbe2; --fl2: #c4c7cd; --fl3: #efb066; --fl4: #e2504f; }
+:root[data-theme="dark"] { --fl0: #5b95d6; --fl1: #4b7aa8; --fl2: #646973; --fl3: #c98a3b; --fl4: #f0635f; }
+.fl-wrap { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(300px, 1fr); gap: 18px; align-items: start; }
+.fl-chart { position: relative; } .fl-chart svg { display: block; max-height: 78vh; }
+.fl-cell { cursor: pointer; outline: none; transition: opacity .25s var(--ease), filter .2s; transform-box: view-box; transform-origin: 360px 350px; }
+.fl-cell path { transition: transform .22s var(--spring); transform-box: fill-box; transform-origin: center; }
+.fl-chart svg.fl-anim .fl-cell { animation: flPop .55s var(--spring) both; animation-delay: calc(var(--i, 0) * 7ms); }
+@keyframes flPop { from { opacity: 0; transform: scale(.86); } }
+.fl-cell:hover, .fl-cell:focus-visible, .fl-cell.hov { filter: brightness(1.07) saturate(1.08) drop-shadow(0 3px 7px rgba(0, 0, 0, .28)); }
+.fl-cell:hover path, .fl-cell:focus-visible path, .fl-cell.hov path { transform: scale(1.045); }
+.fl-chart svg.has-hov .fl-cell:not(.hov) { opacity: .5; }
+.fl-chart svg.has-sel .fl-cell:not(.sel):not(.hov) { opacity: .38; } .fl-chart svg.has-sel .fl-cell.sel { filter: drop-shadow(0 3px 8px rgba(0, 0, 0, .35)); } .fl-chart svg.has-sel .fl-cell.sel path { transform: scale(1.04); }
+.fl-cell text { font-family: var(--font); letter-spacing: 0; }
+.fl-tip { position: absolute; z-index: 6; max-width: 250px; padding: 9px 11px; border-radius: 10px; background: var(--bg-glass); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); box-shadow: var(--shadow); font-size: 12px; line-height: 1.55; pointer-events: none; }
+.fl-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; }
+.fl-legend { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; } .fl-legend span { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 8px; border-radius: 999px; background: var(--field); font-size: 12px; color: var(--muted); } .fl-legend i { width: 26px; height: 9px; border-radius: 5px; } .fl-legend .fl-hint { background: none; padding-left: 4px; }
+.fl-hero { font-size: 34px; font-weight: 700; line-height: 1.15; letter-spacing: -.5px; margin-top: 2px; } .fl-hero-s { font-size: 14px; font-weight: 500; color: var(--muted); letter-spacing: 0; }
+.fl-sum { margin: 8px 0 0; font-size: 14px; line-height: 1.6; }
+.fl-mini { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 10px; font-size: 12px; color: var(--muted); } .fl-mini b { color: var(--text); font-weight: 600; }
+.fl-row { display: grid; grid-template-columns: minmax(0, 1fr) 52px 38px 64px; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 9px; cursor: pointer; font-size: 13px; transition: background .15s; } .fl-row.rk { grid-template-columns: 22px minmax(0, 1fr) 52px 38px 64px; }
+.fl-row:hover, .fl-row.hov { background: var(--panel); } .fl-row.on { background: var(--accent-soft); }
+.fl-row .fl-nm { display: flex; align-items: center; gap: 7px; overflow: hidden; white-space: nowrap; font-weight: 600; } .fl-row .fl-nm i { flex: none; width: 8px; height: 8px; border-radius: 50%; } .fl-row .num { text-align: right; }
+.fl-rk { font-size: 11px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.fl-bar { height: 5px; border-radius: 3px; background: var(--field); overflow: hidden; } .fl-bar b { display: block; height: 100%; border-radius: 3px; }
+.fl-all { max-height: 420px; overflow: auto; }
+.fl-ctl { gap: 10px; }
+@media (max-width: 980px) { .fl-wrap { grid-template-columns: 1fr; } }
+@media (max-width: 700px) {
+  .fl-wrap { gap: 12px; } .fl-side { order: -1; } .fl-chart svg { max-height: 330px; margin: 0 auto; }
+  .fl-hero { font-size: 28px; } .fl-row { grid-template-columns: minmax(0, 1fr) 44px 34px 58px; gap: 6px; } .fl-row.rk { grid-template-columns: 20px minmax(0, 1fr) 44px 34px 58px; }
+}

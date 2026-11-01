@@ -1071,6 +1071,24 @@ def kline_page(market: str = "CN", index: str | None = None):
     return _wrap(market, **kline.build(market, index))
 
 
+@app.get("/api/flow/sectors")
+def flow_sectors(market: str = "CN", day: str | None = None, window: int = 1, level: str = "industry"):
+    """资金流向（估算，不是主力资金）：某一日 / 近 5 / 20 天累计，各板块的估算净流入、净流入强度、成交额占比变化。"""
+    from . import sector_flow
+    market = _market(market)
+    return _wrap(market, **sector_flow.build(market, day, window, level))
+
+
+@app.get("/api/flow/stocks")
+def flow_stocks(market: str = "CN", day: str = "", window: int = 1, key: str = "", level: str = "industry"):
+    """某个板块里估算净流入最多 / 流出最多的股票。"""
+    from . import sector_flow
+    market = _market(market)
+    if not day or not key:
+        raise HTTPException(400, "需要 day 和 key")
+    return _wrap(market, **sector_flow.stocks(market, day, window, key, level))
+
+
 @app.get("/api/market/qvix")
 def market_qvix(market: str = "CN"):
     """A 股恐慌指数（期权隐含波动率 QVIX：沪深300ETF、创业板ETF 期权）：水平、分区、历史分位、近一年走势与历史统计。"""
