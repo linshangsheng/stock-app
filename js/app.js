@@ -12,9 +12,10 @@ import { backtestView } from './backtest.js';
 import { settingsView } from './settings.js';
 import { marketView } from './market.js';
 import { newsView } from './news.js';
+import { klineView } from './kline.js';
 import { showDetail } from './detail.js';
 
-const VIEWS = { screener, watchlist, portfolio, backtest: backtestView, settings: settingsView, market: marketView, news: newsView };
+const VIEWS = { screener, watchlist, portfolio, backtest: backtestView, settings: settingsView, market: marketView, news: newsView, kline: klineView };
 const appEl = $('#app');
 
 export const ctx = {

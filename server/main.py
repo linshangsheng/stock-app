@@ -1061,6 +1061,14 @@ def market_combo(market: str = "CN"):
     return _wrap(market, **combo.build(market))
 
 
+@app.get("/api/index/kline")
+def kline_page(market: str = "CN", index: str | None = None):
+    """「K线」页：指数日 K 线 + 均线 + 成交额；A 股指数（上证50 / 沪深300 / 创业板指）带筹码分布（估算），美股（标普500 / 纳斯达克100）不带。"""
+    from . import kline
+    market = _market(market)
+    return _wrap(market, **kline.build(market, index))
+
+
 @app.get("/api/market/qvix")
 def market_qvix(market: str = "CN"):
     """A 股恐慌指数（期权隐含波动率 QVIX：沪深300ETF、创业板ETF 期权）：水平、分区、历史分位、近一年走势与历史统计。"""

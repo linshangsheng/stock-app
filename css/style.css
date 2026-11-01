@@ -400,3 +400,19 @@ table.fp-cmp td:first-child { white-space: nowrap; }
 .col-list .tabs { padding: 0 12px; }
 .col-list .tabs button { padding: 10px 4px; flex: 1 1 auto; }
 @media (max-width: 640px) { .col-list .tabs button { padding: 10px 4px; font-size: 12.5px; } }
+
+/* K线页：指数 K 线 + 右侧筹码分布 */
+.kl-tools { margin-bottom: 12px; }
+.kl-quote { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; padding: 2px 2px 4px; }
+.kl-quote .kl-name { font-size: 17px; letter-spacing: -.012em; } .kl-quote .kl-px { font-size: 26px; font-weight: 700; letter-spacing: -.025em; }
+.kl-quote .kl-sep { flex: 1 1 0; }
+.kl-ma { display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: 12px; padding: 0 2px 8px; }
+.kl-grid { display: flex; align-items: stretch; border-radius: var(--radius-sm); overflow: hidden; box-shadow: 0 0 0 var(--hair) var(--line); }
+.kl-main { flex: 1 1 auto; min-width: 0; height: 440px; position: relative; }
+.kl-tags { position: absolute; inset: 0; pointer-events: none; z-index: 4; overflow: hidden; }
+.kl-tag { position: absolute; padding: 0 5px; border-radius: 4px; font-size: 10px; line-height: 14px; font-weight: 700; letter-spacing: 0; box-shadow: 0 0 0 1px rgba(255,255,255,.55), 0 1px 3px rgba(0,0,0,.3); }
+.kl-chips { flex: 0 0 200px; width: 200px; height: 440px; position: relative; background: var(--bg); border-left: var(--hair) solid var(--line); }
+.kl-chips canvas { position: absolute; inset: 0; }
+.kl-stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; margin-top: 14px; padding-top: 12px; border-top: var(--hair) solid var(--line); }
+@media (max-width: 900px) { .kl-chips { flex-basis: 130px; width: 130px; } .kl-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .kl-main, .kl-chips { height: 340px; } .kl-chips { flex-basis: 96px; width: 96px; } .kl-quote .kl-sep { display: none; } .kl-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
