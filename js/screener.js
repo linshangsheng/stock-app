@@ -2,7 +2,8 @@
 // + 低风险组合（定期调仓的名单与操作）+ 次日执行清单（可复制到券商端设置条件单）+ 条件筛选面板 + 历史扫描回看。
 // 清单来自后端存档，前端不做任何计算。
 import { get, post, put, state } from './api.js';
-import { h, clear, fmtPrice, fmtPct, fmtNum, fmtMoney, dirClass, code, toast, copyText, esc, shortDate, lotName } from './util.js';
+import { h, clear, fmtPrice, fmtPct, fmtNum, fmtMoney, dirClass, code, toast, copyText, esc, shortDate, lotName, evBadge } from './util.js';
+import { prefs } from './db.js';
 import { showDetail } from './detail.js';
 import { openTradeForm } from './portfolio.js';
 import { loadMarketView, marketBrief } from './marketpanel.js';
@@ -256,40 +257,101 @@ export const screener = {
           } }, '保存并计算')));
     }
 
-    // 恐慌日：市场温度（站上 20 日线的股票占比）< 15% 的日子，站上 200 日线且 RSI14<30 的超跌股；单独一栏，不进观察清单（config.yaml panic）
+    // 恐慌日（ETF 优先）：A 股市场温度 < 15% / 美股 VIX >= 25 的日子。回测里这种日子之后直接买宽基指数 / ETF 明显好于平时；
+    // 站上 200 日线且 RSI14<30 的超跌股名单相对直接买指数没有显著的额外好处，所以折叠在下面当「进攻版」，仅供参考（config.yaml panic）
     async function renderPanic(d) {
       const p = d.run?.summary?.panic;
       const box = h('div', { style: 'padding:12px 16px' });
       el.append(box);
       const pct0 = v => (v == null ? '—' : (v * 100).toFixed(0) + '%');
-      if (!p) box.append(h('div', { class: 'alert warn' }, '最近一次扫描里没有恐慌日数据（这个功能上线之前的扫描）。重新扫描一次即可。'));
-      else if (!p.active) box.append(h('div', { class: 'card soft' }, h('h3', {}, p.trigger === 'vix' ? `今天不是恐慌日（VIX ${p.vix?.toFixed(1) ?? '—'}，触发线 ${p.cut}）` : `今天不是恐慌日（市场温度 ${pct0(p.b20)}，触发线 ${pct0(p.cut)}）`),
-        h('p', { class: 'hint mt-s' }, `${p.evidence} 平时这一栏没有名单，不用做任何事。`)));
-      else {
-        const rows = (p.rows || []).map(r => h('tr', { style: 'cursor:pointer', onclick: () => showDetail(ctx, r.symbol) }, h('td', {}, r.name || r.symbol),
-          h('td', { class: 'small muted' }, code(r.symbol)), h('td', { class: 'num' }, fmtPrice(r.close)), h('td', { class: 'num' }, r.rsi14 == null ? '—' : r.rsi14.toFixed(0)),
-          h('td', { class: 'num ' + dirClass(r.ret_5) }, fmtPct(r.ret_5, 1))));
-        box.append(h('div', { class: 'alert warn' }, h('b', {}, p.trigger === 'vix' ? `恐慌日：VIX ${p.vix?.toFixed(1)}（不低于 ${p.cut}）` : `恐慌日：市场温度 ${pct0(p.b20)}（低于 ${pct0(p.cut)}）`),
-          h('div', { class: 'small', style: 'margin:6px 0' }, `站上 200 日线、RSI14<30 的超跌股共 ${p.total} 只（按成交额从大到小列前 ${(p.rows || []).length} 只）。${p.evidence} 这是历史统计，不是保证；这种日子很少，样本只有十来段行情，建议分批、小仓位。`),
-          h('table', { class: 'tbl small' }, h('thead', {}, h('tr', {}, ['名称', '代码', '收盘', 'RSI14', '5日涨跌'].map(x => h('th', {}, x)))), h('tbody', {}, rows))));
-      }
+      const sgn = v => (v == null ? '—' : (v > 0 ? '+' : '') + (v * 100).toFixed(1) + '%');
+      if (!p) { box.append(h('div', { class: 'alert warn' }, '最近一次扫描里没有恐慌日数据（这个功能上线之前的扫描）。重新扫描一次即可。')); return; }
+      const vix = p.trigger === 'vix';
+      const title = p.active
+        ? (vix ? `恐慌日：VIX ${p.vix?.toFixed(1)}（不低于 ${p.cut}）` : `恐慌日：市场温度 ${pct0(p.b20)}（低于 ${pct0(p.cut)}）`)
+        : (vix ? `今天不是恐慌日（VIX ${p.vix?.toFixed(1) ?? '—'}，触发线 ${p.cut}）` : `今天不是恐慌日（市场温度 ${pct0(p.b20)}，触发线 ${pct0(p.cut)}）`);
+      const items = p.etf?.items || [];
+      const mv = S.mv?.status === 'ok' ? S.mv : null;
+      const ruleOf = it => mv?.indices?.find(i => it.name.startsWith(i.name))?.washout;
+      const etfLine = (lab, x) => (x ? h('div', { class: 'pe-row' }, h('span', { class: 'pe-lab' }, lab),
+        h('div', {}, h('div', { class: 'num pe-main' }, h('b', { class: dirClass(x.mean) }, sgn(x.mean)), ` · 胜率 ${pct0(x.win)}`),
+          h('div', { class: 'tiny muted' }, `平时 ${sgn(x.base_mean)} · ${pct0(x.base_win)}；多出 ${sgn(x.diff_mean)}（${sgn(x.diff_lo)} ~ ${sgn(x.diff_hi)}）`))) : null);
+      const etfTable = items.length ? h('div', { class: 'mt-s' }, items.map(it => {
+        const w = ruleOf(it);
+        return h('div', { class: 'pe-item' },
+          h('div', { class: 'row between' }, h('b', {}, it.name), h('span', { class: 'tiny muted' }, it.etf)),
+          etfLine('5 天', it.hold?.['5']), etfLine('20 天', it.hold?.['20']),
+          h('div', { class: 'tiny muted', style: 'margin-top:3px' }, `最差的一段（按行情段平均）：5 天 ${sgn(it.hold?.['5']?.worst)}，20 天 ${sgn(it.hold?.['20']?.worst)}`),
+          it.real ? h('div', { class: 'tiny', style: 'margin-top:3px' }, h('b', {}, `实际可买的 ${it.real.code} ${it.real.name}（真实成交价，${it.real.from} 起）：`),
+            `5 天比平时多 ${sgn(it.real.hold?.['5']?.diff)}（${sgn(it.real.hold?.['5']?.lo)} ~ ${sgn(it.real.hold?.['5']?.hi)}），20 天多 ${sgn(it.real.hold?.['20']?.diff)}（${sgn(it.real.hold?.['20']?.lo)} ~ ${sgn(it.real.hold?.['20']?.hi)}）。`
+            + (it.real.hold?.['20']?.vs_us ? `QDII 有溢价和汇率：同一批恐慌日里，它比 ${it.real.hold['20'].vs_us.ticker} 平均少涨 ${sgn(-it.real.hold['20'].vs_us.mean_gap)}（20 天），单次相差最多 ${sgn(it.real.hold['20'].vs_us.worst)}，买入价可能明显偏离净值。` : '')) : null,
+          w ? h('div', { class: 'tiny', style: 'margin-top:3px' }, h('b', {}, 'ETF 规则里的抄底仓：'), w.text) : null);
+      })) : null;
+      const stale = p.evidence_age_days != null && p.evidence_age_days > 180;
+      const note = h('p', { class: 'hint mt-s' }, `回测 2018~2026，按「行情段」统计（相隔不超过 5 个交易日的恐慌日算一段，每段一个结果；A 股约 34 段、美股约 25 段），次日开盘买入、扣 0.1% 成本。`
+        + '「平时」= 非恐慌日；「多」= 恐慌日之后比平时多出的平均涨跌，括号是 90% 可信范围——范围不含 0 才算有把握。样本内（前 60%）和样本外（后 40%）方向一致。'
+        + '注意这是「每段平均」：如果只在每轮恐慌的第一个恐慌日一次买完，结果没有这么好，见下面「怎么买更好」。这是历史统计，不是保证，也不是投资建议。',
+        h('span', { style: stale ? 'color:var(--warn)' : '' }, ` 统计生成于 ${p.etf?.generated ?? '—'}${stale ? `（已 ${p.evidence_age_days} 天没更新，建议重新运行 tools/panic_etf_baseline.py --write）` : ''}。`));
+
+      // 怎么买：本轮恐慌第几天 + 每天买 1/10 的计划 + 长历史检验
+      const run = p.run, plan = p.plan?.items || [];
+      const budgetKey = 'panicBudget.' + state.market;
+      let budget = prefs.get(budgetKey, '');
+      const perShare = h('span', { class: 'num muted' });
+      const showShare = () => { perShare.textContent = +budget > 0 ? `每份约 ${fmtMoney(+budget / 10)}` : ''; };
+      showShare();
+      const planItem = it => {
+        const f5 = it.first?.['5'], f20 = it.first?.['20'], d5 = it.dca?.['5'], d20 = it.dca?.['20'];
+        return h('div', { class: 'pe-item' }, h('div', {}, h('b', {}, it.name), h('span', { class: 'tiny muted' }, '  ' + it.span)),
+          f5 ? h('div', { class: 'small', style: 'margin-top:4px' }, h('b', {}, '第一个恐慌日一次买完：'),
+            `5 天平均 ${sgn(f5.first_mean)}（比平时多 ${sgn(f5.first_diff)}，${sgn(f5.first_lo)} ~ ${sgn(f5.first_hi)}）；20 天平均 ${sgn(f20?.first_mean)}（多 ${sgn(f20?.first_diff)}，${sgn(f20?.first_lo)} ~ ${sgn(f20?.first_hi)}）。共 ${f5.segs} 轮，一轮恐慌的中位数 ${f5.median_days} 天；`
+            + `最差几次（20 天）：${(f20?.first_worst || []).slice(0, 3).map(w => `${w[0]} ${sgn(w[1])}`).join('、')}。`) : null,
+          d5 ? h('div', { class: 'small', style: 'margin-top:4px' }, h('b', {}, '恐慌持续时每天买 1/10、最多买 10 天：'),
+            `买到的部分，5 天比平时多 ${sgn(d5.diff)}（${sgn(d5.lo)} ~ ${sgn(d5.hi)}）；20 天多 ${sgn(d20?.diff)}（${sgn(d20?.lo)} ~ ${sgn(d20?.hi)}）。`) : null);
+      };
+      const planBox = h('div', { class: 'mt-s' },
+        p.active && run ? h('div', { class: 'alert info', style: 'font-size:12.5px' }, h('b', {}, `本轮恐慌第 ${run.n} 个恐慌日（${run.start} 起）。`),
+          run.n <= 10 ? `按计划：今天买预算的 1/10（第 ${run.n}/10 份）；恐慌结束就停。` : '已经买满 10 份，本轮不再加仓。',
+          h('div', { class: 'row mt-s', style: 'gap:6px;flex-wrap:wrap' }, '你打算用多少钱买（元）：',
+            h('input', { type: 'number', min: 0, step: 1000, value: budget, style: 'width:120px', oninput: e => { budget = e.target.value; prefs.set(budgetKey, budget); showShare(); } }), perShare)) : null,
+        h('details', { class: 'mt-s', open: p.active ? true : null }, h('summary', {}, '怎么买更好？长历史检验（美股 1990 年起、沪深300 2005 年起）'),
+          h('div', { class: 'small', style: 'margin:6px 0;line-height:1.7' }, h('b', {}, '结论（保守口径）：'),
+            '① 别在第一个恐慌日一次买完——这样买没有优势，而且 2008、2015、2020 年曾在 20 天内亏 17%~31%；'
+            + '② 恐慌持续的每个交易日买一小份、最多买 10 天，历史上这样买到的部分，比平时买多赚约 0.8~1.7 个百分点；'
+            + '③ 恐慌往往只持续几天（一轮的中位数美股约 9 天、A 股约 3 天），预算常常用不完，所以它更像「把本来就要买的钱，放到恐慌日买」，不是额外的收益来源，剩下的钱照常处理，不要为了抄底借钱或加杠杆；'
+            + '④ A 股 2005~2016 的检验里（温度没有这么早的数据，用走势近似）持有 20 天没有优势，所以 A 股只建议当 5 天以内的依据。'),
+          ...plan.map(planItem)));
+      box.append(h('div', { class: 'card ' + (p.active ? '' : 'soft'), style: p.active ? 'border-left:3px solid var(--warn)' : '' },
+        h('div', { class: 'row between' }, h('h3', {}, title),
+          evBadge('中', '平均而言有效：约 25~80 段行情、样本内外方向一致、美股拉到 1990 年也成立。但买入时点难选（第一个恐慌日一次买入没有优势）、A 股 2005~2016 的 20 天不成立；做过很多次检验，已按保守口径处理。')),
+        h('div', { class: p.active ? 'act-b mt-s' : 'small mt-s' }, p.active ? '宽基 ETF 可以分批加仓（每个恐慌日买一小份）。' : '平时这一栏不用做任何事。恐慌日来了，会提示宽基 ETF 可以分批加仓。'),
+        planBox, p.active ? null : h('div', { class: 'hint mt' }, '下面是历史上恐慌日之后，直接买宽基指数 / ETF 的表现：'), etfTable, note));
+
+      // 超跌股名单（进攻版）：折叠，仅供参考
+      const rows = (p.rows || []).map(r => h('tr', { style: 'cursor:pointer', onclick: () => showDetail(ctx, r.symbol) }, h('td', {}, r.name || r.symbol),
+        h('td', { class: 'small muted' }, code(r.symbol)), h('td', { class: 'num' }, fmtPrice(r.close)), h('td', { class: 'num' }, r.rsi14 == null ? '—' : r.rsi14.toFixed(0)),
+        h('td', { class: 'num ' + dirClass(r.ret_5) }, fmtPct(r.ret_5, 1))));
+      box.append(h('details', { class: 'card mt' }, h('summary', {}, p.active ? `超跌股名单（进攻版，仅供参考）· ${p.total} 只` : '超跌股名单（进攻版，仅供参考）· 今天没有'),
+        h('p', { class: 'hint mt-s' }, p.evidence),
+        p.active ? h('div', { class: 'small', style: 'margin:6px 0' }, `站上 200 日线、RSI14<30 的超跌股共 ${p.total} 只（按成交额从大到小列前 ${(p.rows || []).length} 只）。名单平均涨幅可能更高，但波动大得多，相对直接买指数没有显著的额外好处；想参与建议小仓位、分散、自己设止损。`) : null,
+        p.active ? h('table', { class: 'tbl small' }, h('thead', {}, h('tr', {}, ['名称', '代码', '收盘', 'RSI14', '5日涨跌'].map(x => h('th', {}, x)))), h('tbody', {}, rows)) : null));
+
       const hist = h('div', { class: 'mt' }, h('span', { class: 'spinner' }));
       box.append(hist);
       let r;
       try { r = await get('/scan/history'); } catch (e) { clear(hist); hist.append(h('div', { class: 'alert bad' }, e.message)); return; }
       clear(hist);
-      const o = r.panic_overall || {};
-      const kv = (l, v, c) => kvEl(l, v, c);
-      hist.append(h('div', { class: 'card soft' }, h('h3', {}, '恐慌日名单的真实前向收益'),
-        h('div', { class: 'grid c4 mt-s' }, kv('T+5 胜率', o.w5 != null ? fmtPct(o.w5, 0, false) : '—'), kv('T+5 平均', fmtPct(o.a5), dirClass(o.a5)),
-          kv('T+20 胜率', o.w20 != null ? fmtPct(o.w20, 0, false) : '—'), kv('T+20 平均', fmtPct(o.a20), dirClass(o.a20))),
-        h('div', { class: 'grid c4 mt-s' }, kv('T+5 样本（只）', String(o.n5 ?? 0)), kv('T+20 样本（只）', String(o.n20 ?? 0)),
-          kv('T+5 按恐慌日胜率', o.d5?.win != null ? `${fmtPct(o.d5.win, 0, false)}（${o.d5.days} 天）` : '—'),
-          kv('T+20 按恐慌日胜率', o.d20?.win != null ? `${fmtPct(o.d20.win, 0, false)}（${o.d20.days} 天）` : '—')),
-        h('p', { class: 'hint mt-s' }, '只记录这个功能上线之后真正出现的恐慌日：次日开盘买入，T+5 / T+20 = 第 5 / 20 个交易日收盘相对买入价的涨跌（前复权，未扣交易成本）。'
-          + '同一个恐慌日里的股票同涨同跌，只数不是独立样本——看「按恐慌日」那两格更接近真实把握。历史回测约 70% 的 T+5 胜率能否重现，要看这里；样本少时请勿下结论。')));
+      const o = r.panic_overall || {}, E = r.panic_etf || {};
+      const seg = (x, k) => (x?.[k]?.win != null ? `${pct0(x[k].win)}（${x[k].segs} 段）` : '—');
+      const line = (name, x, a5, a20) => h('tr', {}, h('td', {}, h('b', {}, name)), h('td', { class: 'num ' + dirClass(a5) }, sgn(a5)), h('td', { class: 'num' }, seg(x, 's5')),
+        h('td', { class: 'num ' + dirClass(a20) }, sgn(a20)), h('td', { class: 'num' }, seg(x, 's20')));
+      hist.append(h('div', { class: 'card soft' }, h('h3', {}, '恐慌日之后的真实结果（软件自己存档的）'),
+        h('div', { class: 'tbl-wrap mt-s' }, h('table', { class: 'tbl small' }, h('thead', {}, h('tr', {}, ['买什么', 'T+5 平均', 'T+5 按行情段胜率', 'T+20 平均', 'T+20 按行情段胜率'].map((t, i) => h('th', { class: i ? 'r' : '' }, t)))),
+          h('tbody', {}, ...Object.entries(E).map(([n, x]) => line(n, x, x.a5, x.a20)), line('超跌股名单', o, o.a5, o.a20)))),
+        h('p', { class: 'hint mt-s' }, `只记录这个功能上线之后真正出现的恐慌日：次日开盘买入，T+5 / T+20 = 第 5 / 20 个交易日收盘相对买入价的涨跌（前复权，未扣交易成本）。超跌股名单共 ${o.n5 ?? 0} 只有 T+5 结果、${o.n20 ?? 0} 只有 T+20 结果。`
+          + '同一个恐慌日里的股票同涨同跌，相隔不超过 5 个交易日的恐慌日也是同一段行情，所以看「按行情段」（一段 = 一个结果）。上面的历史统计能否重现要看这里；样本少时请勿下结论。')));
       if (!(r.panic || []).length) { hist.append(h('div', { class: 'empty mt' }, '还没有出现过恐慌日的存档。')); return; }
-      hist.append(h('div', { class: 'tbl-wrap mt' }, h('table', {}, h('thead', {}, h('tr', {}, ['恐慌日', state.market === 'US' ? 'VIX' : '温度', '只数', 'T+5 平均', 'T+5 胜率', 'T+20 平均', 'T+20 胜率'].map((t, i) => h('th', { class: i ? 'r' : '' }, t)))),
+      hist.append(h('h3', { class: 'mt' }, '每个恐慌日的超跌股名单结果'), h('div', { class: 'tbl-wrap mt-s' }, h('table', {}, h('thead', {}, h('tr', {}, ['恐慌日', state.market === 'US' ? 'VIX' : '温度', '只数', 'T+5 平均', 'T+5 胜率', 'T+20 平均', 'T+20 胜率'].map((t, i) => h('th', { class: i ? 'r' : '' }, t)))),
         h('tbody', {}, r.panic.map(x => h('tr', {}, h('td', { class: 'num' }, x.date), h('td', { class: 'num' }, state.market === 'US' ? (x.vix?.toFixed(1) ?? '—') : pct0(x.b20)), h('td', { class: 'num' }, x.n),
           h('td', { class: 'num ' + dirClass(x.a5) }, fmtPct(x.a5, 1)), h('td', { class: 'num' }, x.w5 != null ? fmtPct(x.w5, 0, false) : '待回填'),
           h('td', { class: 'num ' + dirClass(x.a20) }, fmtPct(x.a20, 1)), h('td', { class: 'num' }, x.w20 != null ? fmtPct(x.w20, 0, false) : '待回填')))))));
@@ -427,6 +489,7 @@ function evidenceNote(sum, al) {
   const on = Object.keys(sum.by_setup || {});
   const risky = on.filter(k => k === 'breakout' || k === 'pullback' || k === 'oversold');
   return h('div', { class: 'alert ' + (risky.length ? 'warn' : 'info'), style: 'margin:6px 16px 10px;font-size:12px' },
+    h('div', { style: 'margin-bottom:4px' }, evBadge('弱', '观察清单（波动收缩突破）：A 股 2018~2026 抽样回测里样本内外的期望值都为正，但幅度小、未达统计显著；突破 / 回踩比同一天随便买还差。只建议观察，默认资金方案不给它分钱。')),
     risky.length
       ? `注意：这份清单含「${risky.map(k => SETUP_LABEL[k]).join('、')}」。A 股回测（2018~2026 抽样）里，${risky.map(k => RISK_NOTE[k]).join('；')}——只建议观察，不建议照单下单。`
       : '个股清单默认只用「波动收缩突破」：A 股 2018~2026 抽样回测里，样本内外的期望值都为正，但幅度小、未达统计显著。仓位宜小，严格按止损执行。',

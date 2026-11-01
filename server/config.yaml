@@ -313,6 +313,19 @@ jobs:
   scan_on_startup: true
   prewarm: true                 # 启动后后台预热市场温度与全市场面板（约 40 秒、2 GB 内存），打开页面不用等
 
+# 邮件提醒（server/notify.py）：默认关闭、不发任何邮件。在设置页填好「发件邮箱 + 授权码 + 收件邮箱」并打开开关后，盘后任务链扫描完成时检查一次：
+# 恐慌日（第几个恐慌日、今天买 1/10）、ETF 规则的明天信号、需要处理的持仓。同一事件同一个交易日只发一封。
+# password 是邮箱网页里单独生成的「授权码 / 应用专用密码」（不是登录密码），只保存在 data/user_config.yaml，不进备份、不从接口返回。
+notify:
+  enabled: false
+  sender: ""
+  password: ""
+  recipients: ""                    # 收件邮箱，多个用逗号分隔；留空 = 发给自己（发件邮箱）
+  host: ""                          # 常见邮箱（QQ / 163 / Gmail 等）按发件邮箱自动填
+  port: 465
+  security: ssl                     # ssl | starttls | none
+  events: {panic: true, etf: true, positions: true}
+
 # 3.26.6 备份（相对路径相对于数据目录 data/）
 # dir：每日备份（个人库 + 扫描 / 回测记录等不可重建数据，体积小）——建议放网盘同步目录；
 #      用户机器上请在 data/user_config.yaml 里写绝对路径（见 README）。

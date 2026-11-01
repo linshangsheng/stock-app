@@ -13,8 +13,8 @@ export const settingsView = {
     const el = ctx.pageEl; clear(el); stopPoll();
     const wrap = h('div', { class: 'pane-body page' });
     el.append(wrap);
-    const secData = h('div', { class: 'card' }), secAlloc = h('div', { class: 'card mt' }), secPool = h('div', { class: 'card mt' }), secCost = h('div', { class: 'card mt' }), secLook = h('div', { class: 'card mt' }), secBackup = h('div', { class: 'card mt' }), secStorage = h('div', { class: 'card mt' }), secAbout = h('div', { class: 'card soft mt' });
-    wrap.append(h('h1', { class: 'mb' }, '设置'), secData, secAlloc, secPool, secCost, secLook, secBackup, secStorage, secAbout);
+    const secData = h('div', { class: 'card' }), secAlloc = h('div', { class: 'card mt' }), secPool = h('div', { class: 'card mt' }), secCost = h('div', { class: 'card mt' }), secLook = h('div', { class: 'card mt' }), secNotify = h('div', { class: 'card mt' }), secBackup = h('div', { class: 'card mt' }), secStorage = h('div', { class: 'card mt' }), secAbout = h('div', { class: 'card soft mt' });
+    wrap.append(h('h1', { class: 'mb' }, '设置'), secData, secAlloc, secPool, secCost, secLook, secNotify, secBackup, secStorage, secAbout);
 
     let cfg = {};
     try { cfg = await get('/settings', {}, { cache: false }); } catch (e) { wrap.append(h('div', { class: 'alert bad' }, e.message)); return; }
@@ -244,6 +244,53 @@ export const settingsView = {
         h('p', { class: 'hint mt-s' }, '恢复请在停止后端后用命令行：python -m server.cli restore --date YYYY-MM-DD --what portfolio（恢复前会自动另存现有文件，并校验记录数）。'));
     }
 
+
+    // ---------- 邮件提醒：默认不发送；填好发件邮箱 + 授权码 + 收件邮箱并打开开关才会发 ----------
+    async function renderNotify() {
+      let n = null;
+      try { n = await get('/notify', {}, { market: false, cache: false }); } catch (e) { clear(secNotify); secNotify.append(h('div', { class: 'alert bad' }, e.message)); return; }
+      clear(secNotify);
+      const f = { enabled: n.enabled, sender: n.sender, password: '', recipients: n.recipients, host: n.host, port: n.port, security: n.security, events: { ...n.events } };
+      const tip = h('div', { class: 'hint mt-s' }, n.preset?.tip || '');
+      const host = h('input', { type: 'text', value: f.host, placeholder: '例如 smtp.qq.com', style: 'width:200px', oninput: e => { f.host = e.target.value; } });
+      const port = h('input', { type: 'number', value: f.port, style: 'width:90px', oninput: e => { f.port = e.target.value; } });
+      const sec = h('select', { onchange: e => { f.security = e.target.value; } }, [['ssl', 'SSL（465）'], ['starttls', 'STARTTLS（587）'], ['none', '不加密（不推荐）']].map(([v, l]) => h('option', { value: v, selected: v === f.security ? true : null }, l)));
+      const applyPreset = async () => {
+        if (!/@/.test(f.sender)) return;
+        let p = {}; try { p = await get('/notify/preset', { email: f.sender }, { market: false, cache: false }); } catch { /* 忽略 */ }
+        tip.textContent = p.tip || '';
+        if (p.host && !f.host) { f.host = p.host; f.port = p.port; f.security = p.security; host.value = p.host; port.value = p.port; sec.value = p.security; }
+      };
+      const save = async () => {
+        const body = { enabled: f.enabled, sender: f.sender, recipients: f.recipients, host: f.host, port: f.port, security: f.security, events: f.events };
+        if (f.password) body.password = f.password;
+        try { await put('/notify', body, { market: false }); toast('已保存', 'ok'); renderNotify(); return true; }
+        catch (e) { toast(e.message, 'bad'); return false; }
+      };
+      const chk = (label, key) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: f.events[key] ? true : null, onchange: e => { f.events[key] = e.target.checked; } }), label);
+      secNotify.append(h('div', { class: 'card-title' }, h('h2', {}, '邮件提醒'), h('span', { class: 'badge ' + (n.ready ? 'ok' : '') }, n.status)),
+        h('p', { class: 'small muted' }, '默认不发送任何邮件。填好下面三项并打开开关后，每天盘后任务链跑完会检查一次，有这些事才发：恐慌日（本轮第几个恐慌日、今天买预算的 1/10）、宽基 ETF 规则明天开盘的买卖信号、需要处理的持仓。同一件事同一个交易日只发一封。'),
+        h('div', { class: 'form-grid mt' },
+          h('label', { class: 'f full' }, h('span', {}, '开关'), h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: f.enabled ? true : null, onchange: e => { f.enabled = e.target.checked; } }), '打开邮件提醒')),
+          h('label', { class: 'f' }, h('span', {}, '发件邮箱（用它来发信）'), h('input', { type: 'text', value: f.sender, placeholder: 'you@qq.com', onchange: e => { f.sender = e.target.value.trim(); applyPreset(); } })),
+          h('label', { class: 'f' }, h('span', {}, n.password_set ? '授权码（已保存；留空 = 保持不变）' : '授权码'), h('input', { type: 'password', placeholder: n.password_set ? '••••••••' : '邮箱网页里生成的授权码', autocomplete: 'new-password', oninput: e => { f.password = e.target.value; } })),
+          h('label', { class: 'f full' }, h('span', {}, '收件邮箱（多个用逗号分隔；留空 = 发给自己）'), h('input', { type: 'text', value: f.recipients, placeholder: '留空 = 发给发件邮箱', oninput: e => { f.recipients = e.target.value; } }))),
+        tip,
+        h('div', { class: 'row wrap mt', style: 'gap:16px' }, h('b', { class: 'small' }, '发送哪些：'), chk('恐慌日', 'panic'), chk('ETF 规则信号', 'etf'), chk('需要处理的持仓', 'positions')),
+        h('details', { class: 'mt' }, h('summary', {}, 'SMTP 服务器（常见邮箱会自动填好，一般不用改）'),
+          h('div', { class: 'row wrap mt-s', style: 'gap:8px' }, host, port, sec)),
+        h('div', { class: 'row wrap mt' },
+          h('button', { class: 'btn primary', onclick: save }, '保存'),
+          h('button', { class: 'btn', onclick: async e => {
+            e.target.disabled = true; e.target.textContent = '发送中…';
+            try { if (await save()) { const r = await post('/notify/test', {}, { market: false, timeout: 60000 }); toast(r.message, r.ok ? 'ok' : 'bad'); } }
+            catch (err) { toast(err.message, 'bad'); }
+            e.target.disabled = false; e.target.textContent = '保存并发送测试邮件';
+          } }, '保存并发送测试邮件')),
+        h('p', { class: 'hint mt-s' }, '授权码不是邮箱的登录密码，要在邮箱网页的设置里单独生成（QQ / 163 的「授权码」、Gmail 的「应用专用密码」）。它只保存在本机的 data/user_config.yaml，不会出现在备份和页面里。'
+          + '邮件里只有提醒内容，不含你的资金数字。关闭开关或清空授权码，就不会再发。'));
+    }
+
     secAbout.id = 'about';
     (async () => {
       try { const a = await loadAbout(); secAbout.prepend(h('h2', { class: 'mb' }, '关于'), aboutBlock(a), h('hr', { class: 'about-hr' })); }
@@ -267,7 +314,7 @@ export const settingsView = {
           : h('p', { class: 'hint' }, 'L1 入库粗筛基于入库当天的快照，可能把「过去正常、如今已跌成低价」的股票筛掉，使回测偏乐观。全量初始化完成后运行：python -m server.cli l1-bias --sample 100（在数据库副本上抽样补拉被剔除股票的历史，比较含 / 不含的回测差异）。')));
     }
 
-    renderData(); renderAlloc(); renderPool().then(renderBias); renderCost(); renderLook(); renderBackup(); renderStorage();
+    renderData(); renderAlloc(); renderPool().then(renderBias); renderCost(); renderLook(); renderNotify(); renderBackup(); renderStorage();
   },
   cleanup() { stopPoll(); },
 };

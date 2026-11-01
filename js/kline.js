@@ -2,7 +2,7 @@
 // 美股（标普500 / 纳斯达克100）只有 K 线。鼠标指到哪天，顶部行情和右侧筹码分布就显示那天的。展示用，不进入选股与回测。
 import { get, state } from './api.js';
 import { prefs } from './db.js';
-import { h, clear, fmtNum, fmtPct, fmtAmount, isNum } from './util.js';
+import { h, clear, fmtNum, fmtPct, fmtAmount, isNum, evBadge } from './util.js';
 import { themeColors, makeChart, disposeChart, onThemeChange } from './chart.js';
 
 const RANGES = [['3 个月', 63], ['半年', 126], ['1 年', 250], ['2 年', 500], ['全部', 0]];
@@ -66,7 +66,7 @@ export const klineView = {
     const stats = chips ? h('div', { class: 'kl-stats' }) : null;
     card.append(h('div', { class: 'row between wrap kl-tools' }, idxSeg, h('div', { class: 'row wrap' }, rangeSeg, chipBtn)),
       quote, maLine, h('div', { class: 'kl-grid' }, mainEl, chipEl), stats,
-      h('p', { class: 'hint mt-s' }, chips ? chips.note : (state.market === 'US' ? '美股日线没有换手率，所以没有筹码分布。' : '')),
+      h('p', { class: 'hint mt-s' }, chips ? [evBadge('无', '看盘辅助：筹码分布是用价格区间和换手率推算的估算值，没有任何回测证据说它能提高胜率，不是买卖信号。'), ' ', chips.note] : (state.market === 'US' ? '美股日线没有换手率，所以没有筹码分布。' : '')),
       h('p', { class: 'hint' }, `均线：MA5 / MA20 / MA60 / MA200 / MA250（线的右端有标注，红色粗线 MA250 是关键线）；底部柱子是成交额。指数用日线，数据来自本地库，盘后更新。`));
 
     const c = themeColors();

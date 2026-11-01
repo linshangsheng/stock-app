@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+from bisect import bisect_right
 from datetime import datetime
 
 import numpy as np
@@ -103,14 +104,124 @@ def _ensure_earnings_safe(conn, symbols: list[str], market: str = "CN") -> dict:
 
 
 PANIC_EVIDENCE = {
-    "CN": "2018~2026 回测：全市场温度低于 15% 的日子（约 125 天、十来段下跌行情），次日开盘买入这类股票，持有 5 个交易日胜率约 70%"
-          "（样本内 70%、样本外 70%；同期随便买一只约 58%），持有 10 天约 76%、20 天约 83%（同期约 60%；样本内 20 天 70%、样本外 90%）。"
-          "温度高于 30% 时这类股票胜率只有约 45%，没有优势。注意：独立的下跌行情只有十来段（样本外更少），20 天的数字起伏很大，别当成常态。",
-    "US": "2018~2026 回测：VIX 收盘不低于 25 的日子，次日开盘买入这类股票持有 5 个交易日。只看标普500 + 纳指100 时胜率约 68%（样本内 67.8%、样本外 68.8%；"
-          "同期随便买一只约 57%），全部美股约 65%（同期 54%）。成分股名单是「现在的」，都是活下来的公司，回测会偏乐观，实际可能更接近 62%~65%。"
-          "VIX 不低于 30 时更高，但只有 73 天；VIX 低于 20 时与随机买入没有差别。持有 10 天优势缩小（约 64% 对 60%），"
-          "持有 20 天胜率不比同期随便买一只高（大盘自己会反弹），不要拿它当 20 天的依据。",
+    "CN": "2018~2026 回测，按行情段统计（相隔不超过 5 个交易日的恐慌日算同一段，约 28 段，每段一个结果）。全市场温度低于 15% 的日子，次日开盘买入这类超跌股："
+          "持有 5 天平均 +2.7%、胜率 67%；持有 20 天平均 +6.1%、胜率 68%。但同一天随便买一只合格股票，胜率也有 64% / 60%（平均 +2.4% / +4.3%）——"
+          "恐慌日买入本身就比平时好（平时 5 天胜率约 45%），「超跌」这个条件额外多出来的很少：5 天平均只多 0.35 个百分点（可信范围 −0.6~+1.3），"
+          "20 天多 1.8 个百分点（0~3.5）。直接买沪深300：5 天平均 +1.4%、胜率 77%，最差一段仅 −1.5%；买创业板指：+2.2%、72%、−5.4%。"
+          "这份名单平均涨幅更高，但波动大得多（最差一段 5 天 −8.6%、20 天 −16.2%），和创业板指比差别不显著。"
+          "样本外（2023-04 起）只有约 10 段，5 天没有跑赢同期随便买一只。温度高于 30% 时没有优势。",
+    "US": "2018~2026 回测，按行情段统计（约 27 段）。VIX 收盘不低于 25 的日子，次日开盘买入标普500 + 纳指100 里的超跌股：5 天平均 +1.8%、胜率 65%；20 天平均 +3.5%、胜率 65%。"
+          "同一天随便买一只合格股票：5 天 +1.6%、65%；直接买 SPY：5 天 +1.4%、胜率 75%，20 天 +2.8%、78%；买 QQQ：5 天 +1.6%、68%，20 天 +3.0%、73%。"
+          "超跌这个条件相对随便买一只、相对直接买指数 ETF 都没有显著的额外好处（5 天比 SPY 多 0.4 个百分点，范围 −0.1~+1.0；20 天多 0.7，范围 −0.6~+2.0）。"
+          "所以对美股，恐慌日的价值在于「VIX 高时可以考虑分批买宽基 ETF」，不在于挑这些超跌股，名单仅供参考。成分股名单是「现在的」，回测有幸存者偏差。",
 }
+
+
+_ETF_EV: dict | None = None
+
+
+def panic_etf_evidence(market: str) -> dict:
+    """恐慌日之后直接买宽基指数 / ETF 的历史统计（tools/panic_etf_baseline.py 生成 server/panic_etf_evidence.json）。
+    {"rule": 文字说明, "items": [{name, symbol, etf, hold: {"5": {...}, "10": {...}, "20": {...}}}]}"""
+    global _ETF_EV
+    if _ETF_EV is None:
+        try:
+            _ETF_EV = json.loads((settings.ROOT / "server" / "panic_etf_evidence.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            _ETF_EV = {}
+    real = _load_json("panic_real_etf_evidence.json").get("etfs") or {}              # 真正会买的 ETF（含 QDII 溢价）的验证（tools/panic_real_etf.py）
+    code_of = {"沪深300": "510300", "创业板指": "159915", "标普500（SPY）": "513500", "纳斯达克100（QQQ）": "513100"}
+    items = []
+    for it in (_ETF_EV.get("markets") or {}).get(market, []):
+        r = real.get(code_of.get(it["name"], ""))
+        items.append({**it, "real": ({"code": code_of[it["name"]], **r} if r else None)})
+    return {"rule": _ETF_EV.get("rule", ""), "generated": _ETF_EV.get("generated"), "items": items}
+
+
+def panic_etf_forward(conn, market: str, dates: list[str]) -> dict:
+    """已存档的恐慌日之后，对应宽基指数 / ETF 的真实前向涨跌：次日开盘买，第 5 / 20 个交易日收盘（未扣成本）。
+    每个对象返回 {a5, a20（按恐慌日平均）, n5, n20, s5, s20（按行情段）}。"""
+    out = {}
+    for it in panic_etf_evidence(market)["items"]:
+        bars = pd.read_sql_query("SELECT date, open, close FROM index_bar WHERE symbol=? ORDER BY date", conn, params=(it["symbol"],))
+        ds = bars["date"].tolist()
+        rows = []
+        for d in sorted(dates):
+            r = {"date": d, "a5": None, "a20": None}
+            i = bisect_right(ds, d)                                  # 信号日之后的第一个交易日 = 买入日
+            if i < len(ds) and bars["open"].iloc[i] > 0:
+                for k, key in ((5, "a5"), (20, "a20")):
+                    if i + k - 1 < len(ds):
+                        r[key] = float(bars["close"].iloc[i + k - 1] / bars["open"].iloc[i] - 1)
+            rows.append(r)
+        res = {}
+        for key in ("a5", "a20"):
+            v = [r[key] for r in rows if r[key] is not None]
+            res[key] = (sum(v) / len(v)) if v else None
+            res["n" + key[1:]] = len(v)
+        res.update(panic_segments(conn, rows))
+        out[it["name"]] = res
+    return out
+
+
+def panic_run(conn, market: str, day: str, cut: float, gap: int = 5) -> dict | None:
+    """今天是「本轮恐慌」的第几个恐慌日：相邻恐慌日相隔不超过 gap 个交易日算同一轮（与回测的「行情段」同口径）。今天不是恐慌日返回 None。"""
+    if market == "US":
+        rows = conn.execute("SELECT date, close AS v FROM index_bar WHERE symbol='^VIX' AND date<=? ORDER BY date DESC LIMIT 400", (day,)).fetchall()
+        flag = lambda v: v is not None and v >= cut                          # noqa: E731
+    else:
+        rows = conn.execute("SELECT date, b20 AS v FROM market_breadth WHERE date<=? ORDER BY date DESC LIMIT 400", (day,)).fetchall()
+        flag = lambda v: v is not None and v < cut                           # noqa: E731
+    rows = list(reversed(rows))
+    if not rows or rows[-1]["date"] != day or not flag(rows[-1]["v"]):
+        return None
+    n, last, start = 0, len(rows) - 1, day
+    for i in range(len(rows) - 1, -1, -1):
+        if flag(rows[i]["v"]):
+            if last - i > gap:
+                break
+            n, last, start = n + 1, i, rows[i]["date"]
+    return {"n": n, "start": start}
+
+
+_PLAN_EV: dict | None = None
+
+
+def _load_json(name: str) -> dict:
+    try:
+        return json.loads((settings.ROOT / "server" / name).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def panic_plan_evidence(market: str) -> dict:
+    """「恐慌日怎么买」的长历史证据（tools/panic_long_history.py、tools/panic_staging.py 生成的 JSON）：
+    first = 每个恐慌行情段「第一个恐慌日」一次性买入；dca = 恐慌持续的每个交易日买 1/10，最多买 10 天（只算已投入的部分）。"""
+    lg, st = _load_json("panic_long_evidence.json"), _load_json("panic_staging_evidence.json")
+
+    def first(key, lab):
+        o = {}
+        for H in ("5", "20"):
+            r = (lg.get(key) or {}).get(H, {}).get(lab)
+            if r and "first_mean" in r:
+                o[H] = {k: r[k] for k in ("segs", "first_mean", "first_win", "first_diff", "first_lo", "first_hi", "first_worst", "median_days", "max_days")}
+        return o
+
+    def dca(key, lab, name="每天买(最多10天)·已投部分", tot="每天买(最多10天)·占总预算"):
+        o = {}
+        for H in ("5", "20"):
+            rows = ((st.get(key) or {}).get(H, {}).get(lab) or {}).get("rows") or {}
+            if name in rows:
+                o[H] = {**{k: rows[name][k] for k in ("n", "mean", "win", "diff", "lo", "hi", "worst")}, "total_diff": (rows.get(tot) or {}).get("diff")}
+        return o
+
+    if market == "US":
+        items = [{"name": "标普500", "span": "1990~2026", "first": first("US_GSPC", "全部"), "dca": dca("US_GSPC", "全部")},
+                 {"name": "纳斯达克100", "span": "1990~2026", "first": first("US_NDX", "全部"), "dca": dca("US_NDX", "全部")}]
+    else:
+        items = [{"name": "沪深300", "span": "2005~2016（温度没有这么早的数据，用走势近似；次日收盘买）", "first": first("CN_hs300_proxy", "2005~2016（替身）"), "dca": dca("CN_hs300", "2005~2016(替身)")},
+                 {"name": "沪深300", "span": "2016-11 至今（真实市场温度；次日收盘买）", "first": first("CN_hs300_real", "2016-11~2026"), "dca": dca("CN_hs300", "2016-11~2026(真实温度)")}]
+    return {"items": items, "generated": lg.get("generated") or st.get("generated")}
 
 
 def _panic_trigger(conn, market: str, day: str, pcfg: dict) -> tuple[bool, dict]:
@@ -134,7 +245,10 @@ def _panic_list(conn, market: str, day: str, ctx: dict, held: set, unfill) -> di
     pcfg = settings.cfg().get("panic") or {}
     top_n = int(pcfg.get("top_n", 20))
     hit, info = _panic_trigger(conn, market, day, pcfg)
-    out = {"active": False, **info, "rows": [], "total": 0, "evidence": PANIC_EVIDENCE.get(market, "")}
+    out = {"active": False, **info, "rows": [], "total": 0, "evidence": PANIC_EVIDENCE.get(market, ""), "etf": panic_etf_evidence(market),
+           "plan": panic_plan_evidence(market), "run": panic_run(conn, market, day, info["cut"]) if hit else None}
+    ev_date = out["etf"].get("generated")
+    out["evidence_age_days"] = (datetime.now().date() - datetime.fromisoformat(ev_date).date()).days if ev_date else None
     if not hit or not pcfg.get("enabled", True):
         return out
     feat, l2, panel = ctx["feat"], ctx["l2"], ctx["panel"]
@@ -419,6 +533,26 @@ def backfill_outcomes(market: str = "CN") -> dict:
                 updated += 1
         updated += _backfill_panic(conn)
     return {"updated": updated}
+
+
+def panic_segments(conn, rows: list[dict], gap: int = 5) -> dict:
+    """把恐慌日按「行情段」归并（相邻恐慌日相隔不超过 gap 个交易日算同一段），每段一个结果 = 段内各恐慌日整体平均涨跌的平均。
+    同一段里的股票同涨同跌，只数、天数都不是独立样本，行情段才是。返回 {"s5": {segs, win, mean}, "s20": {...}}（只统计已有收益的段）。"""
+    tdays = mc.trading_days(conn)
+    pos = {d: i for i, d in enumerate(tdays)}
+    out = {}
+    for key, col in (("s5", "a5"), ("s20", "a20")):
+        segs, last = [], None
+        for x in sorted((r for r in rows if r.get(col) is not None), key=lambda r: r["date"]):
+            p = pos.get(x["date"])
+            if not segs or last is None or p is None or p - last > gap:
+                segs.append([])
+            segs[-1].append(x[col])
+            last = p if p is not None else last
+        means = [sum(v) / len(v) for v in segs]
+        out[key] = {"segs": len(means), "win": (sum(m > 0 for m in means) / len(means)) if means else None,
+                    "mean": (sum(means) / len(means)) if means else None}
+    return out
 
 
 def _backfill_panic(conn) -> int:

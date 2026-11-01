@@ -196,3 +196,71 @@ def test_us_panic_day_is_triggered_by_vix(us_env):
         c.commit()
     p = scanner.run_scan("US", persist=False)["summary"]["panic"]
     assert p["active"] is True and p["vix"] == 31.0 and len(p["rows"]) <= p["total"]
+
+
+def test_panic_segments_group_nearby_panic_days(demo_env):
+    """恐慌日按行情段归并：相隔不超过 5 个交易日算同一段，每段一个结果（段内各日平均涨跌的平均）。"""
+    from server import market_calendar as mc, scanner
+    with db.market_db("CN") as c:
+        d = mc.trading_days(c)
+        rows = [{"date": d[10], "a5": 0.02, "a20": None}, {"date": d[13], "a5": 0.04, "a20": None},   # 同一段（相隔 3 个交易日）→ 0.03
+                {"date": d[40], "a5": -0.01, "a20": 0.10}, {"date": d[80], "a5": 0.03, "a20": -0.02}]
+        out = scanner.panic_segments(c, rows)
+        assert out["s5"]["segs"] == 3 and abs(out["s5"]["mean"] - (0.03 - 0.01 + 0.03) / 3) < 1e-9 and abs(out["s5"]["win"] - 2 / 3) < 1e-9
+        assert out["s20"]["segs"] == 2 and out["s20"]["win"] == 0.5
+        assert scanner.panic_segments(c, [])["s5"] == {"segs": 0, "win": None, "mean": None}
+
+
+def test_panic_etf_evidence_and_forward(demo_env):
+    """恐慌日 ETF 优先：证据文件按市场给出对象与统计；已存档恐慌日之后的指数前向涨跌可算（次日开盘买、第 5 / 20 个交易日收盘）。"""
+    from server import market_calendar as mc, scanner
+    cn, us = scanner.panic_etf_evidence("CN"), scanner.panic_etf_evidence("US")
+    assert [i["name"] for i in cn["items"]] == ["沪深300", "创业板指"] and len(us["items"]) == 2
+    h5 = cn["items"][0]["hold"]["5"]
+    assert h5["segs"] > 20 and h5["mean"] > h5["base_mean"] and h5["diff_lo"] > 0                     # 沪深300：恐慌日后 5 天比平时多，且可信范围不含 0
+    with db.market_db("CN") as c:
+        d = mc.trading_days(c)
+        out = scanner.panic_etf_forward(c, "CN", [d[100], d[103], d[200], d[-3]])                   # 最后一天太新，没有 T+5
+        o = out["沪深300"]
+        assert o["n5"] == 3 and o["n20"] == 3 and o["s5"]["segs"] == 2 and o["s20"]["segs"] == 2      # d[100] 与 d[103] 相隔 3 个交易日 → 同一段
+        i = d.index(d[100]) + 1
+        row = c.execute("SELECT open FROM index_bar WHERE symbol='sh.000300' AND date=?", (d[i],)).fetchone()
+        close5 = c.execute("SELECT close FROM index_bar WHERE symbol='sh.000300' AND date=?", (d[i + 4],)).fetchone()
+        assert row and close5
+        one = scanner.panic_etf_forward(c, "CN", [d[100]])["沪深300"]["a5"]
+        assert abs(one - (close5[0] / row[0] - 1)) < 1e-9
+    calm = scanner.run_scan("CN", persist=False)["summary"]["panic"]
+    assert [i["name"] for i in calm["etf"]["items"]] == ["沪深300", "创业板指"]
+
+
+def test_panic_run_counts_days_in_current_wave(demo_env):
+    """本轮恐慌第几个恐慌日：相邻恐慌日相隔不超过 5 个交易日算同一轮；今天不是恐慌日返回 None。"""
+    from server import scanner
+    with db.market_db("CN") as c:
+        from server import market_calendar as mc
+        ds = mc.trading_days(c)[-30:]
+        def setb(vals):                                                  # 把最近 len(vals) 天的 b20 按 vals 覆盖（从旧到新）
+            for d, v in zip(ds[-len(vals):], vals):
+                c.execute("INSERT OR REPLACE INTO market_breadth(date,n,b20) VALUES(?,?,?)", (d, 1000, v))
+        today = ds[-1]
+        setb([0.5, 0.1, 0.1, 0.5, 0.5, 0.5, 0.1, 0.1])                    # 最近两天恐慌；中间隔 3 天的空档 → 仍是同一轮：共 4 个恐慌日
+        r = scanner.panic_run(c, "CN", today, 0.15)
+        assert r["n"] == 4 and r["start"] == ds[-7]                       # 8 天窗口里恐慌日在第 2、3、7、8 天 → 本轮从倒数第 7 天起
+        setb([0.1, 0.1, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.1])          # 中间隔 7 天 → 新的一轮：只有今天
+        assert scanner.panic_run(c, "CN", today, 0.15)["n"] == 1
+        setb([0.1, 0.1, 0.5])                                             # 今天不是恐慌日
+        assert scanner.panic_run(c, "CN", today, 0.15) is None
+
+
+def test_panic_plan_evidence_has_first_day_and_dca(demo_env):
+    from server import scanner
+    for m, n in (("CN", 2), ("US", 2)):
+        items = scanner.panic_plan_evidence(m)["items"]
+        assert len(items) == n
+        for it in items:
+            assert {"5", "20"} <= set(it["first"]) and {"5", "20"} <= set(it["dca"])
+            assert "first_diff" in it["first"]["20"] and "diff" in it["dca"]["20"] and it["first"]["5"]["segs"] > 20
+    us = scanner.panic_plan_evidence("US")["items"][0]
+    assert us["first"]["20"]["first_worst"][0][1] < -0.1                                              # 第一个恐慌日买、20 天最差的几次亏得很深（2020-02-24 约 −31%）
+    real = scanner.panic_etf_evidence("US")["items"][0]["real"]
+    assert real and real["code"] == "513500" and real["hold"]["20"]["vs_us"]["ticker"] == "SPY"

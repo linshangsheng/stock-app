@@ -1,0 +1,173 @@
+{
+ "generated": "2026-11-01",
+ "etfs": {
+  "510300": {
+   "name": "沪深300ETF",
+   "market": "CN",
+   "from": "2012-05-04",
+   "hold": {
+    "5": {
+     "segs": 41,
+     "mean": 0.0115,
+     "win": 0.685,
+     "base_mean": -0.0001,
+     "base_win": 0.505,
+     "diff": 0.0116,
+     "lo": 0.0073,
+     "hi": 0.0161,
+     "first_diff": 0.0043,
+     "first_lo": -0.0021,
+     "first_hi": 0.0109,
+     "worst": -0.0172
+    },
+    "20": {
+     "segs": 40,
+     "mean": 0.0209,
+     "win": 0.695,
+     "base_mean": 0.0013,
+     "base_win": 0.49,
+     "diff": 0.0195,
+     "lo": 0.009,
+     "hi": 0.0303,
+     "first_diff": 0.0125,
+     "first_lo": 0.0012,
+     "first_hi": 0.024,
+     "worst": -0.0816
+    }
+   }
+  },
+  "159915": {
+   "name": "创业板ETF",
+   "market": "CN",
+   "from": "2011-09-20",
+   "hold": {
+    "5": {
+     "segs": 41,
+     "mean": 0.0184,
+     "win": 0.684,
+     "base_mean": 0.0001,
+     "base_win": 0.485,
+     "diff": 0.0184,
+     "lo": 0.0119,
+     "hi": 0.0253,
+     "first_diff": 0.0059,
+     "first_lo": -0.0032,
+     "first_hi": 0.0159,
+     "worst": -0.0521
+    },
+    "20": {
+     "segs": 40,
+     "mean": 0.0348,
+     "win": 0.653,
+     "base_mean": 0.0035,
+     "base_win": 0.476,
+     "diff": 0.0312,
+     "lo": 0.0142,
+     "hi": 0.0484,
+     "first_diff": 0.022,
+     "first_lo": 0.0055,
+     "first_hi": 0.0385,
+     "worst": -0.1128
+    }
+   }
+  },
+  "513500": {
+   "name": "标普500ETF（QDII）",
+   "market": "US",
+   "from": "2013-12-05",
+   "hold": {
+    "5": {
+     "segs": 28,
+     "mean": 0.013,
+     "win": 0.735,
+     "base_mean": 0.0008,
+     "base_win": 0.561,
+     "diff": 0.0123,
+     "lo": 0.0068,
+     "hi": 0.0177,
+     "first_diff": 0.0029,
+     "first_lo": -0.0075,
+     "first_hi": 0.0129,
+     "worst": -0.033,
+     "vs_us": {
+      "ticker": "SPY",
+      "mean_gap": -0.0017,
+      "std": 0.024,
+      "worst": -0.0926,
+      "n": 363
+     }
+    },
+    "20": {
+     "segs": 28,
+     "mean": 0.0331,
+     "win": 0.831,
+     "base_mean": 0.0074,
+     "base_win": 0.652,
+     "diff": 0.0257,
+     "lo": 0.0116,
+     "hi": 0.0388,
+     "first_diff": -0.0002,
+     "first_lo": -0.0232,
+     "first_hi": 0.0222,
+     "worst": -0.0983,
+     "vs_us": {
+      "ticker": "SPY",
+      "mean_gap": -0.0044,
+      "std": 0.0304,
+      "worst": -0.1166,
+      "n": 363
+     }
+    }
+   }
+  },
+  "513100": {
+   "name": "纳指ETF（QDII）",
+   "market": "US",
+   "from": "2013-04-25",
+   "hold": {
+    "5": {
+     "segs": 28,
+     "mean": 0.0146,
+     "win": 0.765,
+     "base_mean": 0.0016,
+     "base_win": 0.57,
+     "diff": 0.013,
+     "lo": 0.0072,
+     "hi": 0.0188,
+     "first_diff": 0.0056,
+     "first_lo": -0.0082,
+     "first_hi": 0.0188,
+     "worst": -0.025,
+     "vs_us": {
+      "ticker": "QQQ",
+      "mean_gap": -0.0034,
+      "std": 0.0324,
+      "worst": -0.099,
+      "n": 363
+     }
+    },
+    "20": {
+     "segs": 28,
+     "mean": 0.03,
+     "win": 0.695,
+     "base_mean": 0.0133,
+     "base_win": 0.644,
+     "diff": 0.0168,
+     "lo": 0.0012,
+     "hi": 0.032,
+     "first_diff": -0.0054,
+     "first_lo": -0.0275,
+     "first_hi": 0.0174,
+     "worst": -0.0833,
+     "vs_us": {
+      "ticker": "QQQ",
+      "mean_gap": -0.016,
+      "std": 0.0471,
+      "worst": -0.1864,
+      "n": 363
+     }
+    }
+   }
+  }
+ }
+}

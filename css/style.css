@@ -416,3 +416,8 @@ table.fp-cmp td:first-child { white-space: nowrap; }
 .kl-stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; margin-top: 14px; padding-top: 12px; border-top: var(--hair) solid var(--line); }
 @media (max-width: 900px) { .kl-chips { flex-basis: 130px; width: 130px; } .kl-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 640px) { .kl-main, .kl-chips { height: 340px; } .kl-chips { flex-basis: 96px; width: 96px; } .kl-quote .kl-sep { display: none; } .kl-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* 恐慌日：宽基 ETF 的历史表现（窄列里一个对象一块，不用表格） */
+.pe-item { padding: 10px 0; border-top: var(--hair) solid var(--line); } .pe-item:first-child { border-top: 0; }
+.pe-row { display: grid; grid-template-columns: 40px 1fr; gap: 0 8px; margin-top: 5px; align-items: baseline; }
+.pe-lab { font-size: 11.5px; color: var(--muted); } .pe-main { font-size: 13.5px; }

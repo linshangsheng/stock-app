@@ -1,7 +1,7 @@
 // 低风险组合（选股页「低风险组合」标签 + 回测页「低风险组合」回测共用）：今天的名单、调仓操作、回测证据。
 // 数据全部来自 /api/factor/plan 与 /api/backtest（kind=factor），前端不做计算。
 import { get } from './api.js';
-import { h, clear, fmtPrice, fmtPct, fmtNum, fmtMoney, dirClass, code, shortDate } from './util.js';
+import { h, clear, fmtPrice, fmtPct, fmtNum, fmtMoney, dirClass, code, shortDate, evBadge } from './util.js';
 import { lineChart, themeColors } from './chart.js';
 import { openTradeForm } from './portfolio.js';
 
@@ -31,7 +31,7 @@ export function factorTab(fp, opts = {}) {
 
   // ① 一句话 + 资金 + 日历
   box.append(h('div', { class: 'card fp-head' },
-    h('div', { class: 'row between' }, h('h3', {}, '低风险组合'), h('span', { class: 'badge ' + mc }, mt)),
+    h('div', { class: 'row between' }, h('h3', {}, '低风险组合'), h('span', { class: 'row', style: 'gap:6px' }, evBadge('弱', '2018~2026 全市场回测年化约 6%（同期沪深300 约 0.6%），但样本内（2018~2022）−1.5%、样本外（2023 起）+16.8%，风格依赖很强（2020 年 −10.5%、2025 年 +2.9% 都落后于指数），且只有一个市场、一段行情。'), h('span', { class: 'badge ' + mc }, mt))),
     h('div', { class: 'fp-headline' }, fp.headline),
     h('div', { class: 'grid c3 mt-s fp-kv' },
       kv('分给组合的钱', al.sleeve ? money(al.sleeve) : '未填资金', al.equity ? `总资金 ${money(al.equity)} × ${fmtPct(al.factor, 0, false)}` : '在「持仓」页填账户资金'),

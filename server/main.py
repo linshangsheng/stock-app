@@ -535,7 +535,9 @@ def scan_history(market: str = "CN", limit: int = 60):
         for k, col in (("d5", "a5"), ("d20", "a20")):             # 按「恐慌日」算：当天整体平均涨幅为正的日子占比（同一天的股票同涨同跌，只数不是独立样本）
             vals = [x[col] for x in pk if x[col] is not None]
             pk_all[k] = {"days": len(vals), "win": (sum(v > 0 for v in vals) / len(vals)) if vals else None}
-    return _wrap(market, runs=runs, overall=dict(agg), panic=pk, panic_overall=pk_all, note="scan_outcomes 是真实发生的前向收益，是回测之外最无偏的证据（5.4）。")
+        pk_all.update(scanner.panic_segments(c, pk))              # 按「行情段」算：段才是独立样本
+        pk_etf = scanner.panic_etf_forward(c, market, [x["date"] for x in pk])      # 同一批恐慌日之后，直接买宽基指数 / ETF 的真实结果
+    return _wrap(market, runs=runs, overall=dict(agg), panic=pk, panic_overall=pk_all, panic_etf=pk_etf, note="scan_outcomes 是真实发生的前向收益，是回测之外最无偏的证据（5.4）。")
 
 
 @app.post("/api/scan/outcomes")
@@ -1289,6 +1291,39 @@ def settings_get():
                                   "costs", "limit_rules", "backup", "jobs", "history_years", "datasource", "throttle", "validation", "allocation", "factor_portfolio")} | \
            {"server": {"host": c["server"]["host"], "port": c["server"]["port"], "token_set": bool(c["server"].get("token"))},
             "editable": list(settings.USER_EDITABLE)}
+
+
+@app.get("/api/notify")
+def notify_get():
+    """邮件提醒设置（不返回授权码，只说有没有）。默认没设置 = 不发送。"""
+    from . import notify
+    return notify.public_config()
+
+
+@app.put("/api/notify")
+def notify_put(body: dict = Body(...)):
+    from . import notify
+    try:
+        return notify.save_config(body)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/notify/test")
+def notify_test():
+    """用已保存的设置发一封测试邮件。"""
+    from . import notify
+    body = "\n".join(["这是一封测试邮件：看到它说明邮件提醒的设置是对的。", "",
+                      "之后恐慌日、ETF 规则信号、需要处理的持仓出现时，会按设置发到这个邮箱。",
+                      "（这封测试邮件不构成任何投资建议。）"])
+    ok, msg = notify.send_mail("【趋势波段】测试邮件", body)
+    return {"ok": ok, "message": msg}
+
+
+@app.get("/api/notify/preset")
+def notify_preset(email: str = ""):
+    from . import notify
+    return notify.preset_for(email) or {}
 
 
 @app.put("/api/settings")

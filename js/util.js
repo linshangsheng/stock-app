@@ -126,6 +126,12 @@ export function confirmBox(msg) {
   });
 }
 
+/** 证据强度小标签：level = 强 / 中 / 弱 / 无（无 = 看盘辅助，没有证据）。tip 写清楚依据（样本量、样本内外是否一致、局限）。 */
+export function evBadge(level, tip) {
+  const cls = { 强: 'ok', 中: 'accent', 弱: 'warn', 无: '' }[level] ?? '';
+  return h('span', { class: 'badge ' + cls, title: tip || '', style: 'cursor:help' }, '证据强度：' + level);
+}
+
 /** 轻量图标（内联 SVG） */
 const ICONS = {
   radar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 12l6-6"/></svg>',

@@ -278,6 +278,12 @@ class JobManager:
                 with self._step(res, "事件 / 公告"):
                     self._set(message="事件 / 公告 / 新闻（候选 + 持仓，缓存 6 小时）")
                     res["events"] = self._events_for_candidates(market, scan, h)
+                with self._step(res, "邮件提醒"):
+                    try:
+                        from . import notify
+                        res["notify"] = notify.after_scan(market, day, scan, h)           # 没设置邮箱 / 没打开开关时返回 {}，什么都不发
+                    except Exception as e:  # noqa: BLE001 - 提醒失败不影响主链
+                        res["notify_error"] = f"{type(e).__name__}: {str(e)[:120]}"
                 with self._step(res, "备份"):
                     res["backup"] = backup.run_backup()
                 with self._step(res, "对账 / 抽查"):
