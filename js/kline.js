@@ -167,8 +167,13 @@ export const klineView = {
     const kv = (k, v, tip) => h('div', { class: 'kv', title: tip }, h('span', { class: 'k' }, k), h('span', { class: 'v num' }, v));
     chart.subscribeCrosshairMove(p => { const i = p && p.time != null ? idxOf.get(p.time) : null; show(i == null ? n - 1 : i); });
     chart.timeScale().subscribeVisibleLogicalRangeChange(redraw);
-    const setRange = m => { chart.timeScale().setVisibleLogicalRange({ from: m ? Math.max(0, n - m) : 0, to: n + 9 }); redraw(); };
-    this._ro = new ResizeObserver(() => { chart.applyOptions({ width: mainEl.clientWidth, height: mainEl.clientHeight }); redraw(); });
+    let curM = 126, sized = mainEl.clientWidth > 40;
+    const setRange = m => { curM = m; chart.timeScale().setVisibleLogicalRange({ from: m ? Math.max(0, n - m) : 0, to: n + 9 }); redraw(); };
+    this._ro = new ResizeObserver(() => {
+      chart.applyOptions({ width: mainEl.clientWidth, height: mainEl.clientHeight });
+      if (!sized && mainEl.clientWidth > 40) { sized = true; setRange(curM); }      // 在隐藏的容器里创建时宽度是 0，第一次拿到真实宽度时重新按当前范围铺开
+      else redraw();
+    });
     this._ro.observe(mainEl);
     setRange(126); show(n - 1);
     setTimeout(redraw, 120);                              // 价格刻度在第一帧之后才定下来，补画一次

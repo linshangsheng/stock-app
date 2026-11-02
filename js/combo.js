@@ -110,12 +110,16 @@ export function comboCard(d) {
       show(i);
     }));
     // 时间范围按钮
-    const setRange = m => ch[0].timeScale().setVisibleLogicalRange({ from: m ? Math.max(0, n - m) : 0, to: n + 2 });
+    let curM = 250, sized = boxes[0].clientWidth > 40;
+    const setRange = m => { curM = m; ch[0].timeScale().setVisibleLogicalRange({ from: m ? Math.max(0, n - m) : 0, to: n + 2 }); };
     btns.replaceChildren(...RANGES.map(([lab, m]) => h('button', { class: m === 250 ? 'on' : '', onclick: e => {
       [...btns.children].forEach(b => b.classList.toggle('on', b === e.target)); setRange(m);
     } }, lab)));
     setRange(250);
-    ro = new ResizeObserver(() => { const w = boxes[0].clientWidth; ch.forEach(x => x.applyOptions({ width: w })); });
+    ro = new ResizeObserver(() => {
+      const w = boxes[0].clientWidth; ch.forEach(x => x.applyOptions({ width: w }));
+      if (!sized && w > 40) { sized = true; setRange(curM); }        // 在隐藏的标签里创建时宽度是 0，第一次拿到真实宽度时重新按当前范围铺开
+    });
     ro.observe(boxes[0]);
   }
   return { el: out, init, destroy() { ro?.disconnect(); offTheme?.(); for (const x of charts.splice(0)) disposeChart(x); } };

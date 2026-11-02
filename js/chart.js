@@ -84,6 +84,7 @@ export class StockChart {
   resize() {
     if (this.main) this.main.applyOptions({ width: this.mainEl.clientWidth, height: this.mainEl.clientHeight });
     if (this.sub) this.sub.applyOptions({ width: this.subEl.clientWidth, height: this.subEl.clientHeight });
+    if (this.payload && this._sized === false && this.mainEl.clientWidth > 40) this._fitRange();      // 在隐藏的容器里创建时宽度是 0，第一次拿到真实宽度时重新铺开
   }
 
   _legend(p) {
@@ -121,10 +122,15 @@ export class StockChart {
     }
     this.setOverlays(payload);
     this.setSub(this.subKind);
-    this.main.timeScale().fitContent();
-    const n = bars.length;
-    if (n > 140) this.main.timeScale().setVisibleLogicalRange({ from: n - 140, to: n + 4 });
+    this._fitRange();
     this._legend(null);
+  }
+
+  _fitRange() {
+    const n = this.payload.bars.length;
+    this.main.timeScale().fitContent();
+    if (n > 140) this.main.timeScale().setVisibleLogicalRange({ from: n - 140, to: n + 4 });
+    this._sized = this.mainEl.clientWidth > 40;
   }
 
   /** 叠加物：触发价 / 止损位（价格线）、持仓成本与当前移动止损线、信号日与买卖点标记、财报日 */
@@ -204,7 +210,12 @@ export function lineChart(el, series, { height = 260, percent = false } = {}) {
     ser.setData(s.data);
   }
   chart.timeScale().fitContent();
-  const ro = new ResizeObserver(() => chart.applyOptions({ width: el.clientWidth }));
+  let fitted = el.clientWidth > 40;                // 在隐藏的标签里创建时宽度是 0，fitContent 按 0 宽算，线会缩成一团挤在右边
+  const ro = new ResizeObserver(() => {
+    const w = el.clientWidth;
+    chart.applyOptions({ width: w });
+    if (!fitted && w > 40) { fitted = true; chart.timeScale().fitContent(); }     // 第一次拿到真实宽度时重新铺满
+  });
   ro.observe(el);
   return { chart, destroy() { ro.disconnect(); disposeChart(chart); } };
 }
