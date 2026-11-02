@@ -13,14 +13,14 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="stylesheet" href="css/style.css">
 <style>
-/* 从启动画面（splash.html）跳过来时：先盖一层与启动画面同色的 Logo 页，首屏渲染好再淡出，不会从深色闪成白屏 */
-#boot { position: fixed; inset: 0; z-index: 9999; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
-  background: radial-gradient(1200px 700px at 50% 38%, #142257 0%, #0a1230 45%, #04070f 100%); transition: opacity .6s ease; }
+/* 从启动画面（splash.html）跳过来时：先盖一层与启动画面最后一帧完全一样的画面（图标 120px、名字 28px、同样的底色和位置），首屏渲染好再淡出，不会闪、也看不出换了页面 */
+#boot { position: fixed; inset: 0; z-index: 9999; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 22px;
+  background: radial-gradient(900px 560px at 50% 42%, #16245a 0%, #0b1332 55%, #060a1c 100%); transition: opacity .6s ease; }
 html.splash #boot { display: flex; }
-#boot img { width: 96px; height: 96px; filter: drop-shadow(0 12px 30px rgba(255,170,60,.32)); animation: bootpulse 1.6s ease-in-out infinite; }
-#boot b { font: 800 30px "Microsoft YaHei UI", "PingFang SC", sans-serif; letter-spacing: .14em; padding-left: .14em; color: #ffd76a; }
+#boot img { width: 120px; height: 120px; border-radius: 27.2px; box-shadow: 0 14px 34px rgba(0,0,0,.45), 0 0 48px rgba(255,190,80,.14); }
+#boot b { height: 36px; line-height: 36px; font: 600 28px/36px "SF Pro Display", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Segoe UI", system-ui, sans-serif; letter-spacing: .24em; padding-left: .24em; color: #f5f6fa; }
 #boot.hide { opacity: 0; pointer-events: none; }
-@keyframes bootpulse { 50% { transform: scale(1.05); } }
+@media (max-width: 640px) { #boot img { width: 104px; height: 104px; border-radius: 23.6px; } #boot b { font-size: 24px; } }
 </style>
 <script>
 if (/[?&]splash=1/.test(location.search)) {

@@ -475,3 +475,20 @@ table.fp-cmp td:first-child { white-space: nowrap; }
 .sb-rows.dim { opacity: .55; } .sb-rows.dim:hover { opacity: 1; }
 
 .sb-cur { padding: 10px 12px; border-radius: 12px; background: var(--panel); display: grid; gap: 4px; line-height: 1.6; }
+
+/* 价格在哪儿（个股详情）：一条 52 周区间的横轴，现价和均线按价格落在轴上 */
+.pos-ends { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 6px; }
+.pos-axis { position: relative; height: 72px; margin: 0 14px; }
+.pos-bar { position: absolute; left: 0; right: 0; top: 28px; height: 6px; border-radius: 3px; background: var(--field-2); }
+.pos-tick { position: absolute; top: 0; height: 72px; width: 0; }
+.pos-tick i { position: absolute; left: -4px; top: 26px; width: 8px; height: 10px; border-radius: 3px; background: var(--muted); }
+.pos-tick span { position: absolute; left: 0; transform: translateX(-50%); font-size: 11px; white-space: nowrap; color: var(--muted); }
+.pos-tick.r1 span { top: 40px; } .pos-tick.r2 span { top: 54px; }
+.pos-tick.now i { background: var(--accent); width: 12px; height: 16px; left: -6px; top: 23px; border-radius: 4px; box-shadow: 0 0 0 3px var(--accent-soft); }
+.pos-tick.now span { top: 3px; color: var(--accent); font-weight: 700; font-size: 12px; }
+
+/* 风险总览（持仓页） */
+.rk-bars { display: grid; gap: 5px; } .rk-row { display: grid; grid-template-columns: 84px 1fr 42px; gap: 8px; align-items: center; font-size: 12px; }
+.rk-name { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rk-bar { height: 8px; border-radius: 4px; background: var(--field); overflow: hidden; } .rk-bar i { display: block; height: 100%; border-radius: 4px; background: var(--accent); }
+.rk-bar i.hot { background: var(--warn); } .rk-pct { text-align: right; }

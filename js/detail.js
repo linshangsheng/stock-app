@@ -6,6 +6,7 @@ import { h, clear, fmtPrice, fmtPct, fmtSigned, fmtAmount, fmtNum, dirClass, cod
 import { openTradeForm } from './portfolio.js';
 import { planCard } from './plan.js';
 import { keystatsCard } from './keystats.js';
+import { positionCard, rsCard } from './dayview.js';
 
 let chart = null;
 const SETUP_CN = { breakout: '突破', pullback: '回踩', vcp: '波动收缩突破', oversold: '强势超跌' };
@@ -85,9 +86,10 @@ export async function showDetail(ctx, symbol, meta = {}) {
         kv('浮盈', fmtPct(pnl), dirClass(pnl)), kv('移动止损', fmtPrice(p.current_stop)))));
   }
 
+  const kind0 = chart?.subKind === 'rs' && !k.rs ? 'macd' : (chart?.subKind || 'macd');       // 换一只股票，副图保持上次选的
   const tools = h('div', { class: 'chart-tools' },
     seg([['D', '日K'], ['W', '周K']], ctx.detailPeriod || 'D', v => { ctx.detailPeriod = v; showDetail(ctx, symbol, meta); }),
-    seg([['macd', 'MACD'], ['rsi', 'RSI']], chart?.subKind || 'macd', v => chart?.setSub(v)),
+    seg([['macd', 'MACD'], ['rsi', 'RSI'], ...(k.rs ? [['rs', '相对大盘']] : [])], kind0, v => chart?.setSub(v)),
     h('button', { class: 'btn sm', title: '把当前图表导出为 PNG（分享图片）', onclick: () => exportImage(k.name, symbol) }, '导出图片'),
     h('button', { class: 'btn sm', title: '复制行情摘要文本', onclick: () => copyText(summaryText(k, last, chg, pct, lv)) }, '复制摘要'),
     h('span', { class: 'hint' }, adjLabel(k)));
@@ -102,7 +104,9 @@ export async function showDetail(ctx, symbol, meta = {}) {
   const finBox = h('div', { class: 'mt' });
   const flowBox = h('div', { class: 'mt' });
   const plan = lv.scan ? planCard(lv.scan, () => showDetail(ctx, symbol, meta)) : null;
-  el.append(topBar(ctx), head, plan, ...info, tools, box, h('div', { class: 'pane-body' }, h('h3', { style: 'margin-bottom:8px' }, '关键指标'), ind, finBox, flowBox,
+  const subSeg = tools.querySelectorAll('.seg')[1];
+  const showRs = () => { subSeg?.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.textContent === '相对大盘')); chart?.setSub('rs'); box.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); };
+  el.append(topBar(ctx), head, plan, ...info, tools, box, h('div', { class: 'pane-body' }, positionCard(k.position), rsCard(k.rs, k.bench_name, showRs, k.period), h('h3', { style: 'margin:14px 0 8px' }, '关键指标'), ind, finBox, flowBox,
     h('p', { class: 'hint mt' }, '指标全部由后端 features.py 统一计算（口径见需求书 3.6.1），前端只做展示。价格为前复权。')));
   if (state.market === 'US') {                         // 美股：Yahoo 关键统计（含 Forward P/E 历史、利润率、增速、自由现金流）
     ksView?.destroy();
@@ -112,7 +116,7 @@ export async function showDetail(ctx, symbol, meta = {}) {
   renderFlow(flowBox, symbol);
   destroyDetail();
   chart = new StockChart(mainEl, subEl);
-  chart.subKind = chart.subKind || 'macd';
+  chart.subKind = kind0;
   chart.build();
   chart.setData(k);
   ctx.currentSymbol = symbol;

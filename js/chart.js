@@ -182,6 +182,13 @@ export class StockChart {
       r.createPriceLine({ price: 70, color: c.grid, lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
       r.createPriceLine({ price: 30, color: c.grid, lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
       this.subSeries.push(r);
+    } else if (kind === 'rs' && p.rs) {
+      const line = this.sub.addLineSeries({ color: c.accent || '#2563eb', lineWidth: 2, priceLineVisible: false, lastValueVisible: true, title: '强弱线' });
+      line.setData(p.rs.line);
+      const ma = this.sub.addLineSeries({ color: c.flat, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, title: `${p.rs.smooth}均` });
+      ma.setData(p.rs.ma);
+      line.createPriceLine({ price: 100, color: c.grid, lineWidth: 1, lineStyle: 2, axisLabelVisible: false });          // 100 = 窗口第一天
+      this.subSeries.push(line, ma);
     }
     const r = this.main.timeScale().getVisibleLogicalRange();
     if (r) this.sub.timeScale().setVisibleLogicalRange(r);

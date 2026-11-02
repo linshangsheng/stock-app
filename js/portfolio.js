@@ -6,6 +6,7 @@ import { showDetail } from './detail.js';
 import { parseTrades, fileToText } from './parse.js';
 import { toCSV } from './parse.js';
 import { keystatsTable } from './keystats.js';
+import { riskCard } from './riskview.js';
 
 const SETUPS = [['', '未标注'], ['factor', '低风险组合（不设止损）'], ['vcp', '波动收缩突破'], ['breakout', '突破'], ['pullback', '回踩'], ['oversold', '强势超跌']];
 const EXIT_REASONS = ['止损', '止盈', '移动止盈', '时间退出', '信号反转', '事件', '调仓', '主观'];
@@ -162,6 +163,7 @@ export const portfolio = {
           kv('波段剩余空位', `${sm.slots_free} / ${sm.max_positions}`), kv('低风险组合', sm.factor_count ? `${fmtMoney(sm.factor_value)}（${sm.factor_count} 只）` : '未建仓')),
           h('p', { class: 'hint mt-s' }, `个股开仓闸门：${REGIME[sm.regime] || sm.regime}（${sm.regime_note}）` + (sm.risk_used_pct != null ? `　· 波段风险占用 ${fmtPct(sm.risk_used_pct, 0, false)}` : '') + '。组合持仓不占风险额度，也不受闸门影响。'),
           Object.keys(sm.industry_share || {}).length ? h('div', { class: 'row wrap mt-s' }, Object.entries(sm.industry_share).map(([k, v]) => h('span', { class: 'tag gray' }, `${k} ${fmtPct(v, 0, false)}`))) : null);
+        if ((S.health.positions || []).length) body.append(riskCard());
         const np = S.health.next_day_params || [];
         body.append(h('div', { class: 'card mt' }, h('div', { class: 'card-title' }, h('h3', {}, '次日执行参数（在券商端设置条件单）'),
           np.length ? h('button', { class: 'btn sm', onclick: () => copyText(np.map(x => `${code(x.symbol)}\t${x.name}\t止损价 ${fmtPrice(x.stop_price)}\t${x.qty}股\t${x.action}`).join('\n')) }, '复制') : null),

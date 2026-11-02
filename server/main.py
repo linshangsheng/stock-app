@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import APP_NAME, AUTHOR, COPYRIGHT, EMAIL, LICENSE, __version__
-from . import backup, backtest, datasource_events as ev_mod, db, ingest, markets, features as feats, market_calendar as mc, portfolio, quality, scanner, settings, \
+from . import backup, backtest, daily_view, risk_view, datasource_events as ev_mod, db, ingest, markets, features as feats, market_calendar as mc, portfolio, quality, scanner, settings, \
     selection, setups, throttle, universe
 from .datasource_cn import get_source
 from .jobs import manager
@@ -237,6 +237,7 @@ def kline(symbol: str, market: str = "CN", period: str = "D", adj: str = "qfq", 
         d["volume"] = panel.volume[symbol]
         d["amount"] = panel.amount[symbol]
         d = d.dropna(subset=["close"])
+        daily = d[["high", "low", "close"]].copy()                    # 价格位置永远按日线算（周线图上也一样）
         F = {k: feat.f[k][symbol].reindex(d.index) for k in ("ma5", "ma10", "ma20", "ma50", "ma200", "macd_dif", "macd_dea",
                                                            "macd_hist", "rsi14", "atr14", "vol_ratio", "atr_pct", "rps_20", "ret_20")
              if k in feat.f}
@@ -269,6 +270,9 @@ def kline(symbol: str, market: str = "CN", period: str = "D", adj: str = "qfq", 
             out["macd"] = {"dif": series(F["macd_dif"]), "dea": series(F["macd_dea"]), "hist": series(F["macd_hist"])}
         if "rsi" in ov and "rsi14" in F:
             out["rsi"] = series(F["rsi14"])
+        out["rs"] = daily_view.rel_strength(d["close"], feat.m.get("bench_close"), 10 if period.upper() == "W" else 20)       # 相对大盘的强弱线（看盘辅助，没回测过）
+        out["bench_name"] = daily_view.BENCH_NAME.get(settings.cfg()["regime"]["benchmark"], settings.cfg()["regime"]["benchmark"])
+        out["position"] = daily_view.price_position(daily)
         # 关键指标卡（来自第三章标准化字段）
         last = d.index[-1]
         lastd = panel.dates[-1]
@@ -719,6 +723,13 @@ def positions_put(pid: int, body: dict = Body(...), market: str = "CN"):
 def positions_delete(pid: int, market: str = "CN"):
     portfolio.delete_position(_need_cn(market), pid)
     return {"ok": True}
+
+
+@app.get("/api/portfolio/risk")
+def portfolio_risk(market: str = "CN"):
+    """持仓放在一起的风险总览：行业集中度、同涨同跌、大盘跌 10% 的估算、按现在持仓重放过去一年（只用日线，不改任何规则）。"""
+    market = _need_cn(market)
+    return _wrap(market, **{k: v for k, v in risk_view.build(market).items() if k != "market"})
 
 
 @app.get("/api/portfolio/health")
