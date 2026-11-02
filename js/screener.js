@@ -18,7 +18,7 @@ const SETUP_LABEL = { breakout: '突破', pullback: '回踩', vcp: '波动收缩
 export const screener = {
   layout: 'split',
   async mount(ctx) {
-    const S = { tab: 'list', data: null, preview: false, sel: null };
+    const S = { tab: state.market === 'CN' ? 'factor' : 'list', data: null, preview: false, sel: null };      // A 股默认先看低风险组合（资金方案里占 30%）；个股清单证据弱，放到后面
     const el = ctx.listEl;
     const gen = ctx.gen;
     const alive = () => ctx.gen === gen;     // 切换市场 / 页面后，这一份页面的后台请求回来也不再画（否则 A股的数据会盖住美股）
@@ -114,7 +114,7 @@ export const screener = {
       const day = run?.valid_until ? shortDate(run.valid_until) : '下一交易日';
       const etfActs = mv?.status === 'ok' ? mv.indices.filter(i => i.next_open?.actions?.length).map(i => `${i.name}：${i.next_open.actions.join('、')}`) : null;
       const buys = (d.candidates || []).filter(c => c.fit !== false && run?.official && !run?.is_stale);
-      const must = S.health?.summary?.levels?.must ?? 0;
+      const must = S.health?.summary?.levels?.must ?? 0, watch = S.health?.summary?.levels?.watch ?? 0;
       const fl = factorLine(S.fp), al = S.fp?.allocation;
       const swing0 = al && al.swing === 0;
       const line = (icon, title, body, onclick) => h('div', { class: 'act-line' + (onclick ? ' link' : ''), onclick },
@@ -128,7 +128,7 @@ export const screener = {
         line('📈', swing0 ? '个股波段（默认不分钱，只观察）' : '个股波段', buys.length ? buys.map(c => `${c.name}${swing0 ? '' : ' 开盘买' + (c.op?.planned_shares ? ' ' + c.op.planned_shares + ' 股' : '')}（止损 ${fmtPrice(c.stop_price)}）`).join('；') + (swing0 ? ' —— 想练手再看，点这里' : ' —— 点这里看高开 / 低开各买多少')
           : (run?.is_stale ? '这份清单已过期，等今天收盘后的新清单' : '今天没有符合条件的股票'),
           buys.length ? () => { S.sel = buys[0].symbol; showDetail(ctx, buys[0].symbol); } : null),
-        line('💼', '持仓', must ? `${must} 只需要处理（止损 / 止盈 / 上移止损）—— 点这里看` : '没有需要处理的持仓', () => { location.hash = '#/portfolio'; }),
+        line('💼', '持仓', must ? `${must} 只需要处理（止损 / 止盈 / 上移止损）${watch ? `，另有 ${watch} 只关注` : ''} —— 点这里看` : watch ? `没有必须处理的，${watch} 只需要关注 —— 点这里看` : '没有需要处理的持仓', () => { location.hash = '#/portfolio'; }),
         d.account?.equity ? null : h('div', { class: 'tiny', style: 'margin-top:6px;color:var(--warn)' }, '还没填账户资金：在下方清单上方填一次，就能算出具体股数'));
     }
 
@@ -136,7 +136,7 @@ export const screener = {
       clear(el);
       const d = S.data, run = d.run;
       if (!brief.firstChild) brief.append(S.mv ? marketBrief(S.mv) : h('div', { class: 'mkt-brief hint' }, h('span', { class: 'spinner' }), ' 市场温度…'));
-      el.append(actionCard(d), wide() ? null : brief, statusBar(d, S.jobs, S.health, ctx, recompute), tabsBar());
+      el.append(actionCard(d), wide() ? null : brief, statusBar(d, S.jobs, ctx, recompute), tabsBar());
       if (d._stale) el.append(h('div', { class: 'alert warn', style: 'margin:10px 16px' }, '后端未连接：显示的是最近一次缓存快照（数据延迟）'));
       S.fpView?.destroy(); S.fpView = null;
       if (S.tab === 'list') renderList(d);
@@ -155,7 +155,8 @@ export const screener = {
 
     function tabsBar() {
       // 左栏很窄：标签用短名（鼠标停留显示全名），均分宽度，放得下就不出现横向滚动
-      const tabs = [['list', '观察清单', '观察清单'], ...(state.market === 'CN' ? [['factor', '低风险', '低风险组合']] : []), ['panic', '恐慌日', '恐慌日'],
+      // 顺序按证据强弱：低风险组合 / 恐慌日（资金方案里真正用到的）在前，个股清单（只观察）在后
+      const tabs = [...(state.market === 'CN' ? [['factor', '低风险', '低风险组合']] : []), ['panic', '恐慌日', '恐慌日'], ['list', '个股观察', '个股观察清单（只观察）'],
         ['exec', '次日', '次日执行'], ['filter', '筛选', '条件筛选'], ['hist', '历史', '历史回看']];
       return h('div', { class: 'tabs', style: 'padding:0 8px;margin:0;align-items:center' }, ...tabs.map(([k, l, full]) =>
         h('button', { class: S.tab === k ? 'on' : '', title: full, onclick: () => { const was = S.tab; S.tab = k; render(); if (!ctx.currentSymbol && (was === 'factor') !== (k === 'factor')) showRight(); } }, l)),
@@ -438,6 +439,7 @@ export const screener = {
       try { r = await get('/scan/history'); } catch (e) { clear(box); box.append(h('div', { class: 'alert bad' }, e.message)); return; }
       clear(box);
       const o = r.overall || {};
+      box.append(h('div', { class: 'hint', style: 'margin-bottom:10px' }, '下面只是平均涨跌，没有和「同期买指数」比。要看信号到底有没有比不用它更好 → ', h('a', { href: '#/backtest/score' }, '实盘成绩单')));
       box.append(h('div', { class: 'card soft' }, h('h3', {}, '选股器自身表现（真实前向收益）'),
         h('div', { class: 'grid c4 mt-s' }, ...[['T+1', 'a1'], ['T+3', 'a3'], ['T+5', 'a5'], ['T+10', 'a10']].map(([l, k]) => kvEl('平均 ' + l, fmtPct(o[k]), dirClass(o[k])))),
         h('div', { class: 'grid c4 mt-s' }, kvEl('T+20 平均', fmtPct(o.a20), dirClass(o.a20)), kvEl('T+5 胜率', o.w5 != null ? fmtPct(o.w5, 0, false) : '—'), kvEl('T+20 胜率', o.w20 != null ? fmtPct(o.w20, 0, false) : '—'), kvEl('样本', String(o.n ?? 0))),
@@ -488,20 +490,21 @@ const RISK_NOTE = { breakout: '「突破」显著差于同日随机买入', pull
 function evidenceNote(sum, al) {
   const on = Object.keys(sum.by_setup || {});
   const risky = on.filter(k => k === 'breakout' || k === 'pullback' || k === 'oversold');
-  return h('div', { class: 'alert ' + (risky.length ? 'warn' : 'info'), style: 'margin:6px 16px 10px;font-size:12px' },
-    h('div', { style: 'margin-bottom:4px' }, evBadge('弱', '观察清单（波动收缩突破）：A 股 2018~2026 抽样回测里样本内外的期望值都为正，但幅度小、未达统计显著；突破 / 回踩比同一天随便买还差。只建议观察，默认资金方案不给它分钱。')),
+  const swing0 = al && al.swing === 0;
+  return h('details', { class: 'alert ' + (risky.length ? 'warn' : 'info'), style: 'margin:6px 16px 10px;font-size:12px' },
+    h('summary', {}, evBadge('弱', '观察清单（波动收缩突破）：A 股 2018~2026 抽样回测里样本内外的期望值都为正，但幅度小、未达统计显著；突破 / 回踩比同一天随便买还差。只建议观察，默认资金方案不给它分钱。'),
+      ' ', risky.length ? `含「${risky.map(k => SETUP_LABEL[k]).join('、')}」，回测里不如随便买——只观察` : swing0 ? '只观察、练手，默认不分钱' : '仓位宜小，严格按止损执行', '　（点开看原因）'),
     risky.length
-      ? `注意：这份清单含「${risky.map(k => SETUP_LABEL[k]).join('、')}」。A 股回测（2018~2026 抽样）里，${risky.map(k => RISK_NOTE[k]).join('；')}——只建议观察，不建议照单下单。`
-      : '个股清单默认只用「波动收缩突破」：A 股 2018~2026 抽样回测里，样本内外的期望值都为正，但幅度小、未达统计显著。仓位宜小，严格按止损执行。',
-    al && al.swing === 0 ? h('div', { style: 'margin-top:4px' }, h('b', {}, '默认资金方案不给个股波段分钱'),
+      ? h('div', { style: 'margin-top:4px' }, `这份清单含「${risky.map(k => SETUP_LABEL[k]).join('、')}」。A 股回测（2018~2026 抽样）里，${risky.map(k => RISK_NOTE[k]).join('；')}——只建议观察，不建议照单下单。`)
+      : h('div', { style: 'margin-top:4px' }, '个股清单默认只用「波动收缩突破」：A 股 2018~2026 抽样回测里，样本内外的期望值都为正，但幅度小、未达统计显著。仓位宜小，严格按止损执行。'),
+    swing0 ? h('div', { style: 'margin-top:4px' }, h('b', {}, '默认资金方案不给个股波段分钱'),
       `（宽基 ETF ${Math.round(al.etf * 100)}% + 低风险组合 ${Math.round(al.factor * 100)}%）：回测里把这部分钱放进「低风险组合」比做波段更好。这份清单只供观察、练手；想做的话到「设置 → 资金方案」给波段留一部分。`) : null);
 }
 
-function statusBar(d, jobs, health, ctx, recompute) {
+function statusBar(d, jobs, ctx, recompute) {
   const run = d.run;
   const gate = run?.gate?.status;
   const reg = run?.regime?.state;
-  const must = health?.summary?.levels?.must ?? 0, watch = health?.summary?.levels?.watch ?? 0;
   const cell = (k, ...v) => h('div', { class: 'cell' }, h('span', { class: 'k' }, k), h('span', { class: 'v' }, ...v));
   const gateTip = (run?.gate?.checks || []).map(c => `${c.ok ? '✓' : '✗'} ${c.name}: ${c.msg}`).join('\n');
   return h('div', { class: 'status-bar' },
@@ -511,10 +514,6 @@ function statusBar(d, jobs, health, ctx, recompute) {
       reg ? h('span', { class: 'pill-state ' + reg, title: REGIME[reg]?.[1] }, REGIME[reg]?.[0] || reg) : '—',
       run?.regime?.reason ? h('span', { class: 'small muted', title: '正常：基准指数在 50 日线上方且宽度（站上 50 日线的股票比例）≥ 45%；防守：基准跌破 200 日线且宽度 < 25%；其余为谨慎' }, run.regime.reason)
         : run?.regime?.detail?.breadth_ma50 != null ? h('span', { class: 'small muted num', title: '站上 MA50 的股票占比（交易池）' }, '宽度 ' + fmtPct(run.regime.detail.breadth_ma50, 0, false)) : null),
-    cell('扫描 run_id', h('span', { class: 'num small', title: run ? `config ${run.config_hash}` : '' }, run ? run.run_id.slice(-18) : '—'),
-      run ? h('span', { class: 'small muted' }, `收盘日 ${shortDate(run.scan_date)} → 有效至 ${run.valid_until ? shortDate(run.valid_until) : '—'}`) : null,
-      recompute ? h('button', { class: 'btn sm', title: '按当前参数和账户资金，重新计算今天的观察清单与市场温度（约 30~60 秒）', onclick: recompute }, '↻ 重新计算') : null),
-    h('a', { class: 'cell', href: '#/portfolio', style: 'color:inherit' }, h('span', { class: 'k' }, '持仓告警'),
-      h('span', { class: 'v' }, must ? h('span', { class: 'badge bad' }, `${must} 只必须处理`) : h('span', { class: 'badge ok' }, '无需处理'),
-        watch ? h('span', { class: 'badge warn' }, `${watch} 关注`) : null)));
+    cell('今天的清单', h('span', { class: 'small', title: run ? `扫描编号 ${run.run_id}\n参数指纹 ${run.config_hash}` : '' }, run ? `${shortDate(run.scan_date)} 收盘 → 有效至 ${run.valid_until ? shortDate(run.valid_until) : '—'}` : '—'),
+      recompute ? h('button', { class: 'btn sm', title: '按当前参数和账户资金，重新计算今天的观察清单与市场温度（约 30~60 秒）', onclick: recompute }, '↻ 重新计算') : null));
 }

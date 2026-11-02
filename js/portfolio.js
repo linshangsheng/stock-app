@@ -122,7 +122,7 @@ export const portfolio = {
           h('div', { class: 't2 num' }, h('span', {}, `${p.qty} 股 · 成本 ${fmtPrice(p.avg_cost)}`), h('span', { class: dirClass(p.r_multiple) }, p.r_multiple != null ? `${fmtSigned(p.r_multiple, 2)}R` : ''),
             h('span', {}, `持有 ${p.hold_days ?? '—'} 日`), h('span', {}, `止损 ${fmtPrice(p.current_stop)}${p.stop_dist_atr != null ? `（${fmtNum(p.stop_dist_atr, 1)} ATR）` : ''}`),
             p.take_profit ? h('span', { title: '短期止盈：买入价 × 1.10，盘中涨到即全部卖出（挂条件单）' }, `止盈 ${fmtPrice(p.take_profit)}${p.take_profit_dist != null ? `（还差 ${fmtPct(p.take_profit_dist, 1)}）` : ''}`) : null),
-          (p.reasons || []).length ? h('div', { class: 'small', style: 'margin-top:3px;color:' + (p.level === 'must' ? 'var(--red)' : 'var(--warn)') }, p.reasons.join('；')) : null,
+          (p.reasons || []).length ? h('div', { class: 'small', style: 'margin-top:3px;color:' + (p.level === 'must' ? 'var(--danger)' : 'var(--warn)') }, p.reasons.join('；')) : null,
           p.level !== 'ok' || p.new_stop ? h('div', { class: 'small', style: 'margin-top:2px' }, '▸ ' + p.action) : null,
           (p.flags || []).length ? h('div', { class: 'small muted' }, p.flags.join('；')) : null,
           h('div', { class: 'row', style: 'margin-top:4px' }, h('span', { class: 'btn sm', onclick: e => { e.stopPropagation(); openTradeForm({ symbol: p.symbol, name: p.name, side: 'sell', price: p.price, qty: p.qty, setup: p.setup || '', exit_reason: fac ? '调仓' : '', onDone: load }); } }, '记录卖出'))));

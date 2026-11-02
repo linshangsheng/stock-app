@@ -48,7 +48,7 @@ export const settingsView = {
       const secs = s => (s >= 60 ? `${Math.floor(s / 60)} 分 ${String(Math.round(s % 60)).padStart(2, '0')} 秒` : `${Math.round(s)} 秒`);
       for (const [k, v] of Object.entries(j.job?.last || {})) {
         const [t, m] = k.split(':');
-        secData.append(h('div', { class: 'small mt-s ' + (v.ok ? 'muted' : ''), style: v.ok ? '' : 'color:var(--red)' },
+        secData.append(h('div', { class: 'small mt-s ' + (v.ok ? 'muted' : ''), style: v.ok ? '' : 'color:var(--danger)' },
           `上次${TASK[t] || t}（${m === 'US' ? '美股' : 'A股'}）：${v.at.replace('T', ' ')} ${v.ok ? '成功' : '失败 ' + v.error}${v.secs != null ? ' · 用时 ' + secs(v.secs) : ''}`,
           v.timing?.length ? h('div', { class: 'tiny muted' }, v.timing.map(([n, x]) => `${n} ${secs(x)}`).join(' · ')) : null));
       }
@@ -173,7 +173,7 @@ export const settingsView = {
       const al = cfg.allocation || {}, fpc = cfg.factor_portfolio || {};
       const F = { etf: Math.round((al.etf ?? 0.7) * 100), factor: Math.round((al.factor ?? 0.3) * 100), n: fpc.n ?? 10 };
       const swingEl = h('span', { class: 'v num' });
-      const upd = () => { const sw = 100 - F.etf - F.factor; swingEl.textContent = sw >= 0 ? sw + '%' : '超过 100%'; swingEl.style.color = sw < 0 ? 'var(--red)' : ''; };
+      const upd = () => { const sw = 100 - F.etf - F.factor; swingEl.textContent = sw >= 0 ? sw + '%' : '超过 100%'; swingEl.style.color = sw < 0 ? 'var(--danger)' : ''; };
       const inp = (k, label, hint, step = 5) => h('label', { class: 'f' }, label, h('input', { type: 'number', min: 0, max: k === 'n' ? 50 : 100, step, value: F[k], oninput: e => { F[k] = +e.target.value; upd(); } }), hint ? h('span', { class: 'tiny faint' }, hint) : null);
       secAlloc.append(h('div', { class: 'card-title' }, h('h2', {}, '资金方案'), h('span', { class: 'hint' }, '总资金在「持仓」页填写')),
         h('div', { class: 'alert info mb small' }, h('b', {}, '默认：宽基 ETF 70% + 低风险组合 30%，个股波段 0。'),

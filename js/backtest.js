@@ -4,6 +4,7 @@ import { get, runBacktest, state } from './api.js';
 import { h, clear, fmtPct, fmtNum, fmtSigned, fmtMoney, dirClass, code, toast } from './util.js';
 import { lineChart, themeColors } from './chart.js';
 import { factorEvidence } from './factor.js';
+import { scoreboardPanel } from './scoreboard.js';
 
 const KINDS = [['strategy', '策略回测'], ['factor', '低风险组合'], ['single_factor', '单因子检验'], ['event_study', '形态事件研究'], ['ablation', '漏斗消融'], ['compare', '方案对比'], ['walk_forward', 'Walk-forward'], ['param_grid', '参数网格']];
 const SETUP_LABEL = { breakout: '突破', pullback: '回踩', vcp: '波动收缩突破', oversold: '强势超跌' };
@@ -13,6 +14,7 @@ const GRID_PRESETS = { breakout: [['vol_ratio_min', [1.2, 1.5, 1.8, 2.2]], ['clo
   oversold: [['rps60_min', [60, 70, 80]], ['rsi_max', [30, 35, 40]]] };
 
 let charts = [];
+let board = null;                                   // 实盘成绩单面板（切走页面时销毁）
 const killCharts = () => { charts.forEach(c => c.destroy()); charts = []; };
 
 export const backtestView = {
@@ -247,10 +249,21 @@ export const backtestView = {
       } catch (e) { runsBox.append(h('div', { class: 'hint' }, e.message)); }
     }
 
-    el.append(h('div', { class: 'pane-body page' }, h('div', { class: 'row between mb' }, h('h1', {}, '回测与验证'), h('span', { class: 'hint' }, '回测只在后端运行；前端只展示')), form, h('div', { class: 'mt' }, out), runsBox));
+    // 两个标签：历史回测（调参数、做检验）/ 实盘成绩单（软件存档的信号之后真实发生了什么）。#/backtest/score 直接打开成绩单
+    const histBox = h('div', {}, form, h('div', { class: 'mt' }, out), runsBox);
+    const scoreBox = h('div', { hidden: true });
+    let boardLoaded = false;
+    const topTabs = h('div', { class: 'seg' });
+    const showTab = tab => {
+      histBox.hidden = tab !== 'hist'; scoreBox.hidden = tab !== 'score';
+      clear(topTabs).append(...[['hist', '历史回测'], ['score', '实盘成绩单']].map(([k, l]) => h('button', { class: k === tab ? 'on' : '', onclick: () => { showTab(k); history.replaceState(null, '', k === 'score' ? '#/backtest/score' : '#/backtest'); } }, l)));
+      if (tab === 'score' && !boardLoaded) { boardLoaded = true; board?.destroy(); board = scoreboardPanel(); scoreBox.append(board.el); board.mount(); }
+    };
+    el.append(h('div', { class: 'pane-body page' }, h('div', { class: 'row between mb wrap' }, h('h1', {}, '回测与验证'), topTabs), histBox, scoreBox));
+    showTab(location.hash.split('/')[2] === 'score' ? 'score' : 'hist');
     renderForm(); loadRuns();
     out.append(h('div', { class: 'empty' }, h('div', { class: 'big' }, '选择一种检验并点「运行」'),
       h('div', {}, '建议顺序：单因子检验 → 形态事件研究 → 策略回测 → 漏斗消融。先确认因子 / 形态本身有预测力，再组合成完整策略。')));
   },
-  cleanup() { killCharts(); },
+  cleanup() { killCharts(); board?.destroy(); board = null; },
 };

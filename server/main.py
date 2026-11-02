@@ -540,6 +540,13 @@ def scan_history(market: str = "CN", limit: int = 60):
     return _wrap(market, runs=runs, overall=dict(agg), panic=pk, panic_overall=pk_all, panic_etf=pk_etf, note="scan_outcomes 是真实发生的前向收益，是回测之外最无偏的证据（5.4）。")
 
 
+@app.get("/api/scoreboard")
+def scoreboard_get(market: str = "CN"):
+    """实盘成绩单：软件存档的信号（观察清单 / 恐慌日名单 / 恐慌日买 ETF / 宽基 ETF 规则）之后的真实结果，对比不用信号时。"""
+    from . import scoreboard
+    return _wrap(market, **scoreboard.build(market))
+
+
 @app.post("/api/scan/outcomes")
 def scan_outcomes(market: str = "CN"):
     market = _need_cn(market)
@@ -1369,6 +1376,7 @@ def backups_get():
 # ---- 静态文件 -----------------------------------------------------------------
 
 @app.get("/")
+@app.get("/index.html")                       # sw.js 的离线缓存清单里有它；以前 404，导致 cache.addAll 整批失败、什么都没预缓存
 def index():
     return FileResponse(ROOT / "index.html")
 

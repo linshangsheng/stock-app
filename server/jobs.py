@@ -275,6 +275,13 @@ class JobManager:
                             res["factor_summary"] = fpm.refresh_summary(market)
                         except Exception as e:  # noqa: BLE001 - 不影响主链
                             res["factor_summary_error"] = str(e)[:200]
+                with self._step(res, "成绩单存档"):
+                    try:
+                        from . import scoreboard
+                        res["scoreboard"] = scoreboard.record(market)                    # 宽基 ETF 规则今天的目标仓位（同一天只存第一次）
+                        res["scoreboard_factor"] = scoreboard.record_factor(market)       # 低风险组合：调仓日存「影子名单」（其余日子立刻返回 0）
+                    except Exception as e:  # noqa: BLE001 - 存档失败不影响主链
+                        res["scoreboard_error"] = f"{type(e).__name__}: {str(e)[:120]}"
                 with self._step(res, "事件 / 公告"):
                     self._set(message="事件 / 公告 / 新闻（候选 + 持仓，缓存 6 小时）")
                     res["events"] = self._events_for_candidates(market, scan, h)

@@ -13,7 +13,7 @@ export function planCard(s, onSaved) {
         '跌到 ', h('b', { class: 'num' }, fmtPrice(s.stop_price)), ' 止损，最多亏 ', h('b', { class: 'num' }, money(o.planned_loss)),
         o.capped_by_adv ? '（受成交额容量限制）' : '')
     : h('div', {}, h('b', {}, '计划：'), '明天开盘买，跌到 ', h('b', { class: 'num' }, fmtPrice(s.stop_price)), ' 止损',
-        o ? h('span', { style: 'color:var(--red)' }, `（按你的资金连一手都不够：${o.note || '止损距离太大'}）`) : '');
+        o ? h('span', { style: 'color:var(--danger)' }, `（按你的资金连一手都不够：${o.note || '止损距离太大'}）`) : '');
   const tp = s.take_profit ? h('div', {}, h('b', {}, '止盈：'), '买入后挂条件单，涨到 ', h('b', { class: 'num' }, fmtPrice(s.take_profit)),
     `（按参考价估算；实际 = 你的买入价 × ${(1 + s.take_profit_pct).toFixed(2)}）全部卖出；没涨到就按「持仓」页每天更新的移动止损走`) : null;
   const rows = s.open_plan.map(r => h('tr', { class: r.shares === 0 ? 'no' : '' },

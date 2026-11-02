@@ -81,6 +81,10 @@ CREATE TABLE IF NOT EXISTS panic_picks(
   ret_1d REAL, ret_3d REAL, ret_5d REAL, ret_10d REAL, filled INTEGER, ret_20d REAL, vix REAL,
   PRIMARY KEY(date, symbol)
 );
+CREATE TABLE IF NOT EXISTS signal_log(
+  date TEXT NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL, value REAL, detail TEXT, logged_at TEXT,
+  PRIMARY KEY(date, kind, key)
+);
 CREATE TABLE IF NOT EXISTS backtest_runs(
   run_id TEXT PRIMARY KEY, kind TEXT, strategy_id TEXT, market TEXT, config_hash TEXT, data_asof TEXT,
   metrics TEXT, trial_count INTEGER, code_version TEXT, created_at TEXT, config TEXT, result TEXT

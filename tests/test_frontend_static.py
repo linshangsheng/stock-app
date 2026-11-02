@@ -1,6 +1,7 @@
 """前端静态检查（环境里没有 node，没法跑 JS 单测，至少把最容易出错的「文件对不上」拦住）：
   - 每个 js/*.js 都进了离线缓存清单（sw.js），否则断网时该页面打不开
   - 每条相对 import 都能找到文件
+  - sw.js 离线缓存清单里的每一项，服务器都真的能返回 200（cache.addAll 是整批原子的：有一项 404，整批都缓存失败）
   - 每个文件括号配对（字符串 / 注释 / 模板字符串内的括号不计）"""
 import re
 from pathlib import Path
@@ -13,6 +14,21 @@ def test_every_js_file_is_in_service_worker_cache():
     sw = (ROOT / "sw.js").read_text(encoding="utf-8")
     missing = [f.name for f in JS if f"/js/{f.name}" not in sw]
     assert not missing, f"sw.js 的 SHELL_FILES 缺 {missing}"
+
+
+def test_every_service_worker_shell_file_is_served():
+    import re as _re
+    import warnings
+    warnings.filterwarnings("ignore", category=DeprecationWarning)
+    from fastapi.testclient import TestClient
+    from server import main
+    sw = (ROOT / "sw.js").read_text(encoding="utf-8")
+    block = sw[sw.index("SHELL_FILES"):sw.index("];", sw.index("SHELL_FILES"))]
+    paths = _re.findall(r"'(/[^']*)'", block)
+    assert len(paths) > 20
+    c = TestClient(main.app)
+    bad = [p for p in paths if c.get(p).status_code != 200]
+    assert not bad, f"sw.js 的 SHELL_FILES 里这些路径服务器返回的不是 200：{bad}"
 
 
 def test_relative_imports_resolve():
