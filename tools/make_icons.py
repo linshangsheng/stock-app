@@ -74,8 +74,8 @@ async def run():
             imgs[256].save(ROOT / "app.ico", format="ICO", sizes=[(n, n) for n in sorted(imgs)],
                            append_images=[imgs[n] for n in sorted(imgs) if n != 256])
             for name, svg, n, pad, bg in (("icon-192.png", big, 192, 0, None), ("icon-512.png", big, 512, 0, None),
-                                          ("apple-touch-icon.png", big, 180, 0, "#0b1230"), ("favicon-32.png", small, 32, 0, None),
-                                          ("maskable-512.png", big, 512, 0.1, "#0b1230")):
+                                          ("apple-touch-icon.png", big, 180, 0, "#0d0f1d"), ("favicon-32.png", small, 32, 0, None),
+                                          ("maskable-512.png", big, 512, 0.1, "#0d0f1d")):
                 (out_dir / name).write_bytes(await render(p, svg, n, tmp, pad, bg))
             print("生成：app.ico（" + " / ".join(str(n) for n in sorted(imgs)) + "）、icons/*.png")
     finally:

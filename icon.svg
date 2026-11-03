@@ -1,55 +1,43 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- 趋势波段：一条带「更高的高点、更高的低点」的上升波段线；颜色从朱红（A 股的「涨」）渐变到琥珀、奶油白，终点一颗发光的点。 -->
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#22357f"/>
-      <stop offset=".5" stop-color="#121c4d"/>
-      <stop offset="1" stop-color="#070c22"/>
+    <linearGradient id="bg" x1="0" y1="0" x2=".9" y2="1">
+      <stop offset="0" stop-color="#242a4d"/>
+      <stop offset=".55" stop-color="#12152b"/>
+      <stop offset="1" stop-color="#090b17"/>
     </linearGradient>
-    <radialGradient id="halo" cx=".8" cy=".18" r=".62">
-      <stop offset="0" stop-color="#ffc83d" stop-opacity=".42"/>
-      <stop offset=".45" stop-color="#ff8a3d" stop-opacity=".10"/>
-      <stop offset="1" stop-color="#ff8a3d" stop-opacity="0"/>
+    <radialGradient id="warm" cx=".82" cy=".2" r=".62">
+      <stop offset="0" stop-color="#ffb13b" stop-opacity=".30"/>
+      <stop offset="1" stop-color="#ffb13b" stop-opacity="0"/>
     </radialGradient>
-    <linearGradient id="up" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ff7a7a"/>
-      <stop offset="1" stop-color="#d81f3a"/>
+    <linearGradient id="line" gradientUnits="userSpaceOnUse" x1="92" y1="378" x2="428" y2="142">
+      <stop offset="0" stop-color="#ff5a4a"/>
+      <stop offset=".5" stop-color="#ffb13b"/>
+      <stop offset="1" stop-color="#fff0c4"/>
     </linearGradient>
-    <linearGradient id="dn" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#3fe0a8"/>
-      <stop offset="1" stop-color="#0c9a6a"/>
+    <radialGradient id="head">
+      <stop offset="0" stop-color="#fff8dc" stop-opacity=".9"/>
+      <stop offset=".3" stop-color="#ffd166" stop-opacity=".5"/>
+      <stop offset="1" stop-color="#ffb13b" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".09"/>
+      <stop offset=".4" stop-color="#fff" stop-opacity="0"/>
     </linearGradient>
-    <linearGradient id="gold" x1="0" y1="1" x2="1" y2="0">
-      <stop offset="0" stop-color="#ffb627"/>
-      <stop offset=".6" stop-color="#ffd76a"/>
-      <stop offset="1" stop-color="#fff4cf"/>
-    </linearGradient>
-    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#fff" stop-opacity=".16"/>
-      <stop offset=".42" stop-color="#fff" stop-opacity="0"/>
-    </linearGradient>
-    <filter id="blur" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="11"/></filter>
+    <filter id="blur" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="13"/></filter>
     <clipPath id="tile"><rect width="512" height="512" rx="116"/></clipPath>
   </defs>
   <g clip-path="url(#tile)">
     <rect width="512" height="512" fill="url(#bg)"/>
-    <rect width="512" height="512" fill="url(#halo)"/>
-    <path d="M70 168H442M70 248H442M70 328H442M70 408H442" stroke="#a9bcff" stroke-opacity=".09" stroke-width="3"/>
-    <g stroke-linecap="round" stroke-width="9">
-      <path d="M148 290V418" stroke="#ff6b6b"/>
-      <rect x="123" y="312" width="50" height="86" rx="11" fill="url(#up)"/>
-      <path d="M220 248V362" stroke="#2fd39a"/>
-      <rect x="195" y="266" width="50" height="72" rx="11" fill="url(#dn)"/>
-      <path d="M292 186V326" stroke="#ff6b6b"/>
-      <rect x="267" y="208" width="50" height="98" rx="11" fill="url(#up)"/>
-      <path d="M364 116V272" stroke="#ff6b6b"/>
-      <rect x="339" y="138" width="50" height="116" rx="11" fill="url(#up)"/>
-    </g>
+    <rect width="512" height="512" fill="url(#warm)"/>
+    <path d="M92 412C190 402 272 332 428 208" fill="none" stroke="#fff" stroke-opacity=".2" stroke-width="12" stroke-linecap="round"/>
     <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M88 380C146 366 162 300 212 306S262 298 288 262S350 170 404 124" stroke="#ffc83d" stroke-opacity=".55" stroke-width="34" filter="url(#blur)"/>
-      <path d="M88 380C146 366 162 300 212 306S262 298 288 262S350 170 404 124" stroke="url(#gold)" stroke-width="19"/>
+      <path d="M92 378C140 378 156 262 212 262C262 262 268 330 312 330C366 330 372 142 428 142" stroke="#ffb13b" stroke-opacity=".55" stroke-width="40" filter="url(#blur)"/>
+      <path d="M92 378C140 378 156 262 212 262C262 262 268 330 312 330C366 330 372 142 428 142" stroke="url(#line)" stroke-width="26"/>
     </g>
-    <path d="M440 90L425 150L379 104Z" fill="#fff4cf" stroke="#fff4cf" stroke-width="8" stroke-linejoin="round"/>
-    <rect width="512" height="512" fill="url(#gloss)"/>
+    <circle cx="428" cy="142" r="46" fill="url(#head)"/>
+    <circle cx="428" cy="142" r="15" fill="#fff6dc"/>
+    <rect width="512" height="512" fill="url(#sheen)"/>
   </g>
   <rect x="3" y="3" width="506" height="506" rx="113" fill="none" stroke="#fff" stroke-opacity=".10" stroke-width="6"/>
 </svg>

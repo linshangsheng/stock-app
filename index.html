@@ -13,14 +13,18 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="stylesheet" href="css/style.css">
 <style>
-/* 从启动画面（splash.html）跳过来时：先盖一层与启动画面最后一帧完全一样的画面（图标 120px、名字 28px、同样的底色和位置），首屏渲染好再淡出，不会闪、也看不出换了页面 */
-#boot { position: fixed; inset: 0; z-index: 9999; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 22px;
-  background: radial-gradient(900px 560px at 50% 42%, #16245a 0%, #0b1332 55%, #060a1c 100%); transition: opacity .6s ease; }
+/* 从启动画面（splash.html）跳过来时：先盖一层与启动画面最后一帧完全一样的画面（图标 144px、名字、英文副标题、同样的底色 / 氛围光 / 阴影 / 位置），首屏渲染好再淡出，不会闪、也看不出换了页面 */
+#boot { position: fixed; inset: 0; z-index: 9999; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 26px; --icon: 144px;
+  background: radial-gradient(900px 600px at 50% 38%, #1a1d33 0%, #0d0f1d 55%, #07080f 100%); transition: opacity .6s ease; }
+#boot::before { content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(700px 420px at 80% 94%, rgba(255,160,60,.07), transparent 70%), radial-gradient(600px 400px at 10% 6%, rgba(90,110,255,.06), transparent 70%); }
 html.splash #boot { display: flex; }
-#boot img { width: 120px; height: 120px; border-radius: 27.2px; box-shadow: 0 14px 34px rgba(0,0,0,.45), 0 0 48px rgba(255,190,80,.14); }
-#boot b { height: 36px; line-height: 36px; font: 600 28px/36px "SF Pro Display", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Segoe UI", system-ui, sans-serif; letter-spacing: .24em; padding-left: .24em; color: #f5f6fa; }
+#boot img { position: relative; width: var(--icon); height: var(--icon); border-radius: calc(var(--icon) * .2266); box-shadow: 0 18px 44px rgba(0,0,0,.5), 0 0 60px rgba(255,177,59,.10); }
+#boot .word { position: relative; height: 56px; text-align: center; font-family: "SF Pro Display", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Segoe UI", system-ui, sans-serif; }
+#boot b { display: block; height: 34px; line-height: 34px; font-size: 26px; font-weight: 500; letter-spacing: .34em; padding-left: .34em; color: #f1eee6; }
+#boot small { display: block; margin-top: 8px; height: 14px; line-height: 14px; font-size: 10.5px; letter-spacing: .5em; padding-left: .5em; color: #7d84a8; }
 #boot.hide { opacity: 0; pointer-events: none; }
-@media (max-width: 640px) { #boot img { width: 104px; height: 104px; border-radius: 23.6px; } #boot b { font-size: 24px; } }
+@media (max-width: 640px) { #boot { --icon: 112px; } #boot b { font-size: 22px; } }
 </style>
 <script>
 if (/[?&]splash=1/.test(location.search)) {
@@ -30,7 +34,7 @@ if (/[?&]splash=1/.test(location.search)) {
 </script>
 </head>
 <body>
-<div id="boot" aria-hidden="true"><img src="icon.svg" alt=""><b>趋势波段</b></div>
+<div id="boot" aria-hidden="true"><img src="icon.svg" alt=""><div class="word"><b>趋势波段</b><small>TREND · SWING</small></div></div>
 <div id="app" class="app" data-view="screener">
   <nav class="nav" id="nav" aria-label="主导航">
     <div class="brand" title="股票 · 趋势波段 · 作者 林上升（点这里看「关于」）" role="button" tabindex="0">

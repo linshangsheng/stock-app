@@ -9,42 +9,34 @@
 <!-- 启动画面：「启动股票.vbs」一双击就用 Edge 应用窗口打开本页（本地文件，不依赖后端），
      一边播放开场一边探测后端，后端就绪后直接跳到应用。参数：?url=后端地址（默认 http://127.0.0.1:8000/）&alt=备用端口（逗号分隔）。
      探测用后端的 favicon.svg 当「指纹」：能当图片加载出来的才是本软件（8000 被 Windows 保留时后端会自动改用备用端口）。
-     调试：加 ?freeze=1.4 会只画动画第 1.4 秒的静止画面，不探测后端、不跳转。
+     调试：加 ?freeze=1.4 只画动画第 1.4 秒的静止画面（加载区显示「等了 7 秒」的样子），不探测后端、不跳转。
 
-     开场（约 3 秒，一个镜头，由脚本按时间逐帧画，不是一堆各自循环的动画）：
-       0.3s  极近的特写：一束金光沿着趋势线一笔画出，K 线随光点经过依次长起来
-       1.4s  光点到达终点，箭头点亮
-       1.5s  镜头拉远，图标的底板在拉远的过程中浮现，背景里淡淡的行情轮廓随之退去
-       2.5s  名字淡入，一道光扫过图标
-     最后一帧（图标 120px + 名字 28px，居中）与 index.html 的 #boot 完全一致，跳转时看不出换了页面。 -->
+     设计：图标是一条「更高的高点、更高的低点」的上升波段线。开场很克制——底板浮现，波段线被一束光画出来，名字淡入；
+     加载区也是同一条波段线：光点沿着它往前走，走到终点就是启动完成（进度是估计值，状态文字是真实的）。
+     最后一帧与 index.html 的 #boot 完全一致（图标 / 名字 / 底色 / 位置），跳转时看不出换了页面。 -->
 <style>
-:root { --ink: #f5f6fa; --muted: #8e97bd; --gold: #ffd166; }
+:root { --ink: #f1eee6; --muted: #7d84a8; --icon: 144px; }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; overflow: hidden; color: var(--ink); user-select: none;
   font-family: "SF Pro Display", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Segoe UI", system-ui, sans-serif; }
-body { background: radial-gradient(900px 560px at 50% 42%, #16245a 0%, #0b1332 55%, #060a1c 100%); }
-
-/* 背景：淡淡的行情轮廓（装饰，开场时浮现、结尾退去） */
-#sky { position: fixed; left: 0; right: 0; bottom: 0; width: 100%; height: 52vh; opacity: 0; pointer-events: none;
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 55%); mask-image: linear-gradient(to bottom, transparent 0%, #000 55%); }
-#sky rect { shape-rendering: crispEdges; }
+body { background: radial-gradient(900px 600px at 50% 38%, #1a1d33 0%, #0d0f1d 55%, #07080f 100%); }
+body::before { content: ""; position: fixed; inset: 0; pointer-events: none;                       /* 两处极淡的氛围光：右下琥珀、左上靛蓝 */
+  background: radial-gradient(700px 420px at 80% 94%, rgba(255,160,60,.07), transparent 70%), radial-gradient(600px 400px at 10% 6%, rgba(90,110,255,.06), transparent 70%); }
 
 /* 主角：图标 + 名字（居中，位置与 index.html 的 #boot 一致） */
-.hero { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; }
-.logo { position: relative; width: 120px; height: 120px; will-change: transform; }
-.logo .shadow { position: absolute; inset: 0; border-radius: 27.2px; opacity: 0; box-shadow: 0 14px 34px rgba(0,0,0,.45), 0 0 48px rgba(255,190,80,.14); }
+.hero { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 26px; }
+.logo { position: relative; width: var(--icon); height: var(--icon); opacity: 0; }
+.logo .shadow { position: absolute; inset: 0; border-radius: calc(var(--icon) * .2266); box-shadow: 0 18px 44px rgba(0,0,0,.5), 0 0 60px rgba(255,177,59,.10); }
 .logo svg { position: relative; width: 100%; height: 100%; display: block; overflow: visible; }
-.k { transform-box: fill-box; transform-origin: 50% 100%; opacity: 0; }
-.arrow { transform-box: fill-box; transform-origin: 50% 50%; opacity: 0; }
-h1 { margin: 0; height: 36px; line-height: 36px; font-size: 28px; font-weight: 600; letter-spacing: .24em; padding-left: .24em; color: var(--ink); opacity: 0; }
+.word { height: 56px; text-align: center; }
+h1 { margin: 0; height: 34px; line-height: 34px; font-size: 26px; font-weight: 500; letter-spacing: .34em; padding-left: .34em; color: var(--ink); opacity: 0; }
+.sub { margin-top: 8px; height: 14px; line-height: 14px; font-size: 10.5px; letter-spacing: .5em; padding-left: .5em; color: var(--muted); opacity: 0; }
 
-/* 底部：一条细线 + 一行小字（线是「正在启动」，不是进度百分比——后端启动多久没法预知） */
-.boot { position: fixed; left: 50%; bottom: 13vh; transform: translateX(-50%); width: 132px; text-align: center; opacity: 0; }
-.bar { position: relative; height: 2px; border-radius: 2px; background: rgba(255,255,255,.12); overflow: hidden; }
-.bar i { position: absolute; top: 0; bottom: 0; left: 0; width: 42%; border-radius: 2px; background: linear-gradient(90deg, transparent, var(--gold), transparent); animation: slide 1.5s ease-in-out infinite; }
-.bar.full i { animation: none; left: 0; width: 100%; background: var(--gold); transition: width .35s ease; }
-@keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(240%); } }
-.msg { margin: 14px -120px 0; font-size: 12px; color: var(--muted); letter-spacing: .06em; min-height: 18px; white-space: nowrap; text-align: center; }     /* 左右留出空位：文字比线宽时仍然居中 */
+/* 加载区：同一条波段线，光点沿着它走；紧贴名字下方（不影响图标和名字的居中位置） */
+.boot { position: fixed; left: 50%; top: calc(50% + (var(--icon) + 26px + 56px) / 2 + 46px); transform: translateX(-50%); width: 240px; opacity: 0; }
+.boot svg { display: block; width: 240px; height: 44px; overflow: visible; }
+.msg { margin: 14px -90px 0; font-size: 12px; color: var(--muted); letter-spacing: .08em; min-height: 18px; text-align: center; white-space: nowrap; }     /* 左右留出空位：文字比线宽时仍然居中 */
+.msg em { font-style: normal; color: #ffc86b; font-variant-numeric: tabular-nums; }
 body.leaving .boot { opacity: 0 !important; transition: opacity .25s; }
 
 .err { position: fixed; left: 50%; bottom: 7vh; transform: translateX(-50%); width: min(600px, 90vw); padding: 18px 20px; border-radius: 14px; display: none;
@@ -54,57 +46,51 @@ body.leaving .boot { opacity: 0 !important; transition: opacity .25s; }
 .err button { cursor: pointer; border: 0; border-radius: 8px; padding: 7px 14px; font: inherit; background: #ff6b9a; color: #1a0a12; font-weight: 600; }
 .err button.ghost { background: transparent; border: 1px solid rgba(255,255,255,.3); color: #ffdde6; font-weight: 400; }
 
-@media (max-width: 640px) { .logo { width: 104px; height: 104px; } .logo .shadow { border-radius: 23.6px; } h1 { font-size: 24px; } }
+@media (max-width: 640px) { :root { --icon: 112px; } h1 { font-size: 22px; } }
 </style>
 </head>
 <body>
-<svg id="sky" viewBox="0 0 200 60" preserveAspectRatio="none" aria-hidden="true"></svg>
-
 <div class="hero">
   <div class="logo" id="logo">
-    <div class="shadow" id="shadow"></div>
+    <div class="shadow"></div>
     <svg viewBox="0 0 512 512" aria-label="趋势波段">
       <defs>
-        <linearGradient id="s-bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#22357f"/><stop offset=".5" stop-color="#121c4d"/><stop offset="1" stop-color="#070c22"/></linearGradient>
-        <radialGradient id="s-halo" cx=".8" cy=".18" r=".62"><stop offset="0" stop-color="#ffc83d" stop-opacity=".42"/><stop offset=".45" stop-color="#ff8a3d" stop-opacity=".1"/><stop offset="1" stop-color="#ff8a3d" stop-opacity="0"/></radialGradient>
-        <linearGradient id="s-up" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff7a7a"/><stop offset="1" stop-color="#d81f3a"/></linearGradient>
-        <linearGradient id="s-dn" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3fe0a8"/><stop offset="1" stop-color="#0c9a6a"/></linearGradient>
-        <linearGradient id="s-gold" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#ffb627"/><stop offset=".6" stop-color="#ffd76a"/><stop offset="1" stop-color="#fff4cf"/></linearGradient>
-        <linearGradient id="s-gloss" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".16"/><stop offset=".42" stop-color="#fff" stop-opacity="0"/></linearGradient>
-        <linearGradient id="s-shine" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".5" stop-color="#fff" stop-opacity=".30"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
-        <radialGradient id="s-head" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#fff8dc" stop-opacity=".95"/><stop offset=".25" stop-color="#ffd166" stop-opacity=".6"/><stop offset="1" stop-color="#ffb627" stop-opacity="0"/></radialGradient>
-        <filter id="s-blur" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="11"/></filter>
-        <clipPath id="s-tile"><rect width="512" height="512" rx="116"/></clipPath>
+        <linearGradient id="bg" x1="0" y1="0" x2=".9" y2="1"><stop offset="0" stop-color="#242a4d"/><stop offset=".55" stop-color="#12152b"/><stop offset="1" stop-color="#090b17"/></linearGradient>
+        <radialGradient id="warm" cx=".82" cy=".2" r=".62"><stop offset="0" stop-color="#ffb13b" stop-opacity=".30"/><stop offset="1" stop-color="#ffb13b" stop-opacity="0"/></radialGradient>
+        <linearGradient id="line" gradientUnits="userSpaceOnUse" x1="92" y1="378" x2="428" y2="142"><stop offset="0" stop-color="#ff5a4a"/><stop offset=".5" stop-color="#ffb13b"/><stop offset="1" stop-color="#fff0c4"/></linearGradient>
+        <radialGradient id="head"><stop offset="0" stop-color="#fff8dc" stop-opacity=".9"/><stop offset=".3" stop-color="#ffd166" stop-opacity=".5"/><stop offset="1" stop-color="#ffb13b" stop-opacity="0"/></radialGradient>
+        <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".09"/><stop offset=".4" stop-color="#fff" stop-opacity="0"/></linearGradient>
+        <filter id="blur" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="13"/></filter>
+        <clipPath id="tile"><rect width="512" height="512" rx="116"/></clipPath>
       </defs>
-      <g clip-path="url(#s-tile)">
-        <g id="tileBg" opacity="0">
-          <rect width="512" height="512" fill="url(#s-bg)"/><rect width="512" height="512" fill="url(#s-halo)"/>
-          <path d="M70 168H442M70 248H442M70 328H442M70 408H442" stroke="#a9bcff" stroke-opacity=".09" stroke-width="3"/>
-        </g>
-        <g stroke-linecap="round" stroke-width="9">
-          <g class="k" data-x="148"><path d="M148 290V418" stroke="#ff6b6b"/><rect x="123" y="312" width="50" height="86" rx="11" fill="url(#s-up)"/></g>
-          <g class="k" data-x="220"><path d="M220 248V362" stroke="#2fd39a"/><rect x="195" y="266" width="50" height="72" rx="11" fill="url(#s-dn)"/></g>
-          <g class="k" data-x="292"><path d="M292 186V326" stroke="#ff6b6b"/><rect x="267" y="208" width="50" height="98" rx="11" fill="url(#s-up)"/></g>
-          <g class="k" data-x="364"><path d="M364 116V272" stroke="#ff6b6b"/><rect x="339" y="138" width="50" height="116" rx="11" fill="url(#s-up)"/></g>
-        </g>
+      <g clip-path="url(#tile)">
+        <rect width="512" height="512" fill="url(#bg)"/><rect width="512" height="512" fill="url(#warm)"/>
+        <path id="ghost" d="M92 412C190 402 272 332 428 208" fill="none" stroke="#fff" stroke-opacity=".2" stroke-width="12" stroke-linecap="round" opacity="0"/>
         <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-          <path id="glow" pathLength="1" stroke-dasharray="1" stroke-dashoffset="1" d="M88 380C146 366 162 300 212 306S262 298 288 262S350 170 404 124" stroke="#ffc83d" stroke-opacity=".55" stroke-width="34" filter="url(#s-blur)"/>
-          <path id="trend" pathLength="1" stroke-dasharray="1" stroke-dashoffset="1" d="M88 380C146 366 162 300 212 306S262 298 288 262S350 170 404 124" stroke="url(#s-gold)" stroke-width="19"/>
+          <path id="glow" pathLength="1" stroke-dasharray="1" stroke-dashoffset="1" d="M92 378C140 378 156 262 212 262C262 262 268 330 312 330C366 330 372 142 428 142" stroke="#ffb13b" stroke-opacity=".55" stroke-width="40" filter="url(#blur)"/>
+          <path id="trend" pathLength="1" stroke-dasharray="1" stroke-dashoffset="1" d="M92 378C140 378 156 262 212 262C262 262 268 330 312 330C366 330 372 142 428 142" stroke="url(#line)" stroke-width="26"/>
+          <path id="pulse" pathLength="1" stroke-dasharray=".14 2" stroke-dashoffset=".14" opacity="0" d="M92 378C140 378 156 262 212 262C262 262 268 330 312 330C366 330 372 142 428 142" stroke="#fff6dc" stroke-opacity=".75" stroke-width="14"/>
         </g>
-        <g id="head" opacity="0"><circle r="58" fill="url(#s-head)"/><circle r="9" fill="#fffbe8"/></g>
-        <path id="arrow" class="arrow" d="M440 90L425 150L379 104Z" fill="#fff4cf" stroke="#fff4cf" stroke-width="8" stroke-linejoin="round"/>
-        <g id="tileTop" opacity="0"><rect width="512" height="512" fill="url(#s-gloss)"/></g>
-        <rect id="shine" x="-260" y="-80" width="170" height="720" fill="url(#s-shine)" transform="skewX(-18)" opacity="0"/>
+        <g id="head" opacity="0"><circle r="46" fill="url(#head)"/><circle r="15" fill="#fff6dc"/></g>
+        <rect width="512" height="512" fill="url(#sheen)"/>
       </g>
-      <rect id="rim" x="3" y="3" width="506" height="506" rx="113" fill="none" stroke="#fff" stroke-opacity=".10" stroke-width="6" opacity="0"/>
+      <rect x="3" y="3" width="506" height="506" rx="113" fill="none" stroke="#fff" stroke-opacity=".10" stroke-width="6"/>
     </svg>
   </div>
-  <h1 id="title">趋势波段</h1>
+  <div class="word"><h1 id="title">趋势波段</h1><div class="sub" id="sub">TREND · SWING</div></div>
 </div>
 
 <div class="boot" id="boot">
-  <div class="bar" id="bar"><i></i></div>
-  <div class="msg" id="msg">正在启动</div>
+  <svg viewBox="0 0 240 44" aria-hidden="true">
+    <defs>
+      <linearGradient id="ld-g" gradientUnits="userSpaceOnUse" x1="2" y1="0" x2="238" y2="0"><stop offset="0" stop-color="#ff5a4a"/><stop offset=".55" stop-color="#ffb13b"/><stop offset="1" stop-color="#fff0c4"/></linearGradient>
+      <radialGradient id="ld-head"><stop offset="0" stop-color="#fff8dc" stop-opacity=".9"/><stop offset=".35" stop-color="#ffd166" stop-opacity=".45"/><stop offset="1" stop-color="#ffb13b" stop-opacity="0"/></radialGradient>
+    </defs>
+    <path d="M2 38C22 38 40 22 62 22C84 22 90 31 112 31C136 31 150 12 174 12C194 12 200 20 214 20C224 20 230 5 238 5" fill="none" stroke="#fff" stroke-opacity=".13" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <path id="ldFill" pathLength="1" stroke-dasharray="1" stroke-dashoffset="1" d="M2 38C22 38 40 22 62 22C84 22 90 31 112 31C136 31 150 12 174 12C194 12 200 20 214 20C224 20 230 5 238 5" fill="none" stroke="url(#ld-g)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" opacity="0"/>
+    <g id="ldHead"><circle r="13" fill="url(#ld-head)"/><circle r="3.2" fill="#fff6dc"/></g>
+  </svg>
+  <div class="msg" id="msg">正在启动本地后端</div>
 </div>
 <div class="err" id="err">
   <b>后端没有启动成功</b>（等了 <span id="waited">90</span> 秒）。可以这样排查：<br>
@@ -123,88 +109,66 @@ body.leaving .boot { opacity: 0 !important; transition: opacity .25s; }
     .map(x => (/^\d+$/.test(x) ? `http://127.0.0.1:${x}/` : x.replace(/\/?$/, '/')));
   const CANDS = [APP, ...ALT.filter(u => u !== APP)];
   let TARGET = APP;
-  const END = 3.0;                    // 开场一共这么多秒（后端早就在运行时也让它播完，再跳走）
+  const END = 2.4;                    // 开场一共这么多秒（后端早就在运行时也让它播完，再跳走）
   const TIMEOUT = 90000;
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const t0 = performance.now();
   const $ = id => document.getElementById(id);
-  const bar = $('bar'), msg = $('msg');
+  const msg = $('msg');
   let ready = false, done = false;
 
-  // ================= 开场：一个镜头，按时间逐帧画 =================
+  // ================= 开场：按时间逐帧画 =================
   const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
   const seg = (t, a, b) => clamp((t - a) / (b - a));
   const lerp = (a, b, k) => a + (b - a) * k;
   const eo3 = x => 1 - Math.pow(1 - x, 3);
   const eio2 = x => (x < .5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2);
-  const eoBack = x => { const c1 = 1.9, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); };
-  function bezier(x1, y1, x2, y2) {                                   // 同 CSS 的 cubic-bezier
-    const cx = 3 * x1, bx = 3 * (x2 - x1) - cx, ax = 1 - cx - bx, cy = 3 * y1, by = 3 * (y2 - y1) - cy, ay = 1 - cy - by;
-    const X = s => ((ax * s + bx) * s + cx) * s, Y = s => ((ay * s + by) * s + cy) * s;
-    return x => { let lo = 0, hi = 1, s = x; for (let i = 0; i < 24; i++) { const v = X(s); if (Math.abs(v - x) < 1e-5) break; if (v < x) lo = s; else hi = s; s = (lo + hi) / 2; } return Y(s); };
-  }
-  const cam = bezier(.55, 0, .12, 1);                                 // 拉远：起步稳，收尾很软
 
-  const logo = $('logo'), shadow = $('shadow'), tileBg = $('tileBg'), tileTop = $('tileTop'), rim = $('rim'), shine = $('shine');
-  const trend = $('trend'), glow = $('glow'), head = $('head'), arrow = $('arrow'), title = $('title'), boot = $('boot'), sky = $('sky');
-  const ks = [...document.querySelectorAll('.k')].map(el => ({ el, x: +el.dataset.x, reach: 0 }));
+  const logo = $('logo'), trend = $('trend'), glow = $('glow'), pulse = $('pulse'), ghost = $('ghost'), head = $('head'),
+        title = $('title'), sub = $('sub'), boot = $('boot');
   const L = trend.getTotalLength();
-  const T_DRAW0 = .3, T_DRAW1 = 1.4;
-  const drawP = t => eio2(seg(t, T_DRAW0, T_DRAW1));
-  for (const k of ks) {                                               // 光点走到每根 K 线的位置才让它长出来
-    k.reach = T_DRAW1;
-    for (let t = T_DRAW0; t <= T_DRAW1; t += .005) { if (trend.getPointAtLength(drawP(t) * L).x >= k.x - 36) { k.reach = t; break; } }
-  }
-
-  // 背景行情轮廓：一排淡淡的 K 线，整体向上，开场时浮现、结尾退去
-  (function buildSky() {
-    let seed = 20261102, px = 12; const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296; let out = '';
-    for (let i = 0; i < 64; i++) {
-      const o = px, c = px + (rnd() - .36) * 2.2 + .32; px = Math.max(5, Math.min(44, c));
-      const up = c >= o, hi = Math.max(o, c) + rnd() * 1.6, lo = Math.min(o, c) - rnd() * 1.6, x = 1.5 + i * 3.08, col = up ? '#ff5a6a' : '#27d39a';
-      out += `<rect x="${(x + 1.15).toFixed(2)}" y="${(60 - hi * 1.15).toFixed(2)}" width=".26" height="${((hi - lo) * 1.15).toFixed(2)}" fill="${col}"/>` +
-             `<rect x="${x.toFixed(2)}" y="${(60 - Math.max(o, c) * 1.15).toFixed(2)}" width="2.56" height="${Math.max(.5, Math.abs(c - o) * 1.15).toFixed(2)}" fill="${col}"/>`;
-    }
-    sky.innerHTML = out;
-  })();
+  const setHead = (p, extra = 1) => {
+    const pt = trend.getPointAtLength(clamp(p) * L);
+    head.setAttribute('transform', `translate(${pt.x.toFixed(1)} ${pt.y.toFixed(1)}) scale(${extra.toFixed(3)})`);
+  };
 
   function render(t) {
-    // 1) 一笔画出趋势线 + 光点
-    const p = drawP(t);
+    // 1) 底板浮现
+    const tile = eo3(seg(t, 0, .7));
+    logo.style.opacity = String(tile); logo.style.transform = `scale(${(.95 + .05 * tile).toFixed(4)})`;
+    // 2) 一束光把波段线画出来
+    const p = eio2(seg(t, .4, 1.5));
     trend.style.strokeDashoffset = glow.style.strokeDashoffset = String(1 - p);
-    const pt = trend.getPointAtLength(p * L);
-    head.setAttribute('transform', `translate(${pt.x.toFixed(1)} ${pt.y.toFixed(1)})`);
-    head.style.opacity = String(seg(t, .3, .5) * (1 - seg(t, 1.4, 1.85)));
-    // 2) K 线随光点依次长出
-    for (const k of ks) { const v = eo3(seg(t, k.reach, k.reach + .5)); k.el.style.opacity = String(clamp(v * 2)); k.el.style.transform = `scaleY(${(.15 + .85 * v).toFixed(3)})`; }
-    // 3) 箭头点亮
-    const a = seg(t, 1.38, 1.88);
-    arrow.style.opacity = String(clamp(a * 3)); arrow.style.transform = `scale(${(.4 + .6 * eoBack(a)).toFixed(3)})`;
-    // 4) 镜头：先缓缓推近一点点，再拉远到图标的真实大小
-    const s = t < 1.5 ? lerp(5.2, 4.7, eo3(seg(t, 0, 1.5))) : lerp(4.7, 1, cam(seg(t, 1.5, 2.65)));
-    logo.style.transform = `scale(${s.toFixed(4)})`;
-    // 5) 底板在拉远的过程中浮现；一道光扫过
-    const tile = eo3(seg(t, 1.6, 2.4));
-    tileBg.style.opacity = tileTop.style.opacity = String(tile); rim.style.opacity = String(tile); shadow.style.opacity = String(tile);
-    const sh = seg(t, 2.5, 3.0);
-    shine.style.opacity = String(sh > 0 && sh < 1 ? Math.sin(sh * Math.PI) : 0);
-    shine.setAttribute('transform', `translate(${lerp(0, 900, eio2(sh)).toFixed(1)} 0) skewX(-18)`);
-    // 6) 名字淡入（字距微微收紧）
-    const ti = eo3(seg(t, 2.35, 2.95)), ls = lerp(.36, .24, ti);
-    title.style.opacity = String(ti); title.style.letterSpacing = ls.toFixed(3) + 'em'; title.style.paddingLeft = ls.toFixed(3) + 'em';
-    title.style.transform = `translateY(${((1 - ti) * 8).toFixed(2)}px)`;
-    // 7) 背景行情轮廓：浮现 → 退去；底部的线最后出现
-    sky.style.opacity = String(.16 * seg(t, .1, 1.0) * (1 - seg(t, 2.1, 2.9)));
-    sky.style.transform = `translateX(${(-t * .5).toFixed(2)}%)`;
-    boot.style.opacity = String(seg(t, 2.6, 3.0));
+    ghost.style.opacity = String(eo3(seg(t, .7, 1.5)));
+    head.style.opacity = String(seg(t, .4, .6));
+    const pop = seg(t, 1.5, 2.0);                                         // 到达终点：光点弹一下
+    setHead(p, lerp(1.7, 1, eo3(seg(t, 1.35, 1.9))) + .28 * Math.sin(pop * Math.PI) * (1 - pop));       // 画线时光点大一些、醒目；到终点后收回原大小
+    // 3) 名字、副标题淡入
+    const w = eo3(seg(t, 1.2, 1.9)); title.style.opacity = String(w); title.style.transform = `translateY(${((1 - w) * 8).toFixed(2)}px)`;
+    const s = eo3(seg(t, 1.5, 2.1)); sub.style.opacity = String(s); sub.style.transform = `translateY(${((1 - s) * 6).toFixed(2)}px)`;
+    // 4) 加载区浮现
+    boot.style.opacity = String(seg(t, 1.7, 2.3));
+  }
+
+  // ================= 加载线：光点沿着波段线往前走 =================
+  const ldFill = $('ldFill'), ldHead = $('ldHead'), LL = ldFill.getTotalLength();
+  let target = .05, disp = 0, popAt = 0;
+  function drawLoader(now) {
+    disp += (target - disp) * .08;
+    const p = clamp(disp);
+    ldFill.style.strokeDashoffset = String(1 - p); ldFill.style.opacity = p > .006 ? '1' : '0';
+    const pt = ldFill.getPointAtLength(p * LL);
+    const breathe = 1 + .12 * Math.sin(now / 260) + (popAt ? .5 * Math.max(0, 1 - (now - popAt) / 500) : 0);        // 光点呼吸；走到终点时弹一下
+    ldHead.setAttribute('transform', `translate(${pt.x.toFixed(1)} ${pt.y.toFixed(1)}) scale(${breathe.toFixed(3)})`);
   }
 
   // ================= 启动流程 =================
-  const tickTimer = setInterval(() => {                  // 等得久了才提示秒数，让人知道没卡住
+  const tickTimer = setInterval(() => {                  // 等待时光点缓慢逼近 84%（只是估计）；文字写出已等的秒数，让人知道没卡住
     if (ready) return;
+    target += (.84 - target) * .035;
     const s = Math.round((performance.now() - t0) / 1000);
-    msg.textContent = s < 5 ? '正在启动' : `正在启动 · ${s} 秒（首次约 5~15 秒）`;
-  }, 500);
+    msg.innerHTML = s < 4 ? '正在启动本地后端' : `正在启动本地后端 · <em>${s}</em> 秒（首次约 5~15 秒）`;
+  }, 200);
   function probe(base) {                                 // 本页是本地文件，读不到后端的响应内容：用后端的 favicon.svg 当图片加载，加载成功 = 本软件已就绪
     return new Promise(res => {
       const img = new Image();
@@ -227,29 +191,50 @@ body.leaving .boot { opacity: 0 !important; transition: opacity .25s; }
       if (performance.now() > deadline) { fail(); return; }
       await new Promise(r => setTimeout(r, 500));
     }
-    bar.classList.add('full'); msg.textContent = '已就绪';
+    target = .92; msg.textContent = '已连接，正在载入行情与界面';                                        // 后端真的连上了
+    await new Promise(r => setTimeout(r, 500));
+    target = 1; msg.textContent = '准备就绪';
+    for (let i = 0; i < 40 && disp < .985; i++) await new Promise(r => setTimeout(r, 50));             // 等光点走到终点
+    popAt = performance.now();
     const wait = Math.max(0, END * 1000 - (performance.now() - t0));
-    setTimeout(go, reduce ? 0 : wait + 120);
+    setTimeout(go, reduce ? 0 : wait + 380);
   }
   function go() {
     if (done) return; done = true;
     clearInterval(tickTimer);
-    document.body.classList.add('leaving');             // 只收起底部的线和字；图标和名字原地不动，index.html 的 #boot 接着显示同样的画面
+    document.body.classList.add('leaving');             // 只收起加载区；图标和名字原地不动，index.html 的 #boot 接着显示同样的画面
     setTimeout(() => location.replace(TARGET + '?splash=1'), reduce ? 0 : 260);
   }
   function fail() {
     clearInterval(tickTimer);
-    $('boot').style.display = 'none';
+    boot.style.display = 'none';
     $('waited').textContent = Math.round((performance.now() - t0) / 1000);
     $('err').style.display = 'block';
   }
-  $('retry').onclick = () => { $('err').style.display = 'none'; $('boot').style.display = ''; deadline = performance.now() + 60000; ready = false; loop(); };
+  $('retry').onclick = () => { $('err').style.display = 'none'; boot.style.display = ''; deadline = performance.now() + 60000; ready = false; loop(); };
   $('openanyway').onclick = () => location.replace(TARGET);
   addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') && ready) go(); });     // 后端就绪后，按 Enter / 空格直接进入
 
-  if (qs.has('freeze')) { render(parseFloat(qs.get('freeze')) || 0); clearInterval(tickTimer); return; }       // 调试：只画某一刻的静止画面
-  if (reduce) render(END);                                                                                     // 系统设置了「减少动态效果」：直接显示最终画面
-  else { const play = now => { const t = (now - t0) / 1000; render(Math.min(t, END)); if (t < END) requestAnimationFrame(play); }; requestAnimationFrame(play); }
+  if (qs.has('freeze')) {                                // 调试：只画某一刻的静止画面
+    render(parseFloat(qs.get('freeze')) || 0); clearInterval(tickTimer);
+    target = .55; disp = .55; drawLoader(0); msg.innerHTML = '正在启动本地后端 · <em>7</em> 秒（首次约 5~15 秒）';
+    return;
+  }
+  if (reduce) { render(END); target = disp = .3; drawLoader(0); }
+  else {
+    const play = now => {
+      const t = (now - t0) / 1000;
+      render(Math.min(t, END));
+      if (t > END) {                                      // 开场播完后还在等后端：一束光每隔几秒沿着图标里的波段线扫过，画面不是死的
+        const ph = (t - END) % 3.6, q = seg(ph, 2.0, 3.2), sp = lerp(-.14, 1, eio2(q));
+        pulse.style.strokeDashoffset = String(-sp); pulse.style.opacity = String(q > 0 && q < 1 ? Math.sin(q * Math.PI) : 0);
+        setHead(1, 1 + .06 * Math.sin(t * 2.4));
+      }
+      drawLoader(now);
+      requestAnimationFrame(play);
+    };
+    requestAnimationFrame(play);
+  }
   loop();
 })();
 </script>
