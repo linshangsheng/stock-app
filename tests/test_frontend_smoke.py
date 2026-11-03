@@ -97,3 +97,5 @@ def test_page_opens_without_errors(base, tmp_path, route):
     assert not errs, f"{route}：浏览器控制台有报错：\n" + "\n".join(errs[:5])
     if route == "backtest/score":
         assert "实盘成绩单" in dom and "sb-card" in dom
+    if route == "settings":
+        assert "数据健康" in dom and ("hl-issue" in dom or "数据正常" in dom or "需要留意" in dom or "有问题" in dom), "设置页没有渲染出「数据健康」面板"

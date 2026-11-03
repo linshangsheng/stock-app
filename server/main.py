@@ -10,7 +10,7 @@ import logging
 import os
 import threading
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import APP_NAME, AUTHOR, COPYRIGHT, EMAIL, LICENSE, __version__
-from . import backup, backtest, daily_view, risk_view, datasource_events as ev_mod, db, ingest, markets, features as feats, market_calendar as mc, portfolio, quality, scanner, settings, \
+from . import backup, backtest, daily_view, data_health, restart, risk_view, datasource_events as ev_mod, db, ingest, markets, features as feats, market_calendar as mc, portfolio, quality, scanner, settings, \
     selection, setups, throttle, universe
 from .datasource_cn import get_source
 from .jobs import manager
@@ -128,12 +128,29 @@ def _build_id() -> str:
 
 
 BUILD_ID = _build_id()
+STARTED_AT = datetime.now().isoformat(timespec="seconds")
 
 
 @app.get("/api/ping")
 def ping():
-    return {"ok": True, "version": app.version, "build": BUILD_ID, "disk_build": _build_id(), "auth_required": bool(settings.cfg()["server"].get("token")),
+    return {"ok": True, "version": app.version, "build": BUILD_ID, "disk_build": _build_id(), "pid": os.getpid(), "started": STARTED_AT,
+            "auth_required": bool(settings.cfg()["server"].get("token")),
             "datasource": settings.cfg()["datasource"], "demo": {"CN": markets.is_demo("CN"), "US": markets.is_demo("US")}}
+
+
+@app.post("/api/restart")
+def restart_backend(request: Request, body: dict = Body(default={})):
+    """后端自己重启（代码 / 配置更新后不用再去任务管理器结束 Python）。有任务在跑时默认拒绝（409 + 清单），带 force 才强行重启。
+    没设访问口令时只允许本机调用。重启靠新进程接班：见 server/restart.py。"""
+    token = settings.cfg()["server"].get("token") or ""
+    host = request.client.host if request.client else ""
+    if not token and host not in ("127.0.0.1", "::1", "localhost", "testclient"):
+        raise HTTPException(403, "没有设置访问口令时，只允许在本机重启后端")
+    b = restart.blockers(manager.state, _bt_jobs)
+    if b and not body.get("force"):
+        return JSONResponse({"ok": False, "blocked": b, "message": "有任务正在运行：" + "；".join(b) + "。重启会中断它们。"}, status_code=409)
+    info = restart.schedule()
+    return {"ok": True, "pid": info["pid"], "message": "后端正在重启，约 5~15 秒后自动回来"}
 
 
 @app.get("/api/about")
@@ -628,6 +645,14 @@ def datasources_probe(market: str = "CN"):
     for r in res:
         r["label"] = SOURCE_NAMES.get(r["source"], r["source"])
     return _wrap(market, status="ok", results=res, usable=[r["label"] for r in res if r["ok"]])
+
+
+@app.get("/api/data/health")
+def data_health_get(market: str = "CN"):
+    """数据健康面板：一个结论 + 逐条发现（新鲜度、当日覆盖与缺失名单、闸门明细、各数据源近 7 天成功率、更新任务、备份、磁盘、后端内存）。只读。"""
+    market = _need_cn(market)
+    res = data_health.build(market, jobs_state=manager.state, scheduler_on=manager._timer is not None)
+    return _wrap(market, **{k: v for k, v in res.items() if k != "market"})
 
 
 @app.post("/api/jobs/{task}")
@@ -1512,6 +1537,9 @@ def main():
             if not Path(f).exists():
                 raise SystemExit(f"找不到证书文件：{f}（可用 python tools/make_cert.py 生成自签名证书，见 docs/使用手册.md）")
         kw = {"ssl_certfile": cert, "ssl_keyfile": key}
+    if os.environ.get(restart.ENV_FLAG):               # 「重启后端」拉起的接班进程：先等旧进程退出、端口空出来
+        mine = [int(os.environ["PORT"])] if os.environ.get("PORT") else [int(s["port"]), *[int(x) for x in (s.get("fallback_ports") or [])]]
+        restart.wait_previous_instance(mine, _is_ours)
     if os.environ.get("PORT"):                         # 明确指定了端口（测试 / 预览）：照用，不自动换
         port = int(os.environ["PORT"])
     else:

@@ -6,6 +6,7 @@ import { $, $$, h, clear, mountIcons, toast, modal, setMarketFmt } from './util.
 import { destroyDetail, themeChanged } from './detail.js';
 import { restyleCharts } from './chart.js';
 import { screener } from './screener.js';
+import { restartBackend, manualRestartHelp } from './restart.js';
 import { watchlist } from './watchlist.js';
 import { portfolio } from './portfolio.js';
 import { backtestView } from './backtest.js';
@@ -152,17 +153,20 @@ setInterval(checkAlerts, 60000);
 let _build = null;
 const updMsg = h('span', {}, '软件已更新');
 const updBtn = h('button', { class: 'btn sm primary', onclick: () => location.reload() }, '点这里刷新');
-const updBar = h('div', { class: 'alert info', id: 'update-bar', hidden: true }, updMsg, updBtn);        // 样式见 style.css #update-bar（底部居中的提示条，不再盖住页面标题）
+const rstBtn = h('button', { class: 'btn sm primary', hidden: true, onclick: () => restartBackend() }, '立即重启');       // 后端自己退出再启动，不用再去任务管理器结束 Python
+const howBtn = h('button', { class: 'btn sm primary', hidden: true, onclick: () => manualRestartHelp() }, '怎么重启');       // 旧版后端没有重启接口：给出手动步骤
+const updBar = h('div', { class: 'alert info', id: 'update-bar', hidden: true }, updMsg, updBtn, rstBtn, howBtn);        // 样式见 style.css #update-bar（底部居中的提示条，不再盖住页面标题）
 document.body.append(updBar);
 async function checkUpdate() {
   try {
     const p = await api('/ping', { market: false, cache: false });
     if (p.disk_build && p.build && p.disk_build !== p.build) {
       // 磁盘上的代码比正在运行的后端新：只刷新页面不够，必须重启后端
-      updMsg.textContent = '软件文件已更新，需要重启后端才生效：任务管理器结束 Python，再双击「Stock App」';
-      updBtn.hidden = true; updBar.hidden = false;
+      const canRestart = p.pid !== undefined;                       // 新版后端的 ping 才带进程号，也只有它有 /api/restart
+      updMsg.textContent = canRestart ? '软件文件已更新，需要重启后端才生效' : '软件文件已更新，需要重启后端才生效（当前后端是旧版，这一次要手动重启）';
+      updBtn.hidden = true; rstBtn.hidden = !canRestart; howBtn.hidden = canRestart; updBar.hidden = false;
     } else if (_build && p.build && p.build !== _build) {
-      updMsg.textContent = '软件已更新'; updBtn.hidden = false; updBar.hidden = false;
+      updMsg.textContent = '软件已更新'; updBtn.hidden = false; rstBtn.hidden = true; howBtn.hidden = true; updBar.hidden = false;
     }
     _build = _build || p.build;
   } catch { /* 后端未启动 */ }

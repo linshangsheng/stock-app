@@ -492,3 +492,17 @@ table.fp-cmp td:first-child { white-space: nowrap; }
 .rk-name { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rk-bar { height: 8px; border-radius: 4px; background: var(--field); overflow: hidden; } .rk-bar i { display: block; height: 100%; border-radius: 4px; background: var(--accent); }
 .rk-bar i.hot { background: var(--warn); } .rk-pct { text-align: right; }
+
+/* 数据健康面板（设置页最上面）+ 重启后端的等待层 */
+.hl-issues { display: grid; gap: 6px; }
+.hl-issue { display: grid; grid-template-columns: 22px 1fr; gap: 8px; padding: 8px 10px; border-radius: 10px; background: var(--panel); align-items: start; }
+.hl-issue.bad { background: var(--bad-soft); } .hl-issue.warn { background: var(--warn-soft); } .hl-issue.info { background: var(--accent-soft); }
+.hl-ico { width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; margin-top: 1px; background: var(--field-2); }
+.hl-issue.bad .hl-ico { background: var(--danger); color: #fff; } .hl-issue.warn .hl-ico { background: var(--warn); color: #fff; } .hl-issue.info .hl-ico { background: var(--accent); color: #fff; }
+.hl-t { font-weight: 600; font-size: 13px; }
+tr.dim { opacity: .55; }
+.hl-bad { color: var(--danger); }   /* 数据有问题的数字：用风险色，不用「跌」的颜色（A 股里跌是绿色） */
+.restart-ov { position: fixed; inset: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; background: rgba(8,10,20,.62); backdrop-filter: blur(6px); }
+.restart-card { background: var(--bg); color: var(--text); border-radius: var(--radius); box-shadow: var(--shadow); padding: 26px 32px; text-align: center; max-width: min(440px, 88vw); }
+#update-bar button[hidden] { display: none; }
+.modal ol li { margin: 2px 0; }

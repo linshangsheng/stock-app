@@ -3,9 +3,11 @@ import { get, post, put, state } from './api.js';
 import { h, clear, fmtPct, fmtNum, fmtMoney, toast, confirmBox, modal, dirClass } from './util.js';
 import { prefs } from './db.js';
 import { loadAbout, aboutBlock } from './about.js';
+import { healthPanel } from './health.js';
 
 let pollTimer = null;
 const stopPoll = () => { clearInterval(pollTimer); pollTimer = null; };
+let healthView = null;
 
 export const settingsView = {
   layout: 'page',
@@ -13,11 +15,13 @@ export const settingsView = {
     const el = ctx.pageEl; clear(el); stopPoll();
     const wrap = h('div', { class: 'pane-body page' });
     el.append(wrap);
-    const secData = h('div', { class: 'card' }), secAlloc = h('div', { class: 'card mt' }), secPool = h('div', { class: 'card mt' }), secCost = h('div', { class: 'card mt' }), secLook = h('div', { class: 'card mt' }), secNotify = h('div', { class: 'card mt' }), secBackup = h('div', { class: 'card mt' }), secStorage = h('div', { class: 'card mt' }), secAbout = h('div', { class: 'card soft mt' });
-    wrap.append(h('h1', { class: 'mb' }, '设置'), secData, secAlloc, secPool, secCost, secLook, secNotify, secBackup, secStorage, secAbout);
+    healthView?.destroy(); const health = healthView = healthPanel();
+    const secData = h('div', { class: 'card mt' }), secAlloc = h('div', { class: 'card mt' }), secPool = h('div', { class: 'card mt' }), secCost = h('div', { class: 'card mt' }), secLook = h('div', { class: 'card mt' }), secNotify = h('div', { class: 'card mt' }), secBackup = h('div', { class: 'card mt' }), secStorage = h('div', { class: 'card mt' }), secAbout = h('div', { class: 'card soft mt' });
+    wrap.append(h('h1', { class: 'mb' }, '设置'), health.el, secData, secAlloc, secPool, secCost, secLook, secNotify, secBackup, secStorage, secAbout);
 
     let cfg = {};
     try { cfg = await get('/settings', {}, { cache: false }); } catch (e) { wrap.append(h('div', { class: 'alert bad' }, e.message)); return; }
+    health.mount();                                  // 数据健康：设置页最上面，单独加载，不拖慢下面的各块
 
     // ---------- 数据与更新 ----------
     async function renderData() {
@@ -316,7 +320,7 @@ export const settingsView = {
 
     renderData(); renderAlloc(); renderPool().then(renderBias); renderCost(); renderLook(); renderNotify(); renderBackup(); renderStorage();
   },
-  cleanup() { stopPoll(); },
+  cleanup() { stopPoll(); healthView?.destroy(); },
 };
 
 function kv(k, v, cls = '') { return h('div', { class: 'kv' }, h('span', { class: 'k' }, k), h('span', { class: 'v num ' + cls }, v)); }

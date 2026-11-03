@@ -8,7 +8,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from . import settings
+from . import settings, source_stats
 
 
 class CircuitOpen(RuntimeError):
@@ -96,12 +96,14 @@ class Throttle:
             try:
                 res = fn(*args, **kwargs)
                 self.record_success()
+                source_stats.record(self.name, True)                    # 数据健康面板：按天统计成功 / 失败
                 return res
             except CircuitOpen:
                 raise
             except Exception as e:  # noqa: BLE001 - 上游异常种类繁多，统一按失败处理
                 last_exc = e
                 self.record_failure()
+                source_stats.record(self.name, False, f"{type(e).__name__}: {e}")
                 if self.is_open:
                     raise CircuitOpen(f"{self.name}: 连续失败触发熔断：{e}") from e
                 if attempt < retries:

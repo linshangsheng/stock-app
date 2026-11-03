@@ -508,7 +508,7 @@ function statusBar(d, jobs, ctx, recompute) {
   const cell = (k, ...v) => h('div', { class: 'cell' }, h('span', { class: 'k' }, k), h('span', { class: 'v' }, ...v));
   const gateTip = (run?.gate?.checks || []).map(c => `${c.ok ? '✓' : '✗'} ${c.name}: ${c.msg}`).join('\n');
   return h('div', { class: 'status-bar' },
-    cell('数据状态', h('span', { class: 'badge ' + (gate === 'PASS' ? 'ok' : gate ? 'bad' : '') , title: gateTip }, gate === 'PASS' ? '完整性 通过' : gate ? '数据不完整' : '—'),
+    cell('数据状态', h('a', { class: 'badge ' + (gate === 'PASS' ? 'ok' : gate ? 'bad' : ''), href: '#/settings', style: 'text-decoration:none', title: gateTip + '\n\n点这里看「数据健康」：新不新、全不全、数据源成不成功' }, gate === 'PASS' ? '完整性 通过' : gate ? '数据不完整' : '—'),
       h('span', { class: 'num small muted' }, jobs?.data_asof || d.data_asof || '—')),
     cell(`个股开仓闸门（${run?.regime?.market_name || (state.market === 'US' ? '美股' : 'A股')}）`,
       reg ? h('span', { class: 'pill-state ' + reg, title: REGIME[reg]?.[1] }, REGIME[reg]?.[0] || reg) : '—',
