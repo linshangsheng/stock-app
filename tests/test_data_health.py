@@ -201,3 +201,17 @@ def test_waiting_count_is_marked_as_lower_bound_when_window_is_exceeded(healthy)
         c.commit()
     r = dh.build("CN")["jobs"]["recent"][0]
     assert r["status"] == "waiting" and r["n"] == dh.WINDOW and r["n_min"] is True        # 顶到窗口边界：只能说「至少这么多」
+
+
+def test_rss_mb_works_without_psutil(monkeypatch):
+    """psutil 不在依赖清单里：没装它时（云端新机器很常见）也要读得到内存。Windows 走 ctypes，Linux 读 /proc。"""
+    import builtins
+    real = builtins.__import__
+
+    def no_psutil(name, *a, **k):
+        if name == "psutil":
+            raise ImportError("blocked")
+        return real(name, *a, **k)
+    monkeypatch.setattr(builtins, "__import__", no_psutil)
+    v = dh.rss_mb()
+    assert v is not None and 10 < v < 100_000

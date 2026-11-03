@@ -10,6 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("STOCKAPP_NO_TRIM", "1")       # 测试里每个用例都重新构建一次上下文，「归还内存」会让整套测试慢约 15%；真实使用里构建一天只有几次，不受影响。memtrim 本身有专门的测试
 
 
 def _reload_settings(demo: bool):

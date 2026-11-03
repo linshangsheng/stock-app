@@ -5,13 +5,14 @@
 from __future__ import annotations
 
 import json
+import threading
 from bisect import bisect_right
 from datetime import datetime
 
 import numpy as np
 import pandas as pd
 
-from . import db, execution, features as feats, market_calendar as mc, markets, quality, selection, settings, setups, universe
+from . import db, execution, features as feats, market_calendar as mc, markets, memtrim, quality, selection, settings, setups, universe
 from .panel import load_panel
 
 LOOKBACK = 430          # MA200 / 252 日高点 / 120 日布林分位所需预热
@@ -35,6 +36,13 @@ def load_industry(conn) -> pd.Series:
     return df.set_index("symbol")["industry"] if len(df) else pd.Series(dtype=object)
 
 
+# 缓存里不留的特征：它们只是 compute_features 里的中间量，之后没有任何地方按名字用过（约占特征内存的 20%）。
+# 只在这里丢，回测 / 工具自己调 compute_features，不受影响。tests/test_memory.py 会检查：这些名字没有在别处被引用——
+# 以后谁要用其中某一个，测试会失败并提醒他把它从这个清单里拿掉。
+CACHE_DROP_FEATURES = ("vol_ma5", "vol_ma10", "vol_ma20", "amt_ma5", "atr20", "atr60", "hv60", "ll5", "ll20", "ext_atr_hh20",
+                       "pct_above_ma20_20d", "rs_10", "ind_ret_10", "ind_ret_20", "ind_rs_20")
+
+
 def build_context(conn, day: str, market: str = "CN", lookback: int = LOOKBACK):
     days = mc.trading_days(conn, None, day)[-lookback:]
     panel = load_panel(conn, days[0] if days else None, day, market=market)
@@ -54,8 +62,44 @@ def build_context(conn, day: str, market: str = "CN", lookback: int = LOOKBACK):
     vix = load_bench(conn, "^VIX", day) if market == "US" else None
     industry = load_industry(conn)
     feat = feats.compute_features(panel, l2, bench, industry, vix=vix)
+    for k in CACHE_DROP_FEATURES:
+        feat.f.pop(k, None)
     return {"panel": panel, "boards": boards, "names": names, "l2": l2, "cond": cond, "flags": flags,
             "feat": feat, "industry": industry, "days": days}
+
+
+# ---- 全市场上下文（面板 + 特征，约 1~2 GB）的进程内缓存 ----
+# 整个进程里任何时候只放一份：页面接口（main._scan_ctx）和盘后选股（_run_scan）共用这一个槽。
+# 钥匙 = (市场, 数据日, 参数指纹)：参数（股票池阈值、特征、形态……）改了，缓存自动失效，不会拿旧参数的结果。
+_shared: dict = {}
+_shared_lock = threading.Lock()
+
+
+def _ctx_key(market: str, day: str) -> tuple:
+    return (market, day, settings.config_hash(config_snapshot()))
+
+
+def _build_and_store(conn, day: str, market: str, store: bool):
+    """调用方须持有 _shared_lock。先放掉缓存里的旧那份、再构建：绝不让新旧两份全市场数据同时在内存里。"""
+    _shared.clear()
+    memtrim.trim()
+    ctx = build_context(conn, day, market)
+    memtrim.trim()                                       # 构建中用过的临时内存还给系统
+    if store:
+        _shared["key"], _shared["ctx"] = _ctx_key(market, day), ctx
+    return ctx
+
+
+def shared_context(market: str):
+    """页面接口用：返回 (ctx, 数据日)；缓存没有（或参数变了）才构建。并发请求排队等同一份，不各建一份。"""
+    with db.market_db(market) as c:
+        day = db.get_meta(c, "data_asof") or c.execute("SELECT MAX(date) FROM daily_bar").fetchone()[0]
+        if not day:
+            return None, None
+        with _shared_lock:
+            if _shared.get("key") != _ctx_key(market, day):
+                _build_and_store(c, day, market, store=True)
+            return _shared["ctx"], day
 
 
 def _held_symbols(market: str) -> set[str]:
@@ -280,7 +324,9 @@ def _run_scan(market: str, scan_date: str | None, persist: bool, include_preview
         if not day:
             return {"error": "no_data", "message": "尚无行情数据，请先初始化数据（设置页或 python -m server.cli init）"}
         gate = quality.check_gate(conn, market, day)
-        ctx = build_context(conn, day, market)
+        latest = db.get_meta(conn, "data_asof") or mc.last_closed_trading_day(conn, market)
+        with _shared_lock:                                    # 总是用最新数据、最新参数重新构建（行为不变）；最新交易日的这份顺手交给缓存，页面接口直接用，省一次 40 秒的构建
+            ctx = _build_and_store(conn, day, market, store=(day == latest))
         panel, feat, l2 = ctx["panel"], ctx["feat"], ctx["l2"]
         if day not in panel.dates:
             return {"error": "no_bar", "message": f"{day} 无行情数据"}

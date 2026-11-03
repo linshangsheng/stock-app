@@ -43,9 +43,7 @@ class Panel:
                      dict(self.meta))
 
 
-def load_frame(conn, start: str | None = None, end: str | None = None, symbols: list[str] | None = None,
-               only_l1: bool = True) -> pd.DataFrame:
-    """daily_bar 的长表（load_panel 与分块加载共用同一查询口径）。"""
+def _bar_query(start: str | None, end: str | None, symbols: list[str] | None, only_l1: bool) -> tuple[str, list]:
     q = "SELECT symbol,date,open,high,low,close,volume,amount,turnover,adj_factor,trade_status,is_st,is_temp FROM daily_bar"
     conds, args = [], []
     if start:
@@ -62,16 +60,72 @@ def load_frame(conn, start: str | None = None, end: str | None = None, symbols: 
         args += symbols
     if conds:
         q += " WHERE " + " AND ".join(conds)
+    return q, args
+
+
+def load_frame(conn, start: str | None = None, end: str | None = None, symbols: list[str] | None = None,
+               only_l1: bool = True) -> pd.DataFrame:
+    """daily_bar 的长表（分块加载等场景用；整个面板请用 load_panel，它不经过这张长表）。"""
+    q, args = _bar_query(start, end, symbols, only_l1)
     return pd.read_sql_query(q, conn, params=args)
+
+
+NUM_COLS = ("open", "high", "low", "close", "volume", "amount", "turnover", "adj_factor", "trade_status", "is_st", "is_temp")
+CHUNK = 100_000
+
+
+def load_columns(conn, start: str | None = None, end: str | None = None, symbols: list[str] | None = None,
+                 only_l1: bool = True):
+    """从数据库一块一块地读，直接填进数值数组，**不先建那张巨大的长表**。
+    pd.read_sql_query 会先把每一行变成 Python 对象和字符串再转成表：长表本身 47 MB 时，读的过程峰值要 179 MB（近 4 倍），
+    全市场（约 3900 只 × 430 日）会短暂吃掉 1 GB 以上，用完还不还给系统。这里的峰值约等于最终那几个数组的大小。
+    返回 (日期索引, 股票索引, 行的日期位置, 行的股票位置, {列名: 一维 float64 数组})；排序、缺失值处理与 pd.to_numeric(errors='coerce') 一致。"""
+    q, args = _bar_query(start, end, symbols, only_l1)
+    cur = conn.cursor()
+    cur.row_factory = None                                         # 要普通元组，不要 sqlite3.Row（更快、更省）
+    cur.execute(q, args)
+    sym_id: dict[str, int] = {}
+    date_id: dict[str, int] = {}
+    sy_c, dd_c, num_c = [], [], []
+    while True:
+        rows = cur.fetchmany(CHUNK)
+        if not rows:
+            break
+        n = len(rows)
+        sy_c.append(np.fromiter((sym_id.setdefault(r[0], len(sym_id)) for r in rows), dtype=np.int32, count=n))
+        dd_c.append(np.fromiter((date_id.setdefault(r[1], len(date_id)) for r in rows), dtype=np.int32, count=n))
+        num_c.append(np.array([r[2:] for r in rows], dtype=np.float64))      # None -> NaN
+        del rows
+    cur.close()
+    total = sum(len(x) for x in sy_c)
+    s_sorted, d_sorted = sorted(sym_id), sorted(date_id)
+    s_rank = np.empty(len(sym_id), dtype=np.int32)
+    d_rank = np.empty(len(date_id), dtype=np.int32)
+    for new, key in enumerate(s_sorted):
+        s_rank[sym_id[key]] = new
+    for new, key in enumerate(d_sorted):
+        d_rank[date_id[key]] = new
+    si = np.empty(total, dtype=np.int32)
+    di = np.empty(total, dtype=np.int32)
+    cols = {c: np.empty(total, dtype=np.float64) for c in NUM_COLS}
+    pos = 0
+    while sy_c:                                                    # 边拷贝边释放分块，峰值不会翻倍
+        sy, dd, nm = sy_c.pop(0), dd_c.pop(0), num_c.pop(0)
+        n = len(sy)
+        si[pos:pos + n], di[pos:pos + n] = s_rank[sy], d_rank[dd]
+        for j, c in enumerate(NUM_COLS):
+            cols[c][pos:pos + n] = nm[:, j]
+        pos += n
+    return pd.Index(d_sorted, name="date"), pd.Index(s_sorted, name="symbol"), di, si, cols
 
 
 def load_panel(conn, start: str | None = None, end: str | None = None, symbols: list[str] | None = None,
                only_l1: bool = True, float32: bool = True, market: str = "CN") -> Panel:
-    df = load_frame(conn, start, end, symbols, only_l1)
+    d_idx, s_idx, di, si, cols = load_columns(conn, start, end, symbols, only_l1)
     splits = None
-    if market == "US" and len(df):
+    if len(di) and market == "US":
         splits = pd.read_sql_query("SELECT symbol, ex_date, ratio_or_amount AS ratio FROM corp_actions WHERE type='split'", conn)
-    return panel_from_frame(df, float32=float32, splits=splits)
+    return _build_panel(d_idx, s_idx, di, si, cols, float32, splits)
 
 
 def split_restore_ratio(dates: pd.Index, symbols: pd.Index, splits: pd.DataFrame | None) -> pd.DataFrame | None:
@@ -92,20 +146,28 @@ def split_restore_ratio(dates: pd.Index, symbols: pd.Index, splits: pd.DataFrame
 
 
 def panel_from_frame(df: pd.DataFrame, float32: bool = True, splits: pd.DataFrame | None = None) -> Panel:
-    dt = np.float32 if float32 else np.float64
     if df.empty:
+        return _build_panel(None, None, None, None, None, float32, splits)
+    d_idx = pd.Index(np.sort(df["date"].unique()), name="date")
+    s_idx = pd.Index(np.sort(df["symbol"].unique()), name="symbol")
+    di, si = d_idx.get_indexer(df["date"]), s_idx.get_indexer(df["symbol"])
+    cols = {c: pd.to_numeric(df[c], errors="coerce").to_numpy(dtype=np.float64) for c in NUM_COLS}
+    return _build_panel(d_idx, s_idx, di, si, cols, float32, splits)
+
+
+def _build_panel(d_idx, s_idx, di, si, cols, float32: bool, splits) -> Panel:
+    """把「行 -> (日期位置, 股票位置, 各列数值)」铺成日期 × 股票的宽表，并算前复权。load_panel 与 panel_from_frame 共用这一份。
+    cols 里的数组用一个就丢一个（pop），不让十几张 float64 宽表同时留在内存里。"""
+    dt = np.float32 if float32 else np.float64
+    if d_idx is None or len(d_idx) == 0:
         e = pd.DataFrame()
         return Panel(pd.Index([]), pd.Index([]), {k: e for k in ("open", "high", "low", "close")},
                      {k: e for k in ("open", "high", "low", "close")}, e, e, e, e, e, e, e)
 
     # 比逐列 df.pivot 快数倍：一次建好行列索引，再按位置赋值（5000 只 × 430 日：约 20s -> 数秒）
-    d_idx = pd.Index(np.sort(df["date"].unique()), name="date")
-    s_idx = pd.Index(np.sort(df["symbol"].unique()), name="symbol")
-    di, si = d_idx.get_indexer(df["date"]), s_idx.get_indexer(df["symbol"])
-
     def wide(col):
         a = np.full((len(d_idx), len(s_idx)), np.nan, dtype=np.float64)
-        a[di, si] = pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=np.float64)
+        a[di, si] = cols.pop(col)
         return pd.DataFrame(a, index=d_idx, columns=s_idx)
 
     raw = {c: wide(c) for c in ("open", "high", "low", "close")}
@@ -114,6 +176,7 @@ def panel_from_frame(df: pd.DataFrame, float32: bool = True, splits: pd.DataFram
     # 前复权：以每只股票序列最后一日因子为基准。
     last_fac = factor.ffill().iloc[-1]
     ratio = factor.div(last_fac, axis=1)
+    del factor
     status = wide("trade_status").reindex(index=dates, columns=symbols)
     has_row = raw["close"].notna() | status.notna()
     status = status.fillna(0)
@@ -121,6 +184,7 @@ def panel_from_frame(df: pd.DataFrame, float32: bool = True, splits: pd.DataFram
     adj = {}
     for k, v in raw.items():
         adj[k] = (v * ratio).where(trading).astype(dt)
+    del ratio
     volume = wide("volume").where(trading).astype(dt)
     amount = wide("amount").where(trading).astype(dt)
     turnover = wide("turnover").where(trading).astype(dt)

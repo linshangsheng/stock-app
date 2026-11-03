@@ -125,7 +125,7 @@ export function healthPanel() {
       h('div', { class: 'grid c4 mt-s' },
         bk ? kv('最近备份', bk.last ? `${bk.last}（${bk.age_days === 0 ? '今天' : bk.age_days + ' 天前'}）` : '没有', `共 ${bk.count} 份；目录 ${bk.dir}`, bk.stale ? 'hl-bad' : '') : null,
         kv('磁盘剩余', d.disk_free_gb == null ? '—' : d.disk_free_gb + ' GB', '', d.disk_free_gb != null && d.disk_free_gb < 2 ? 'hl-bad' : ''),
-        kv('后端内存', p.rss_mb == null ? '—' : p.rss_mb + ' MB', '常驻内存；全市场面板约 2 GB 是正常的'), kv('后端已运行', upt, `进程号 ${p.pid}，启动于 ${p.started || '—'}`),
+        kv('后端内存', p.rss_mb == null ? '—' : p.rss_mb + ' MB', '真正占着的内存（Windows 看「已提交」，不看会被收缩的「工作集」）。全市场面板 + 特征在这里大约占 1 GB'), kv('后端已运行', upt, `进程号 ${p.pid}，启动于 ${p.started || '—'}`),
         kv('版本', p.version + ' · Python ' + p.python)),
       p.needs_restart ? h('div', { class: 'alert warn small mt-s' }, '磁盘上的软件文件比正在运行的后端新：需要重启后端才生效。') : null,
       h('div', { class: 'row wrap mt-s' }, h('button', { class: 'btn' + (p.needs_restart ? ' primary' : ''), onclick: () => restartBackend(), title: '后端自己退出再启动，约 5~15 秒；页面会自动刷新' }, '重启后端'),

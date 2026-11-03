@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import APP_NAME, AUTHOR, COPYRIGHT, EMAIL, LICENSE, __version__
-from . import backup, backtest, daily_view, data_health, restart, risk_view, datasource_events as ev_mod, db, ingest, markets, features as feats, market_calendar as mc, portfolio, quality, scanner, settings, \
+from . import backup, backtest, daily_view, data_health, memtrim, restart, risk_view, datasource_events as ev_mod, db, ingest, markets, features as feats, market_calendar as mc, portfolio, quality, scanner, settings, \
     selection, setups, throttle, universe
 from .datasource_cn import get_source
 from .jobs import manager
@@ -343,24 +343,12 @@ def indicators(symbol: str, names: str = "ma20,rsi14,macd_dif", market: str = "C
 # ---- 条件筛选（漏斗之外的手动补充）----------------------------------------------
 
 log = logging.getLogger("stock-app")
-_ctx_cache: dict = {}
-
-
-_ctx_lock = threading.Lock()
+_ctx_cache = scanner._shared                 # 与盘后选股共用同一个缓存槽（全市场面板 + 特征约 1~2 GB，整个进程只放一份）
+_ctx_lock = scanner._shared_lock
 
 
 def _scan_ctx(market: str):
-    with db.market_db(market) as c:
-        day = db.get_meta(c, "data_asof") or c.execute("SELECT MAX(date) FROM daily_bar").fetchone()[0]
-        if not day:
-            return None, None
-        key = (market, day)
-        with _ctx_lock:                       # 单次构建：全市场面板约 2 GB / 40 秒，并发请求只能排队等同一份，不能各建一份（否则内存被吃光、界面卡死）
-            if _ctx_cache.get("key") != key:
-                _ctx_cache.clear()
-                _ctx_cache["ctx"] = scanner.build_context(c, day, market)
-                _ctx_cache["key"] = key
-            return _ctx_cache["ctx"], day
+    return scanner.shared_context(market)
 
 
 @app.post("/api/analysis")
@@ -1308,6 +1296,8 @@ def backtest_post(body: dict = Body(...), market: str = "CN"):
         except Exception as e:  # noqa: BLE001
             import traceback
             _bt_jobs[jid] = {"status": "error", "kind": kind, "error": f"{type(e).__name__}: {e}", "trace": traceback.format_exc()[-1200:]}
+        finally:
+            memtrim.trim()                                    # 回测要把多年全市场数据读进内存，跑完把释放掉的还给系统
 
     threading.Thread(target=work, daemon=True).start()
     return {"job_id": jid, "status": "running"}

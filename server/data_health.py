@@ -27,10 +27,13 @@ JOB_NAME = {"init": "补全 / 初始化", "daily": "盘后任务链", "catch_up"
 
 
 def rss_mb() -> float | None:
-    """本进程当前占用的内存（MB）。优先 psutil；没有就在 Windows 用系统接口、在 Linux 读 /proc。取不到返回 None。"""
+    """本进程**真正占着**的内存（MB）：Windows 取「已提交 / 私有」内存，Linux 取常驻内存（RSS）。取不到返回 None。
+    不用 Windows 的「工作集」：大构建后我们会把空闲页从工作集里收走（server/memtrim.py），工作集会变得很小（几十 MB），
+    但内存其实还占着、需要时秒回来——拿它判断「机器要多大内存」会得出错误结论。优先 psutil；没装就用系统接口（psutil 不在依赖清单里）。"""
     try:
         import psutil
-        return round(psutil.Process().memory_info().rss / 1048576, 1)
+        mi = psutil.Process().memory_info()
+        return round((getattr(mi, "private", None) or mi.rss) / 1048576, 1)
     except Exception:  # noqa: BLE001
         pass
     try:
@@ -46,9 +49,11 @@ def rss_mb() -> float | None:
             pmc = PMC()
             pmc.cb = ctypes.sizeof(PMC)
             k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            psapi = ctypes.WinDLL("psapi", use_last_error=True)
             k32.GetCurrentProcess.restype = wintypes.HANDLE
-            ok = ctypes.WinDLL("psapi", use_last_error=True).GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(pmc), pmc.cb)
-            return round(pmc.WorkingSetSize / 1048576, 1) if ok else None
+            psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(PMC), wintypes.DWORD]     # 不声明参数类型，64 位句柄会溢出、读不到
+            ok = psapi.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(pmc), pmc.cb)
+            return round(pmc.PagefileUsage / 1048576, 1) if ok else None            # PagefileUsage = 已提交（私有）内存
         with open("/proc/self/status", encoding="utf-8") as f:
             for line in f:
                 if line.startswith("VmRSS:"):
