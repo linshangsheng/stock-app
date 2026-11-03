@@ -203,7 +203,7 @@ export const settingsView = {
         h('div', { class: 'row between wrap mb' }, h('div', {}, h('div', {}, '涨跌配色'), h('div', { class: 'hint' }, '默认随市场自适应：A股 红涨绿跌、美股 绿涨红跌。只改颜色映射，不影响数据与符号。')),
           seg([['auto', '随市场自适应'], ['red', '全局红涨绿跌'], ['green', '全局绿涨红跌']], mode, v => { prefs.set('colorMode', v); ctx.applyColors(); })),
         h('div', { class: 'row between wrap mb' }, h('div', {}, '主题'), seg([['auto', '跟随系统'], ['light', '浅色'], ['dark', '深色']], theme, v => { prefs.set('theme', v); ctx.applyTheme(); })),
-        h('div', { class: 'row between wrap mb' }, h('div', {}, h('div', {}, '启动后自动全屏'), h('div', { class: 'hint' }, '浏览器只允许在你点击 / 按键之后进入全屏：打开后第一次点击即全屏，按 Esc 退出（本次不再自动进入）；左下角 ⛶ 随时切换。')),
+        h('div', { class: 'row between wrap mb' }, h('div', {}, h('div', {}, '启动后自动全屏'), h('div', { class: 'hint' }, '桌面快捷方式打开的窗口本身就是全屏（按 F11 退出），但鼠标移到屏幕最上沿时 Edge 会滑出一条标题栏。打开后第一次点击 / 按键，这里会把它升级成「网页全屏」——不再有那条标题栏，按 Esc 退出（本次不再自动进入）；左下角 ⛶ 随时切换。关掉这个开关就不升级。')),
           seg([['on', '开'], ['off', '关']], prefs.get('autoFullscreen', true) ? 'on' : 'off', v => { prefs.set('autoFullscreen', v === 'on'); })),
         h('div', { class: 'row between wrap' }, h('div', {}, h('div', {}, '访问口令'), h('div', { class: 'hint' }, `后端 ${cfg.server.host}:${cfg.server.port}${cfg.server.token_set ? ' · 已设置口令' : ' · 仅本机访问，未设口令'}。开放局域网（host=0.0.0.0）时必须在 config.yaml 设置 server.token（系统含持仓数据）。`)),
           h('button', { class: 'btn sm', onclick: () => { const f = { t: prefs.get('token', '') }; modal('访问口令', h('label', { class: 'f' }, '与后端 server.token 一致', h('input', { type: 'password', value: f.t, oninput: e => { f.t = e.target.value; } })), [{ label: '取消' }, { label: '保存', primary: true, onclick: () => { prefs.set('token', f.t); toast('已保存', 'ok'); } }]); } }, '设置本机口令')));

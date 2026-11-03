@@ -8,7 +8,7 @@
 ' - creates the desktop shortcut "Stock App" on first run, and keeps its icon pointing at app.ico
 ' Keep this file ASCII-only: VBScript cannot read UTF-8 Chinese text.
 Option Explicit
-Dim sh, fso, dir, url, running, lnk, desktop, ico, lnkPath, splash, i, p, ports, altPorts, rc, inst
+Dim sh, fso, dir, url, running, lnk, desktop, ico, lnkPath, splash, i, p, ports, altPorts, rc, inst, prof, flags, seed
 Set sh = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 dir = fso.GetParentFolderName(WScript.ScriptFullName)
@@ -81,15 +81,46 @@ If Not running Then
   sh.Run "cmd /c python -m server.main >> data\server.log 2>&1", 0, False
 End If
 
-' ---- window: splash first (an app window without tabs / address bar, maximized) ----
-' the page goes fullscreen on first click, Esc exits
+' ---- window: splash first (an app window without tabs / address bar), opened FULLSCREEN right away ----
+' A web page may only request fullscreen after a click, so the window itself starts fullscreen (the maximized flag stays so F11
+' returns to a maximized window). Window-state flags are IGNORED when the browser is already running with the same profile
+' (the window opens small, with a title bar), so the app uses its own profile folder: it is always a separate browser process,
+' even while the user's own Edge / Chrome is open. The profile only holds browser state (cookies / local settings), no stock data.
+prof = dir & "\data\edge-profile"
+flags = " --user-data-dir=""" & prof & """ --no-first-run --no-default-browser-check --lang=zh-CN --disable-features=Translate --start-fullscreen --start-maximized"
+' The app profile is a fresh browser profile. Left alone it ends up with English as the first language (taken from Windows), so the
+' browser treats the Chinese pages as foreign and pops up "translate this page?". Seed the profile's Preferences once: Chinese first,
+' translation offers off. IMPORTANT: only while no browser process is using the profile - a running browser rewrites Preferences from
+' memory and would throw the seed away; if it is running we simply try again on a later launch (the marker file is written only on success).
+If Not fso.FileExists(prof & "\prefs-seeded-v2.txt") Then
+  If Not ProfileInUse("\data\edge-profile") Then
+    On Error Resume Next
+    If Not fso.FolderExists(dir & "\data") Then fso.CreateFolder dir & "\data"
+    If Not fso.FolderExists(prof) Then fso.CreateFolder prof
+    If Not fso.FolderExists(prof & "\Default") Then fso.CreateFolder prof & "\Default"
+    If fso.FileExists(prof & "\Default\Preferences") Then fso.DeleteFile prof & "\Default\Preferences", True
+    If Err.Number = 0 Then
+      Set seed = fso.CreateTextFile(prof & "\Default\Preferences", True)
+      seed.Write "{""intl"":{""accept_languages"":""zh-CN,zh,en-US,en"",""selected_languages"":""zh-CN,zh,en-US,en""},""translate"":{""enabled"":false}}"
+      seed.Close
+      If Err.Number = 0 Then
+        Set seed = fso.CreateTextFile(prof & "\prefs-seeded-v2.txt", True)
+        seed.Write "2"
+        seed.Close
+      End If
+    End If
+    Err.Clear
+    On Error GoTo 0
+  End If
+End If
+
 If fso.FileExists(dir & "\splash.html") Then
   splash = "file:///" & Replace(Replace(dir, "\", "/"), " ", "%20") & "/splash.html?url=" & url & "&alt=" & altPorts
   On Error Resume Next
-  sh.Run "msedge --app=""" & splash & """ --start-maximized", 1, False
+  sh.Run "msedge --app=""" & splash & """" & flags, 1, False
   If Err.Number = 0 Then WScript.Quit
   Err.Clear
-  sh.Run "chrome --app=""" & splash & """ --start-maximized", 1, False
+  sh.Run "chrome --app=""" & splash & """" & flags, 1, False
   If Err.Number = 0 Then WScript.Quit
   Err.Clear
   On Error GoTo 0
@@ -110,3 +141,19 @@ If Not running Then
   Next
 End If
 sh.Run url
+
+' True if a browser process was started with this profile folder (or if we cannot tell: then do not touch the profile).
+Function ProfileInUse(part)
+  Dim wmi, procs, pr
+  ProfileInUse = False
+  On Error Resume Next
+  Set wmi = GetObject("winmgmts:\\.\root\cimv2")
+  Set procs = wmi.ExecQuery("SELECT CommandLine FROM Win32_Process WHERE Name = 'msedge.exe' OR Name = 'chrome.exe'")
+  For Each pr In procs
+    If Not IsNull(pr.CommandLine) Then
+      If InStr(1, pr.CommandLine, part, 1) > 0 Then ProfileInUse = True
+    End If
+  Next
+  If Err.Number <> 0 Then ProfileInUse = True
+  Err.Clear
+End Function

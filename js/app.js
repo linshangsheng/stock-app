@@ -169,8 +169,10 @@ async function checkUpdate() {
 }
 setInterval(checkUpdate, 60000);
 
-// ---------- 全屏：启动后第一次点击 / 按键自动进入（浏览器只允许用户操作后全屏），Esc 退出 ----------
-// Esc 退出后本次会话不再自动进入；右下角 ⛶ 按钮随时切换。设置页可关闭「自动全屏」。
+// ---------- 全屏 ----------
+// 桌面快捷方式（启动股票.vbs）打开的窗口本身就是全屏的（没有标题栏）。但 Edge 在这种「窗口全屏」下，鼠标移到屏幕最上沿会滑出一条标题栏；
+// 网页级全屏（requestFullscreen）没有这个问题，只是浏览器规定必须先有一次点击 / 按键。所以：启动后第一次点击 / 按键，自动升级成网页级全屏，
+// Esc 退出（回到窗口全屏，F11 才能退出窗口全屏）；Esc 退出后本次会话不再自动进入；右下角 ⛶ 按钮随时切换。设置页可关闭「自动全屏」。
 const fsSupported = !!document.documentElement.requestFullscreen;
 const isFs = () => !!document.fullscreenElement;
 function enterFs() { if (fsSupported && !isFs()) document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => { /* 某些嵌入环境不允许 */ }); }
