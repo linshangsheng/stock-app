@@ -11,6 +11,7 @@ tzdata
 yfinance==1.7.0                 # US market data
 exchange_calendars==4.13.2      # US trading calendar (holidays / DST / early closes)
 requests
+pypinyin==0.55.0               # search stocks by pinyin initials (optional: without it search falls back to code and name)
 # Tests
 pytest==9.1.1
 httpx==0.28.1

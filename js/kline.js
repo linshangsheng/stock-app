@@ -1,9 +1,14 @@
-// 「K线」页：指数日 K 线（均线 + 成交额）；A 股指数（上证50 / 沪深300 / 创业板指）右侧带筹码分布（估算，见 server/chips.py）。
-// 美股（标普500 / 纳斯达克100）只有 K 线。鼠标指到哪天，顶部行情和右侧筹码分布就显示那天的。展示用，不进入选股与回测。
-import { get, state } from './api.js';
+// 「K线」页：左边 = 搜索框 + 固定的「大盘指数」+ 自己的「我的股票」名单；右边 = 选中的指数或股票的 K 线。
+//  · 指数：日 K 线 + 均线 + 成交额；A 股指数（上证50 / 沪深300 / 创业板指）右侧带筹码分布（估算，见 server/chips.py）。美股指数只有 K 线。
+//    鼠标指到哪天，顶部行情和右侧筹码分布就显示那天的。
+//  · 股票：搜索（代码 / 中文名 / 拼音首字母，如 gldq）后点一下就看；图上的 ＋ / － 把它加进 / 移出左边的名单（只存本机，和自选股是两份）。
+//  · 两种图上都能临时画线（js/draw.js）：线只在内存里，刷新或重启就没了。
+// 展示用，不进入选股与回测。
+import { get, put, state } from './api.js';
 import { prefs } from './db.js';
-import { h, clear, fmtNum, fmtPct, fmtAmount, isNum, evBadge } from './util.js';
-import { themeColors, makeChart, disposeChart, onThemeChange } from './chart.js';
+import { h, clear, fmtNum, fmtPct, fmtPrice, fmtSigned, fmtAmount, isNum, evBadge, dirClass, code, toast, debounce } from './util.js';
+import { themeColors, makeChart, disposeChart, onThemeChange, StockChart } from './chart.js';
+import { createDrawing } from './draw.js';
 
 const RANGES = [['3 个月', 63], ['半年', 126], ['1 年', 250], ['2 年', 500], ['全部', 0]];
 const MA_COLORS = { 5: '#f59e0b', 20: '#2563eb', 60: '#8b5cf6', 200: '#0ea5a4', 250: '#e11d48' };      // MA250 = 关键线：红色、画粗
@@ -14,59 +19,213 @@ function ink(hex) {
   const [r, g, b] = [1, 3, 5].map(i => { const v = parseInt(hex.slice(i, i + 2), 16) / 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
   return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.25 ? '#0b1220' : '#ffffff';
 }
+const seg = (items, cur, onPick) => {
+  const wrap = h('div', { class: 'seg' });
+  for (const [v, label] of items) {
+    const b = h('button', { class: v === cur ? 'on' : '', onclick: () => { [...wrap.children].forEach(c => c.classList.remove('on')); b.classList.add('on'); onPick(v); } }, label);
+    wrap.append(b);
+  }
+  return wrap;
+};
 
 export const klineView = {
-  layout: 'page',
+  layout: 'split',
   async mount(ctx) {
-    const el = ctx.pageEl; clear(el);
-    const key = prefs.get('klineIdx.' + state.market, null);
-    const page = h('div', { class: 'pane-body page' });
-    el.append(page);
-    this._page = page;
-    await this.load(key);
+    const gen = ctx.gen, mk = state.market;
+    const alive = () => ctx.gen === gen && mk === state.market;          // 切换市场 / 页面后，迟到的数据不再画
+    const el = ctx.listEl, pane = ctx.detailEl;
+    const S = { items: [], indices: [], sel: prefs.get('klineSel.' + mk, null), period: 'D', R: [], A: -1 };
+    let seq = 0, sgSeq = 0;
+
+    // ---------- 左栏：搜索框 + 两组名单 ----------
+    const q = h('input', { class: 'grow', type: 'text', autocomplete: 'off', spellcheck: 'false', id: 'kl-q',
+      placeholder: mk === 'CN' ? '搜索 代码 / 名称 / 拼音，如 格力电器、gldq' : '搜索 代码 / 名称，如 AAPL',
+      oninput: debounce(onSearch, 150), onkeydown: onSearchKey, onfocus: () => { if (q.value.trim()) onSearch(); } });
+    const sug = h('div', { class: 'kl-suggest', hidden: true });
+    const badge = h('span', { class: 'badge' }, '0 只');
+    const body = h('div', { class: 'kl-body' });
+    el.append(h('div', { class: 'pane-head' }, h('div', { class: 'row between' }, h('h1', {}, 'K线'), badge), h('div', { class: 'kl-search' }, q, sug)), body);
+    pane.replaceChildren(h('div', { class: 'empty' }, h('div', { class: 'big' }, '选一个指数或搜一只股票'), '左边搜索代码、中文名或拼音首字母（如 gldq），点一下就能在这里看 K 线；图上可以画线。'));
+    const onDocClick = e => { if (!e.target.closest('.kl-search')) sug.hidden = true; };
+    document.addEventListener('click', onDocClick);
+    this._offDoc = () => document.removeEventListener('click', onDocClick);
+
+    const inList = s => S.items.some(i => i.symbol === s);
+    const selKey = () => (S.sel ? (S.sel.t === 'idx' ? S.sel.k : S.sel.s) : null);
+    function markSel() { el.querySelectorAll('.list-item').forEach(x => x.classList.toggle('sel', x.dataset.symbol === selKey())); }
+    function setSel(sel) { S.sel = sel; prefs.set('klineSel.' + mk, sel); markSel(); }
+
+    function renderBody() {
+      badge.textContent = `${S.items.length} 只`;
+      const top = el.scrollTop;
+      body.replaceChildren(...[
+        h('div', { class: 'kl-group' }, h('span', {}, '大盘指数')),
+        S.indices.map(ix => h('button', { class: 'list-item' + (ix.ok ? '' : ' dim'), dataset: { symbol: ix.key }, title: ix.ok ? '' : '这个指数还没有日线数据，请先初始化数据（设置页）',
+          onclick: () => showIndex(ix.key) },
+        h('div', { class: 't1' }, h('span', { class: 'name' }, ix.name), h('span', { class: 'code num' }, ix.key.replace(/^\w+\./, '')), h('span', { class: 'grow' }), ix.chips ? h('span', { class: 'badge' }, '筹码分布') : null))),
+        h('div', { class: 'kl-group' }, h('span', {}, '我的股票'), h('span', { class: 'faint' }, S.items.length ? `${S.items.length} 只` : '')),
+        S.items.length ? S.items.map(stockRow) : h('div', { class: 'hint', style: 'padding:6px 20px 16px' }, '还没有。上面搜一只股票，在右边图上点「＋ 加入名单」，下次就能直接点这里。')].flat());
+      markSel(); el.scrollTop = top;
+    }
+    function stockRow(it) {
+      const qt = it.quote;
+      return h('button', { class: 'list-item', dataset: { symbol: it.symbol }, onclick: () => showStock(it.symbol) },
+        h('div', { class: 't1' }, h('span', { class: 'name' }, it.name), h('span', { class: 'code num' }, it.code), h('span', { class: 'grow' }),
+          h('span', { class: 'num', style: 'font-weight:600' }, qt ? fmtPrice(qt.close) : '—'),
+          h('span', { class: 'num ' + dirClass(qt?.change_pct), style: 'min-width:64px;text-align:right;font-weight:600' }, qt ? fmtPct(qt.change_pct) : '—')));
+    }
+
+    // ---------- 搜索 ----------
+    async function onSearch() {
+      const v = q.value.trim(), my = ++sgSeq;
+      if (!v) { sug.hidden = true; S.R = []; return; }
+      let r;
+      try { r = await get('/search', { q: v }, { cache: false }); } catch { return; }
+      if (my !== sgSeq || !alive()) return;
+      S.R = r.items; S.A = S.R.length ? 0 : -1;
+      sug.hidden = false;
+      if (!S.R.length) {
+        const noPy = r.pinyin === false && mk === 'CN' && /^[a-z]+$/i.test(v);
+        sug.replaceChildren(h('div', { class: 'hint', style: 'padding:8px 10px' }, noPy ? '没装拼音组件，现在只能搜代码和中文名。双击「安装.bat」装一次（或运行 pip install pypinyin）再重启软件就能用拼音了。' : '没有匹配（只能搜索已入库的股票）'));
+        return;
+      }
+      renderSug();
+    }
+    function renderSug() {
+      sug.replaceChildren(...S.R.map((s, i) => h('button', { class: 'sg-item' + (i === S.A ? ' on' : ''), onmousedown: e => e.preventDefault(), onclick: () => pickStock(s.symbol) },
+        h('span', { class: 'name' }, s.name), h('span', { class: 'code num' }, s.code), s.industry ? h('span', { class: 'badge' }, s.industry) : null,
+        s.status === 'delisted' ? h('span', { class: 'badge bad' }, '已退市') : null, h('span', { class: 'grow' }), inList(s.symbol) ? h('span', { class: 'faint small' }, '已在名单') : null)));
+      sug.querySelector('.on')?.scrollIntoView({ block: 'nearest' });
+    }
+    function onSearchKey(e) {
+      if (e.key === 'Escape') { sug.hidden = true; q.blur(); return; }
+      if (sug.hidden || !S.R.length) return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); S.A = (S.A + (e.key === 'ArrowDown' ? 1 : -1) + S.R.length) % S.R.length; renderSug(); }
+      else if (e.key === 'Enter') { e.preventDefault(); pickStock(S.R[Math.max(0, S.A)].symbol); }
+    }
+    function pickStock(sym) { sug.hidden = true; q.value = ''; S.R = []; q.blur(); showStock(sym); }
+
+    // ---------- 右栏 ----------
+    const mobileTop = () => h('div', { class: 'mobile-top' }, h('button', { class: 'btn sm', onclick: () => ctx.setMobileDetail(false) }, '← 返回'));
+    const loading = txt => h('div', { class: 'empty' }, h('span', { class: 'spinner' }), ' ' + txt);
+
+    const showIndex = async key => {
+      const my = ++seq; this._dispose(); setSel({ t: 'idx', k: key }); ctx.setMobileDetail(true);
+      pane.replaceChildren(mobileTop(), loading('加载 K 线…（第一次打开筹码分布要算几秒）'));
+      let d;
+      try { d = await get('/index/kline', { index: key }, { cache: false, timeout: 120000 }); } catch (e) { d = { status: 'error', message: e.message }; }
+      if (my !== seq || !alive()) return;
+      pane.replaceChildren(mobileTop());
+      const page = h('div', { class: 'pane-body page' }); pane.append(page);
+      this._buildIndex(d, page, mk, () => showIndex(key));
+    };
+
+    const showStock = async symbol => {
+      const my = ++seq; this._dispose(); setSel({ t: 'stk', s: symbol }); ctx.setMobileDetail(true);
+      pane.replaceChildren(mobileTop(), loading('加载 ' + symbol + ' …'));
+      let k;
+      try { k = await get('/kline', { symbol, period: S.period }, { cache: false }); } catch (e) {
+        if (my !== seq || !alive()) return;
+        pane.replaceChildren(mobileTop(), h('div', { class: 'empty' }, h('div', { class: 'big' }, '无法加载 ' + symbol), e.message));
+        return;
+      }
+      if (my !== seq || !alive()) return;
+      const bars = k.bars, last = bars[bars.length - 1], prev = bars[bars.length - 2];
+      const chg = prev ? last.close - prev.close : null, pct = prev ? last.close / prev.close - 1 : null;
+
+      // 图上的 ＋ / － ：不在左边名单里 = ＋（点一下加入）；已经在 = －（点一下移出）
+      const addBtn = h('button', { class: 'kl-add' });
+      const paintAdd = () => {
+        const on = inList(symbol);
+        addBtn.classList.toggle('on', on); addBtn.setAttribute('aria-pressed', on);
+        addBtn.title = on ? '从左边「我的股票」里移出这只股票' : '加到左边「我的股票」，下次直接点就能看';
+        addBtn.replaceChildren(h('span', { class: 'kl-add-ico' }, on ? '−' : '+'), h('span', {}, on ? '移出名单' : '加入名单'));
+      };
+      addBtn.onclick = async () => {
+        const on = inList(symbol); addBtn.disabled = true;
+        try {
+          const r = await put('/kline/list', on ? { remove: [symbol] } : { add: [symbol] });
+          if (!alive()) return;
+          S.items = r.items; renderBody(); paintAdd(); toast(on ? `已把 ${k.name} 移出名单` : `已把 ${k.name} 加入名单`, 'ok');
+        } catch (e) { toast(e.message, 'bad'); } finally { addBtn.disabled = false; }
+      };
+      paintAdd();
+
+      const head = h('div', { class: 'quote-head' },
+        h('div', {},
+          h('div', { class: 'row' }, h('h1', {}, k.name), h('span', { class: 'muted num' }, code(symbol)),
+            k.industry ? h('span', { class: 'badge' }, k.industry) : null,
+            k.board === 'star' ? h('span', { class: 'badge' }, '科创板') : k.board === 'chinext' ? h('span', { class: 'badge' }, '创业板') : null, addBtn),
+          h('div', { class: 'row', style: 'align-items:baseline;gap:12px;margin-top:4px' },
+            h('span', { class: 'price ' + dirClass(chg) }, fmtPrice(last.close)),
+            h('span', { class: 'num ' + dirClass(chg), style: 'font-size:15px;font-weight:600' }, `${fmtSigned(chg)}  ${fmtPct(pct)}`)),
+          h('div', { class: 'small muted num mt-s' }, `${k.asof_bar} 收盘　今开 ${fmtPrice(last.open)}　最高 ${fmtPrice(last.high)}　最低 ${fmtPrice(last.low)}　成交额 ${fmtAmount(last.amount)}`)),
+        h('div', { class: 'row wrap' }, h('button', { class: 'btn', title: '到选股页看这只股票的完整详情（指标、财务、资金、加自选、记录买入）', onclick: () => { location.hash = '#/screener/' + encodeURIComponent(symbol); } }, '个股详情 →')));
+
+      const mainEl = h('div', { class: 'chart-main' }), subEl = h('div', { class: 'chart-sub' });
+      const box = h('div', { class: 'chart-box' }, mainEl, subEl);
+      const sub0 = prefs.get('klineSub', 'macd');
+      const kind0 = sub0 === 'rs' && !k.rs ? 'macd' : sub0;
+      const tools = h('div', { class: 'chart-tools' },
+        seg([['D', '日K'], ['W', '周K']], S.period, v => { S.period = v; showStock(symbol); }),
+        seg([['macd', 'MACD'], ['rsi', 'RSI'], ...(k.rs ? [['rs', '相对大盘']] : [])], kind0, v => { prefs.set('klineSub', v); sc.setSub(v); }),
+        h('span', { class: 'hint' }, `前复权 · ${k.period === 'W' ? '周线' : '日线'} · 数据截止 ${k.data_asof || k.asof_bar}`));
+      const drawBar = h('div', { class: 'chart-tools' });
+      const legendHost = h('div', { class: 'pane-body', style: 'padding-top:10px;padding-bottom:0' });
+      pane.replaceChildren(mobileTop(), head, tools, drawBar, box, legendHost,
+        h('div', { class: 'pane-body', style: 'padding-top:6px' }, h('p', { class: 'hint' }, '画线是临时的：只在软件开着的时候保留，刷新页面或重启后会消失。线两端的数字就是那个点的价格（纵坐标的值）。')));
+      const sc = new StockChart(mainEl, subEl);
+      sc.subKind = kind0; sc.build(); sc.setData(k);
+      const dr = createDrawing({ mainEl, chart: () => sc.main, series: () => sc.candle, dates: bars.map(b => b.time), bars: bars.map(b => [b.open, b.high, b.low, b.close]), key: `${mk}|${symbol}|${S.period}` });
+      drawBar.append(dr.toolbar); legendHost.append(dr.legend);
+      const offTheme = onThemeChange(() => { if (sc.payload && sc.main) sc.setData(sc.payload); });
+      this._stock = { sc, dr, offTheme };
+    };
+
+    // ---------- 启动：读名单，恢复上次看的 ----------
+    try {
+      const [li, ix] = await Promise.all([get('/kline/list', {}, { cache: false }), get('/index/list', {}, { cache: false })]);
+      if (!alive()) return;
+      S.items = li.items; S.indices = ix.indices;
+    } catch (e) { if (alive()) body.replaceChildren(h('div', { class: 'alert bad', style: 'margin:12px 16px' }, e.message)); return; }
+    renderBody();
+    if (window.innerWidth <= 860) return;                     // 手机 / 窄屏（左右栏收成一栏，见 style.css 的 860px 断点）：先显示名单，点了再打开图
+    const sel = S.sel;
+    if (sel?.t === 'stk') showStock(sel.s);
+    else showIndex(sel?.t === 'idx' && S.indices.some(i => i.key === sel.k) ? sel.k : (S.indices.find(i => i.ok) || S.indices[0])?.key);
   },
 
-  async load(key) {
-    const page = this._page; this._dispose();
-    const mk = state.market;
-    clear(page).append(h('div', { class: 'row between mb' }, h('h1', {}, 'K线'), h('span', { class: 'hint', id: 'kl-asof' })),
-      h('div', { class: 'card' }, h('div', { class: 'empty' }, h('span', { class: 'spinner' }), ' 加载 K 线…（第一次打开筹码分布要算几秒）')));
-    let d;
-    try { d = await get('/index/kline', { index: key || undefined }, { cache: false, timeout: 120000 }); } catch (e) { d = { status: 'error', message: e.message, indices: [] }; }
-    if (!document.body.contains(page) || mk !== state.market) return;
-    this._build(d);
+  _dispose() {
+    this._off?.(); this._off = null; this._ro?.disconnect(); this._ro = null; this._dr?.destroy(); this._dr = null;
+    if (this._chart) { disposeChart(this._chart); this._chart = null; }
+    if (this._stock) { this._stock.offTheme?.(); this._stock.dr.destroy(); this._stock.sc.destroy(); this._stock = null; }
   },
+  cleanup() { this._dispose(); this._offDoc?.(); this._offDoc = null; },
 
-  _dispose() { this._off?.(); this._off = null; this._ro?.disconnect(); this._ro = null; if (this._chart) { disposeChart(this._chart); this._chart = null; } },
-  cleanup() { this._dispose(); },
-
-  _build(d) {
-    const page = this._page;
-    clear(page);
+  /** 右栏：指数 K 线（+ 均线 + 成交额 + 筹码分布） */
+  _buildIndex(d, page, mk, reload) {
     const asof = h('span', { class: 'hint' }, d.data_asof ? `数据截止 ${d.data_asof}（盘后日线）` : '');
-    page.append(h('div', { class: 'row between mb' }, h('h1', {}, 'K线'), asof));
-    const idxSeg = h('div', { class: 'seg' }, (d.indices || []).map(i => h('button', {
-      class: i.key === d.index?.key ? 'on' : '', disabled: i.ok ? null : true, title: i.ok ? '' : '这个指数还没有日线数据',
-      onclick: () => { prefs.set('klineIdx.' + state.market, i.key); this.load(i.key); } }, i.name)));
     const card = h('div', { class: 'card kl' });
     page.append(card);
     if (d.status !== 'ok') {
-      card.append(h('div', { class: 'row between mb' }, idxSeg), h('div', { class: 'empty' }, h('div', { class: 'big' }, '暂无 K 线数据'), d.message || '请先到设置页初始化数据。'));
+      card.append(h('div', { class: 'empty' }, h('div', { class: 'big' }, '暂无 K 线数据'), d.message || '请先到设置页初始化数据。'));
       return;
     }
     const chips = d.chips;
     const n = d.dates.length;
     const showChips = !!chips && prefs.get('klineChips', wide());
     const rangeSeg = h('div', { class: 'seg' }, RANGES.map(([lab, m]) => h('button', { class: m === 126 ? 'on' : '', onclick: e => { [...rangeSeg.children].forEach(b => b.classList.toggle('on', b === e.target)); setRange(m); } }, lab)));
-    const chipBtn = chips ? h('button', { class: 'btn sm', onclick: () => { prefs.set('klineChips', !showChips); this._build(d); } }, showChips ? '隐藏筹码分布' : '显示筹码分布') : null;
+    const chipBtn = chips ? h('button', { class: 'btn sm', onclick: () => { prefs.set('klineChips', !showChips); this._dispose(); clear(page); this._buildIndex(d, page, mk, reload); } }, showChips ? '隐藏筹码分布' : '显示筹码分布') : null;
     const quote = h('div', { class: 'kl-quote' });
     const maLine = h('div', { class: 'kl-ma' });
     const mainEl = h('div', { class: 'kl-main' });
     const chipEl = showChips ? h('div', { class: 'kl-chips' }, h('canvas')) : null;
     const stats = chips ? h('div', { class: 'kl-stats' }) : null;
-    card.append(h('div', { class: 'row between wrap kl-tools' }, idxSeg, h('div', { class: 'row wrap' }, rangeSeg, chipBtn)),
-      quote, maLine, h('div', { class: 'kl-grid' }, mainEl, chipEl), stats,
+    const drawBar = h('div', { class: 'chart-tools', style: 'padding:0 0 8px' }), drawLegend = h('div', { class: 'draw-wrap' });
+    card.append(h('div', { class: 'row between wrap kl-tools' }, asof, h('div', { class: 'row wrap' }, rangeSeg, chipBtn)),
+      h('div', { class: 'kl-draw' }, drawBar), quote, maLine, h('div', { class: 'kl-grid' }, mainEl, chipEl), drawLegend, stats,
       h('p', { class: 'hint mt-s' }, chips ? [evBadge('无', '看盘辅助：筹码分布是用价格区间和换手率推算的估算值，没有任何回测证据说它能提高胜率，不是买卖信号。'), ' ', chips.note] : (state.market === 'US' ? '美股日线没有换手率，所以没有筹码分布。' : '')),
+      h('p', { class: 'hint' }, '画线是临时的：刷新页面或重启后会消失；线两端的数字是那个点的价格。'),
       h('p', { class: 'hint' }, `均线：MA5 / MA20 / MA60 / MA200 / MA250（线的右端有标注，红色粗线 MA250 是关键线）；底部柱子是成交额。指数用日线，数据来自本地库，盘后更新。`));
 
     const c = themeColors();
@@ -94,6 +253,8 @@ export const klineView = {
       s.setData(dt.map((x, i) => (vals[i] == null ? { time: x } : { time: x, value: vals[i] })));
       maSeries[k] = s;
     }
+    this._dr = createDrawing({ mainEl, chart: () => chart, series: () => candle, dates: dt, bars: d.candles, key: `${mk}|idx:${d.index.key}|D` });
+    drawBar.append(this._dr.toolbar); drawLegend.append(this._dr.legend);
     this._off = onThemeChange(t => {
       candle.applyOptions({ upColor: t.up, downColor: t.down, borderUpColor: t.up, borderDownColor: t.down, wickUpColor: t.up, wickDownColor: t.down });
       vol.setData(volData(t)); draw();

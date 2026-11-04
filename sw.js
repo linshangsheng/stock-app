@@ -5,7 +5,7 @@ const VERSION = 'v1.1.0';
 const SHELL = `stock-shell-${VERSION}`;
 const DATA = `stock-data-${VERSION}`;
 const SHELL_FILES = ['/', '/index.html', '/css/style.css', '/js/app.js', '/js/api.js', '/js/db.js', '/js/util.js', '/js/chart.js', '/js/detail.js',
-  '/js/screener.js', '/js/watchlist.js', '/js/portfolio.js', '/js/backtest.js', '/js/settings.js', '/js/parse.js', '/js/app-shared.js', '/js/market.js', '/js/marketpanel.js', '/js/plan.js', '/js/news.js', '/js/factor.js', '/js/keyma.js', '/js/vix.js', '/js/qvix.js', '/js/combo.js', '/js/about.js', '/js/keystats.js', '/js/kline.js', '/js/flow.js', '/js/scoreboard.js', '/js/dayview.js', '/js/riskview.js', '/js/health.js', '/js/restart.js',
+  '/js/screener.js', '/js/watchlist.js', '/js/portfolio.js', '/js/backtest.js', '/js/settings.js', '/js/parse.js', '/js/app-shared.js', '/js/market.js', '/js/marketpanel.js', '/js/plan.js', '/js/news.js', '/js/factor.js', '/js/keyma.js', '/js/vix.js', '/js/qvix.js', '/js/combo.js', '/js/about.js', '/js/keystats.js', '/js/kline.js', '/js/draw.js', '/js/flow.js', '/js/scoreboard.js', '/js/dayview.js', '/js/riskview.js', '/js/health.js', '/js/restart.js',
   '/vendor/lightweight-charts.standalone.production.js', '/manifest.json', '/icon.svg', '/favicon.svg', '/icons/icon-192.png'];
 
 self.addEventListener('install', e => {
@@ -25,7 +25,7 @@ self.addEventListener('fetch', e => {
     if (url.pathname.startsWith('/api/jobs') || url.pathname.startsWith('/api/backtest') || url.pathname === '/api/ping') return;
     const offlineResp = () => new Response(JSON.stringify({ detail: '离线且无缓存' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
     // 纯行情类（K 线 / 指标 / 报价 / 搜索）：缓存优先、后台更新（1.3.3）——历史行情变化慢，秒开更重要
-    if (/^\/api\/(kline|indicators|quote|search)/.test(url.pathname)) {
+    if (/^\/api\/(kline(?!\/list)|indicators|quote|search)/.test(url.pathname)) {      // /api/kline/list 是用户自己的名单：写入后要立刻读到新的，走下面的网络优先
       e.respondWith((async () => {
         const cache = await caches.open(DATA);
         const hit = await cache.match(req);

@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import APP_NAME, AUTHOR, COPYRIGHT, EMAIL, LICENSE, __version__
-from . import backup, backtest, daily_view, data_health, memtrim, restart, risk_view, datasource_events as ev_mod, db, ingest, markets, features as feats, market_calendar as mc, portfolio, quality, scanner, settings, \
+from . import backup, backtest, daily_view, data_health, memtrim, pinyin_search, restart, risk_view, datasource_events as ev_mod, db, ingest, markets, features as feats, market_calendar as mc, portfolio, quality, scanner, settings, \
     selection, setups, throttle, universe
 from .datasource_cn import get_source
 from .jobs import manager
@@ -179,6 +179,7 @@ def about():
                 {"name": "FastAPI / Uvicorn", "license": "MIT / BSD-3-Clause", "note": "本地后端"},
                 {"name": "pandas / NumPy", "license": "BSD-3-Clause", "note": "数据计算"},
                 {"name": "PyYAML", "license": "MIT", "note": "配置文件"},
+                {"name": "pypinyin", "license": "MIT", "note": "股票搜索支持拼音首字母"},
                 {"name": "yfinance", "license": "Apache-2.0", "note": "美股数据接口"},
                 {"name": "baostock", "license": "见其官网", "note": "A 股数据接口"}],
             "python": sys.version.split()[0], "data_dir": str(settings.data_dir())}
@@ -193,15 +194,12 @@ def search(q: str = Query(""), market: str = "CN", limit: int = 20):
     if not q:
         return _wrap(market, items=[])
     with db.market_db(market) as c:
-        like = f"%{q}%"
-        rows = db.rows(c.execute(
-            "SELECT symbol,name,board,status FROM securities WHERE sec_type='stock' AND (symbol LIKE ? OR name LIKE ?) "
-            "ORDER BY in_l1 DESC, symbol LIMIT ?", (like, like, limit)))
+        rows = pinyin_search.search(c, market, q, limit)
         ind = {r["symbol"]: r["industry"] for r in db.rows(c.execute("SELECT symbol,industry FROM industry_map"))}
     for r in rows:
         r["industry"] = ind.get(r["symbol"])
         r["code"] = r["symbol"].split(".")[-1]
-    return _wrap(market, items=rows)
+    return _wrap(market, items=rows, pinyin=pinyin_search.available())
 
 
 def _quotes(c, symbols: list[str]) -> dict:
@@ -700,6 +698,39 @@ def watchlist_put(body: dict = Body(...), market: str = "CN"):
     return watchlist_get(market)
 
 
+def _kline_list(market: str) -> dict:
+    with db.portfolio_db() as p:
+        rows = db.rows(p.execute("SELECT symbol, added_at FROM kline_list WHERE market=? ORDER BY added_at DESC, rowid DESC", (market,)))
+    with db.market_db(market) as c:
+        q = _quotes(c, [r["symbol"] for r in rows])
+        names = {r["symbol"]: r["name"] for r in db.rows(c.execute("SELECT symbol,name FROM securities"))}
+    for r in rows:
+        r.update(name=names.get(r["symbol"], r["symbol"]), code=r["symbol"].split(".")[-1], quote=q.get(r["symbol"]))
+    return _wrap(market, items=rows)
+
+
+@app.get("/api/kline/list")
+def kline_list_get(market: str = "CN"):
+    """「K线」页左栏的「我的股票」名单：和自选股分开存，只用来方便切换看图，不参与选股。"""
+    return _kline_list(_need_cn(market))
+
+
+@app.put("/api/kline/list")
+def kline_list_put(body: dict = Body(...), market: str = "CN"):
+    """body: {add:[symbol], remove:[symbol]}；只收已入库的股票代码。"""
+    market = _need_cn(market)
+    now = datetime.now().isoformat(timespec="seconds")
+    with db.market_db(market) as c:
+        known = {r[0] for r in c.execute("SELECT symbol FROM securities WHERE sec_type='stock'")}
+    with db.portfolio_db() as p:
+        for s in body.get("add", []):
+            if s in known:
+                p.execute("INSERT OR IGNORE INTO kline_list(market,symbol,added_at) VALUES(?,?,?)", (market, s, now))
+        for s in body.get("remove", []):
+            p.execute("DELETE FROM kline_list WHERE market=? AND symbol=?", (market, s))
+    return _kline_list(market)
+
+
 @app.get("/api/account")
 def account_get(market: str = "CN"):
     return _wrap(_need_cn(market), account=portfolio.get_account(market))
@@ -1092,6 +1123,14 @@ def market_combo(market: str = "CN"):
     from . import combo
     market = _market(market)
     return _wrap(market, **combo.build(market))
+
+
+@app.get("/api/index/list")
+def index_list(market: str = "CN"):
+    """「K线」页左栏顶部固定的「大盘指数」名单（轻量：只查有没有日线，不算筹码分布）。"""
+    from . import kline
+    market = _market(market)
+    return _wrap(market, indices=kline.indices_available(market))
 
 
 @app.get("/api/index/kline")

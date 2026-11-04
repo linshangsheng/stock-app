@@ -102,6 +102,9 @@ PORTFOLIO_SCHEMA = """
 CREATE TABLE IF NOT EXISTS watchlist(
   market TEXT NOT NULL, symbol TEXT NOT NULL, added_at TEXT, note TEXT, PRIMARY KEY(market, symbol)
 );
+CREATE TABLE IF NOT EXISTS kline_list(
+  market TEXT NOT NULL, symbol TEXT NOT NULL, added_at TEXT, PRIMARY KEY(market, symbol)
+);
 CREATE TABLE IF NOT EXISTS account(
   market TEXT PRIMARY KEY, asof TEXT, equity REAL, cash REAL, risk_per_trade REAL
 );
