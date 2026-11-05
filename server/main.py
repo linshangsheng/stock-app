@@ -1406,7 +1406,7 @@ def notify_test():
     body = "\n".join(["这是一封测试邮件：看到它说明邮件提醒的设置是对的。", "",
                       "之后恐慌日、ETF 规则信号、需要处理的持仓出现时，会按设置发到这个邮箱。",
                       "（这封测试邮件不构成任何投资建议。）"])
-    ok, msg = notify.send_mail("【趋势波段】测试邮件", body)
+    ok, msg = notify.send_mail("【顺势】测试邮件", body)
     return {"ok": ok, "message": msg}
 
 
@@ -1575,7 +1575,7 @@ def main():
         port = pick_port(host, int(s["port"]), [int(x) for x in (s.get("fallback_ports") or [])])
         if port != int(s["port"]):
             print(f"注意：端口 {s['port']} 不能用，本次改用 {port}：浏览器打开 http://127.0.0.1:{port}/"
-                  "（双击「Stock App」会自动找到；手机访问时地址里的端口也要换成它）。", flush=True)
+                  "（双击「顺势」会自动找到；手机访问时地址里的端口也要换成它）。", flush=True)
     try:
         (settings.data_dir() / "port.txt").write_text(str(port), encoding="utf-8")   # 当前端口，排查问题时看
     except OSError:

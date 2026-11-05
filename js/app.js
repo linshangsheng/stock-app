@@ -53,7 +53,7 @@ let _demo = {};
 function refreshDemoBadge() {
   const on = !!_demo[state.market];
   $('#demo-badge').hidden = !on;
-  document.title = '股票 · 趋势波段' + (on ? '（演示数据）' : '');
+  document.title = '顺势 · 趋势波段' + (on ? '（演示数据）' : '');
 }
 
 // ---------- 路由 ----------

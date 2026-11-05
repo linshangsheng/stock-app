@@ -22,10 +22,13 @@ def healthy(demo_env, monkeypatch):
 
 
 def _add_calendar_days(n):
-    """演示数据的交易日历正好到数据截止日：往后补 n 个工作日，用来模拟「数据落后」。返回补出来的日期列表。"""
+    """演示数据的交易日历正好到数据截止日：往后补 n 个工作日，用来模拟「数据落后」。返回补出来的日期列表。
+    先把数据截止日之后的日历删掉：演示日历是按「今天」生成的，而当天还没收盘（或刚好是工作日的白天）时，日历已经含今天、数据却只到前一天，
+    不删的话「落后几天」会多出一天，测试就会随运行的时刻变成红的。"""
     from datetime import date, timedelta
     with db.market_db("CN") as c:
-        last = max(mc.trading_days(c))
+        last = db.get_meta(c, "data_asof")
+        c.execute("DELETE FROM market_calendar WHERE date>?", (last,))
         d, out = date.fromisoformat(last), []
         while len(out) < n:
             d += timedelta(days=1)

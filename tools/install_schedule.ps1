@@ -28,7 +28,7 @@ function Add-Task($name, $time, $market) {
   $action = New-ScheduledTaskAction -Execute $Python -Argument "-m server.cli update --market $market" -WorkingDirectory $root
   $trigger = New-ScheduledTaskTrigger -Daily -At $time
   $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun -ExecutionTimeLimit (New-TimeSpan -Hours 6) -RestartCount 2 -RestartInterval (New-TimeSpan -Minutes 10)
-  Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger -Settings $settings -Description "股票 App 盘后任务链（$market）" -Force | Out-Null
+  Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger -Settings $settings -Description "顺势 盘后任务链（$market）" -Force | Out-Null
   Write-Host "已创建：$name  每天 $time  ->  $Python -m server.cli update --market $market"
 }
 Add-Task "StockApp-CN-Update" $CnTime "CN"

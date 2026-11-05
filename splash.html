@@ -5,7 +5,7 @@
 <meta name="google" content="notranslate">          <!-- 中文软件，不需要浏览器的「要不要翻译」提示 -->
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="author" content="林上升 &lt;linshangsheng1987@gmail.com&gt;">
-<title>股票 · 趋势波段 — 启动中</title>
+<title>顺势 — 启动中</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <!-- 启动画面：「启动股票.vbs」一双击就用 Edge 应用窗口打开本页（本地文件，不依赖后端），
      一边播放开场一边探测后端，后端就绪后直接跳到应用。参数：?url=后端地址（默认 http://127.0.0.1:8000/）&alt=备用端口（逗号分隔）。
@@ -54,7 +54,7 @@ body.leaving .boot { opacity: 0 !important; transition: opacity .25s; }
 <div class="hero">
   <div class="logo" id="logo">
     <div class="shadow"></div>
-    <svg viewBox="0 0 512 512" aria-label="趋势波段">
+    <svg viewBox="0 0 512 512" aria-label="顺势">
       <defs>
         <linearGradient id="bg" x1="0" y1="0" x2=".9" y2="1"><stop offset="0" stop-color="#242a4d"/><stop offset=".55" stop-color="#12152b"/><stop offset="1" stop-color="#090b17"/></linearGradient>
         <radialGradient id="warm" cx=".82" cy=".2" r=".62"><stop offset="0" stop-color="#ffb13b" stop-opacity=".30"/><stop offset="1" stop-color="#ffb13b" stop-opacity="0"/></radialGradient>
@@ -78,7 +78,7 @@ body.leaving .boot { opacity: 0 !important; transition: opacity .25s; }
       <rect x="3" y="3" width="506" height="506" rx="113" fill="none" stroke="#fff" stroke-opacity=".10" stroke-width="6"/>
     </svg>
   </div>
-  <div class="word"><h1 id="title">趋势波段</h1><div class="sub" id="sub">TREND · SWING</div></div>
+  <div class="word"><h1 id="title">顺势</h1><div class="sub" id="sub">TREND · SWING</div></div>
 </div>
 
 <div class="boot" id="boot">
@@ -98,7 +98,7 @@ body.leaving .boot { opacity: 0 !important; transition: opacity .25s; }
   1. 新电脑第一次用：先双击软件目录里的「<b>安装.bat</b>」安装运行所需的组件（只需要一次），装完再打开；<br>
   2. 打开软件目录里的 <code>data\server.log</code>，看最后几行的报错（缺组件时会写明缺哪个、怎么装）；<br>
   3. 在软件目录打开命令行，运行 <code>python -m server.main</code>，看具体提示；<br>
-  4. 端口问题：任务管理器结束所有 Python，再双击「Stock App」；日志里有 <code>WinError 10013</code> 的话，见使用手册「安装时的常见问题」。
+  4. 端口问题：任务管理器结束所有 Python，再双击「顺势」；日志里有 <code>WinError 10013</code> 的话，见使用手册「安装时的常见问题」。
   <div class="row"><button id="retry">再等一会</button><button class="ghost" id="openanyway">直接打开</button></div>
 </div>
 

@@ -1,14 +1,15 @@
-' Stock App launcher (Windows). Double-click to start the local backend and open the app.
+' Shunshi launcher (Windows). Double-click to start the local backend and open the app.
 ' - starts "python -m server.main" hidden (log: data\server.log) if not already running;
 '   on a new PC without Python / packages it opens the installer instead
 ' - opens the animated splash screen (splash.html, a local file) right away; it waits for the backend
 '   and then switches to the app, so there is no silent wait after double-clicking
 ' - port 8000 by default; if Windows has reserved it (Hyper-V / WSL, WinError 10013) or another program
 '   uses it, the backend switches to a fallback port and the splash screen finds it automatically
-' - creates the desktop shortcut "Stock App" on first run, and keeps its icon pointing at app.ico
+' - creates the desktop shortcut (named with the two Chinese characters Shunshi) on first run, and keeps its icon pointing at app.ico;
+'   an old shortcut called "Stock App" from earlier versions is renamed instead of duplicated
 ' Keep this file ASCII-only: VBScript cannot read UTF-8 Chinese text.
 Option Explicit
-Dim sh, fso, dir, url, running, lnk, desktop, ico, lnkPath, splash, i, p, ports, altPorts, rc, inst, prof, flags, seed
+Dim sh, fso, dir, url, running, lnk, desktop, ico, lnkPath, oldLnk, lnkDesc, needSave, splash, i, p, ports, altPorts, rc, inst, prof, flags, seed
 Set sh = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 dir = fso.GetParentFolderName(WScript.ScriptFullName)
@@ -21,18 +22,25 @@ ico = dir & "\app.ico"
 
 ' ---- desktop shortcut (create once; update the icon if it still uses the old one) ----
 desktop = sh.SpecialFolders("Desktop")
-lnkPath = desktop & "\Stock App.lnk"
+lnkPath = desktop & "\" & ChrW(&H987A) & ChrW(&H52BF) & ".lnk"
+oldLnk = desktop & "\Stock App.lnk"
+lnkDesc = "Shunshi - trend and swing"
 On Error Resume Next
+If fso.FileExists(oldLnk) And Not fso.FileExists(lnkPath) Then fso.MoveFile oldLnk, lnkPath
 Set lnk = sh.CreateShortcut(lnkPath)
 If Not fso.FileExists(lnkPath) Then
   lnk.TargetPath = WScript.ScriptFullName
   lnk.WorkingDirectory = dir
-  lnk.Description = "Stock App - trend and swing"
+  lnk.Description = lnkDesc
   If fso.FileExists(ico) Then lnk.IconLocation = ico & ",0" Else lnk.IconLocation = "shell32.dll,13"
   lnk.Save
-ElseIf fso.FileExists(ico) And LCase(lnk.IconLocation) <> LCase(ico & ",0") Then
-  lnk.IconLocation = ico & ",0"
-  lnk.Save
+Else
+  needSave = False
+  If fso.FileExists(ico) Then
+    If LCase(lnk.IconLocation) <> LCase(ico & ",0") Then lnk.IconLocation = ico & ",0" : needSave = True
+  End If
+  If lnk.Description <> lnkDesc Then lnk.Description = lnkDesc : needSave = True
+  If needSave Then lnk.Save
 End If
 Err.Clear
 On Error GoTo 0
@@ -74,7 +82,7 @@ If Not running Then
     If fso.FileExists(inst) Then
       sh.Run Chr(34) & inst & Chr(34), 1, False
     Else
-      MsgBox "Python or the required packages are missing." & vbCrLf & "Run in this folder:  python -m pip install -r server/requirements.txt", 48, "Stock App"
+      MsgBox "Python or the required packages are missing." & vbCrLf & "Run in this folder:  python -m pip install -r server/requirements.txt", 48, "Shunshi"
     End If
     WScript.Quit
   End If

@@ -181,7 +181,7 @@ def panic_message(market: str, p: dict | None) -> tuple[str, str] | None:
     else:
         lines.append("  - A 股只建议把它当 5 天以内的依据：2005~2016 的检验里持有 20 天没有优势。")
     lines += ["", "这是历史统计，不是保证，也不构成投资建议。打开软件「选股 → 恐慌日」查看详情。"]
-    return f"【趋势波段】{name}恐慌日第 {n} 天：宽基 ETF 可以分批加仓（今天买预算的 1/10）", "\n".join(lines)
+    return f"【顺势】{name}恐慌日第 {n} 天：宽基 ETF 可以分批加仓（今天买预算的 1/10）", "\n".join(lines)
 
 
 def etf_message(market: str, mv: dict | None) -> tuple[str, str] | None:
@@ -194,7 +194,7 @@ def etf_message(market: str, mv: dict | None) -> tuple[str, str] | None:
     name = MARKET_NAME.get(market, market)
     body = "\n".join([f"{name}宽基 ETF 规则（只看收盘，开盘按市价成交，高开低开都一样）：", "", *[f"  · {a}" for a in acts], "",
                       "规则的买入位、止损位和回测证据见软件「选股」页首页的「明天要做什么」和「行情」页。", "", "这是规则输出，不构成投资建议。"])
-    return f"【趋势波段】{name}宽基 ETF：明天开盘有 {len(acts)} 个信号", body
+    return f"【顺势】{name}宽基 ETF：明天开盘有 {len(acts)} 个信号", body
 
 
 def positions_message(market: str, health: dict | None) -> tuple[str, str] | None:
@@ -208,7 +208,7 @@ def positions_message(market: str, health: dict | None) -> tuple[str, str] | Non
         stop = o.get("new_stop") or o.get("current_stop")
         lines.append(f"  · {o.get('name') or o['symbol']}（{o['symbol']}）：{o.get('action', '')}" + (f"；止损价 {stop:g}" if stop else ""))
     lines += ["", "具体价格和股数见软件「持仓」页。券商里的条件单以你设置的为准。"]
-    return f"【趋势波段】{name}持仓：{len(must)} 只需要处理", "\n".join(lines)
+    return f"【顺势】{name}持仓：{len(must)} 只需要处理", "\n".join(lines)
 
 
 def after_scan(market: str, day: str, scan: dict, health: dict | None = None) -> dict:

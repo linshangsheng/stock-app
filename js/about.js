@@ -9,7 +9,7 @@ export async function loadAbout() {
 
 /** 关于的主体内容。full=false 时只给简要信息（弹窗用）。 */
 export function aboutBlock(a, { full = true } = {}) {
-  const mail = h('a', { href: `mailto:${a.email}?subject=${encodeURIComponent(`【趋势波段 v${a.version}】反馈`)}` }, a.email);
+  const mail = h('a', { href: `mailto:${a.email}?subject=${encodeURIComponent(`【顺势 v${a.version}】反馈`)}` }, a.email);
   const out = h('div', { class: 'about' },
     h('div', { class: 'about-head' },
       h('img', { src: 'icon.svg', width: 56, height: 56, alt: '' }),

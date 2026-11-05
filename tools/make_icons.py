@@ -1,6 +1,6 @@
 """把 icon.svg / favicon.svg 渲染成桌面快捷方式用的 app.ico 和 PWA / 手机用的 PNG（用本机 Edge 无界面模式渲染，透明背景）。
 用法：python tools/make_icons.py
-产物：app.ico（16~256 多尺寸，桌面「Stock App」快捷方式用）、icons/icon-192.png、icons/icon-512.png、icons/apple-touch-icon.png（180）、
+产物：app.ico（16~256 多尺寸，桌面「顺势」快捷方式用）、icons/icon-192.png、icons/icon-512.png、icons/apple-touch-icon.png（180）、
       icons/maskable-512.png（安卓自适应图标：四周留安全边）、icons/favicon-32.png
 小尺寸（16 / 24 / 32）用简化版 favicon.svg：细节少、笔画粗，任务栏和文件夹里看得清。"""
 from __future__ import annotations

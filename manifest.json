@@ -1,6 +1,6 @@
 {
-  "name": "股票 · 趋势波段",
-  "short_name": "趋势波段",
+  "name": "顺势 · 趋势波段",
+  "short_name": "顺势",
   "description": "个人自用 · 本地优先 · A 股趋势波段选股、验证与持仓管理",
   "start_url": "/",
   "scope": "/",

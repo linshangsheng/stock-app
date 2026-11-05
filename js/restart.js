@@ -13,8 +13,8 @@ export function manualRestartHelp() {
     h('ol', { style: 'line-height:1.9;padding-left:20px;margin:6px 0' },
       h('li', {}, '按 ', h('b', {}, 'Ctrl + Shift + Esc'), ' 打开任务管理器'),
       h('li', {}, '在列表里找到名字叫 ', h('b', {}, 'Python'), ' 的进程（图标是个蓝黄小蛇），右键 → ', h('b', {}, '结束任务')),
-      h('li', {}, '双击桌面上的「', h('b', {}, 'Stock App'), '」重新打开软件')),
-    h('p', { class: 'small muted' }, '只结束 Python 就行，不会丢任何数据（持仓、交易记录都存在文件里）。如果找不到，可以关掉软件窗口后再双击「Stock App」，它会自己判断。')),
+      h('li', {}, '双击桌面上的「', h('b', {}, '顺势'), '」重新打开软件')),
+    h('p', { class: 'small muted' }, '只结束 Python 就行，不会丢任何数据（持仓、交易记录都存在文件里）。如果找不到，可以关掉软件窗口后再双击「顺势」，它会自己判断。')),
     [{ label: '知道了', primary: true }]);
 }
 
@@ -63,7 +63,7 @@ export async function restartBackend() {
         return true;
       }
     }
-    msg.textContent = '后端没有在预期时间内回来（可能换了端口，或启动失败）。请双击桌面的「Stock App」重新打开；日志在软件目录 data\\server.log。';
+    msg.textContent = '后端没有在预期时间内回来（可能换了端口，或启动失败）。请双击桌面的「顺势」重新打开；日志在软件目录 data\\server.log。';
     action.append(h('button', { class: 'btn', onclick: () => ov.remove() }, '关闭这个提示'));
     return false;
   } finally { clearInterval(tick); running = false; }
