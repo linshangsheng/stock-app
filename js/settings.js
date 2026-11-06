@@ -3,22 +3,25 @@
 //   交易参数：资金方案（A 股）、费用 / 滑点 / 组合与止损参数
 //   数据更新：数据健康、数据与更新状态（初始化 / 盘后任务链 / 补跑）、股票池
 //   备份与存储：备份与恢复、存储空间
+//   软件升级：从 git 仓库检查 / 一键升级（进度环），升级后自动重启
 //   关于：版本、作者、数据来源、第三方组件与许可
 import { get, post, put, state } from './api.js';
 import { h, clear, fmtPct, fmtNum, fmtMoney, toast, confirmBox, modal, dirClass, switchEl, mountIcons } from './util.js';
 import { prefs } from './db.js';
 import { loadAbout, aboutBlock } from './about.js';
 import { healthPanel } from './health.js';
+import { upgradePanel } from './upgrade.js';
 
 let pollTimer = null;
 const stopPoll = () => { clearInterval(pollTimer); pollTimer = null; };
-let healthView = null;
+let healthView = null, upgradeView = null;
 
 const SECTIONS = [
   ['general', '通用设置', '自动更新开关、外观、邮件提醒', 'gear'],
   ['trade', '交易参数', '资金方案、费用与风控参数', 'sliders'],
   ['data', '数据更新', '数据健康、更新与补全、股票池', 'refresh'],
   ['backup', '备份与存储', '备份与恢复、占用空间', 'archive'],
+  ['upgrade', '软件升级', '检查并一键升级到新版本', 'upload'],
   ['about', '关于', '版本、作者、数据来源与许可', 'info'],
 ];
 
@@ -30,11 +33,12 @@ export const settingsView = {
     const list = ctx.listEl, pane = ctx.detailEl, wrap = pane;
     const gen = ctx.gen, alive = () => ctx.gen === gen;
     healthView?.destroy(); const health = healthView = healthPanel();
+    upgradeView?.destroy(); const upgrade = upgradeView = upgradePanel();
     const secAuto = h('div', { class: 'card' }), secData = h('div', { class: 'card mt' }), secAlloc = h('div', { class: 'card' }), secPool = h('div', { class: 'card mt' }), secCost = h('div', { class: 'card mt' }), secLook = h('div', { class: 'card mt' }), secNotify = h('div', { class: 'card mt' }), secBackup = h('div', { class: 'card' }), secStorage = h('div', { class: 'card mt' }), secAbout = h('div', { class: 'card soft' });
 
     // ---------- 左栏：分类；右栏：选中那一类的内容 ----------
-    const PAGES = { general: [secAuto, secLook, secNotify], trade: [secAlloc, secCost], data: [health.el, secData, secPool], backup: [secBackup, secStorage], about: [secAbout] };
-    let cur = null;
+    const PAGES = { general: [secAuto, secLook, secNotify], trade: [secAlloc, secCost], data: [health.el, secData, secPool], backup: [secBackup, secStorage], upgrade: [upgrade.el], about: [secAbout] };
+    let cur = null, upgradeLoaded = false;
     function open(key, byUser) {
       const sec = SECTIONS.find(x => x[0] === key) || SECTIONS[0];
       cur = sec[0]; prefs.set('settingsTab', cur);
@@ -43,6 +47,7 @@ export const settingsView = {
       pane.replaceChildren(h('div', { class: 'mobile-top' }, h('button', { class: 'btn sm', onclick: () => ctx.setMobileDetail(false) }, '← 返回')),
         h('div', { class: 'pane-body page' }, h('div', { class: 'row between mb' }, h('h1', {}, sec[1]), h('span', { class: 'hint' }, sec[2])), ...PAGES[cur]));
       pane.scrollTop = 0;
+      if (cur === 'upgrade' && !upgradeLoaded) { upgradeLoaded = true; upgrade.mount(); }          // 第一次点开才联网检查更新
     }
     const nav = h('div', { class: 'set-nav' }, SECTIONS.map(([k, t, d, ico]) => h('button', { class: 'list-item set-item', dataset: { symbol: k }, onclick: () => open(k, true) },
       h('span', { class: 'set-ico' }, h('i', { 'data-ico': ico })), h('span', { class: 'set-txt' }, h('span', { class: 'name' }, t), h('span', { class: 'set-desc' }, d)))));
@@ -384,7 +389,7 @@ export const settingsView = {
 
     renderAuto(); renderData(); renderAlloc(); renderPool().then(renderBias); renderCost(); renderLook(); renderNotify(); renderBackup(); renderStorage();
   },
-  cleanup() { stopPoll(); healthView?.destroy(); },
+  cleanup() { stopPoll(); healthView?.destroy(); upgradeView?.destroy(); },
 };
 
 function kv(k, v, cls = '') { return h('div', { class: 'kv' }, h('span', { class: 'k' }, k), h('span', { class: 'v num ' + cls }, v)); }

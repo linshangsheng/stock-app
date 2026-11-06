@@ -563,3 +563,24 @@ tr.dim { opacity: .55; }
 .ev-item .ev-sum { margin-top: 2px; } .ev-item .t2 { align-items: center; gap: 8px; }
 .col-list .f select { max-width: 130px; }
 div.f { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }
+
+/* 软件升级：圆形进度环（一圈 = 100%，中间是百分比）+ 步骤列表 */
+.up-ring { position: relative; margin: 0 auto 10px; }
+.up-ring svg { display: block; }
+.up-ring circle { fill: none; stroke-width: 10; }
+.up-ring .trk { stroke: var(--field-2); }
+.up-ring .bar { stroke: var(--accent); stroke-linecap: round; transition: stroke-dashoffset .45s var(--ease), stroke .3s; }
+.up-ring[data-kind="ok"] .bar { stroke: var(--green); } .up-ring[data-kind="bad"] .bar { stroke: var(--danger); }
+.up-ring .pct { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums; }
+.up-ring .pct b { font-size: 34px; font-weight: 700; letter-spacing: -.02em; line-height: 1; }
+.up-ring .pct span { font-size: 15px; font-weight: 600; color: var(--muted); margin: 8px 0 0 2px; }
+.up-card { width: min(420px, 90vw); }
+.up-msg { min-height: 20px; margin-top: 4px; } .up-err { margin-top: 8px; font-size: 13px; color: var(--danger); text-align: left; white-space: pre-wrap; max-height: 200px; overflow: auto; }
+.up-steps { display: inline-flex; flex-direction: column; gap: 6px; margin-top: 14px; text-align: left; }
+.up-step { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--faint); }
+.up-step i { width: 18px; text-align: center; font-style: normal; font-weight: 700; } .up-step .spinner { width: 14px; height: 14px; margin: 0 2px; }
+.up-step.doing { color: var(--text); font-weight: 600; } .up-step.done { color: var(--text); } .up-step.done i { color: var(--green); } .up-step.error { color: var(--danger); } .up-step.skip { text-decoration: line-through; }
+.up-details { margin-top: 12px; text-align: left; font-size: 12px; color: var(--muted); } .up-details summary { cursor: pointer; text-align: center; }
+.up-log { margin: 6px 0 0; max-height: 140px; overflow: auto; padding: 8px; border-radius: var(--radius-xs); background: var(--field); font: 11px/1.5 var(--mono); white-space: pre-wrap; word-break: break-all; }
+.up-commits { margin-top: 10px; max-height: 260px; overflow: auto; border-radius: var(--radius-sm); background: var(--panel); padding: 6px 12px; }
+.up-commit { display: flex; gap: 10px; padding: 5px 0; font-size: 13px; line-height: 1.5; } .up-commit + .up-commit { border-top: var(--hair) solid var(--line); } .up-commit .num { flex: none; }

@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-ROUTES = ["screener", "watchlist", "portfolio", "market", "kline", "market/backtest", "market/backtest/score", "settings", "settings/data", "settings/about"]
+ROUTES = ["screener", "watchlist", "portfolio", "market", "kline", "market/backtest", "market/backtest/score", "settings", "settings/data", "settings/about", "settings/upgrade"]
 NOISE = ("chrome-extension://", "edge://", "ProtocolLaunch", "edge_", "QQBrowser")        # 浏览器自己 / 扩展的日志，与页面无关
 
 
@@ -103,6 +103,8 @@ def test_page_opens_without_errors(base, tmp_path, route):
         assert "自动更新股票数据" in dom and dom.count("au-row") >= 2 and 'role="switch"' in dom, "设置页没有渲染出「自动更新」开关"
     if route == "settings/data":                                 # #/settings/data 直接打开「数据更新」：里面有数据健康面板
         assert "数据健康" in dom and ("hl-issue" in dom or "数据正常" in dom or "需要留意" in dom or "有问题" in dom), "设置 → 数据更新 没有渲染出「数据健康」面板"
+    if route == "settings/upgrade":                              # 软件升级：打开就开始联网检查；没网也只显示错误说明，不能出 JS 报错
+        assert "软件升级" in dom and ("正在联网检查更新" in dom or "已是最新版本" in dom or "发现" in dom or "检查失败" in dom or "alert" in dom), "设置 → 软件升级 没有渲染出来"
     if route == "settings/about":
         assert "免责声明" in dom, "设置 → 关于 没有渲染出版本信息"
 

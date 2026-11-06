@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import APP_NAME, AUTHOR, COPYRIGHT, EMAIL, LICENSE, __version__
-from . import backup, backtest, daily_view, data_health, memtrim, pinyin_search, restart, risk_view, datasource_events as ev_mod, db, ingest, markets, features as feats, market_calendar as mc, portfolio, quality, scanner, settings, \
+from . import upgrade, backup, backtest, daily_view, data_health, memtrim, pinyin_search, restart, risk_view, datasource_events as ev_mod, db, ingest, markets, features as feats, market_calendar as mc, portfolio, quality, scanner, settings, \
     selection, setups, throttle, universe
 from .datasource_cn import get_source
 from .jobs import manager
@@ -151,6 +151,36 @@ def restart_backend(request: Request, body: dict = Body(default={})):
         return JSONResponse({"ok": False, "blocked": b, "message": "有任务正在运行：" + "；".join(b) + "。重启会中断它们。"}, status_code=409)
     info = restart.schedule()
     return {"ok": True, "pid": info["pid"], "message": "后端正在重启，约 5~15 秒后自动回来"}
+
+
+def _local_only(request: Request) -> None:
+    """会改本机文件 / 重启软件的接口：没设访问口令时只允许本机调用。"""
+    token = settings.cfg()["server"].get("token") or ""
+    host = request.client.host if request.client else ""
+    if not token and host not in ("127.0.0.1", "::1", "localhost", "testclient"):
+        raise HTTPException(403, "没有设置访问口令时，只允许在本机升级")
+
+
+@app.get("/api/upgrade/check")
+def upgrade_check():
+    """检查更新：联网 fetch 一次，返回当前版本、有哪些新提交、能不能自动升级（server/upgrade.py）。"""
+    return upgrade.check()
+
+
+@app.get("/api/upgrade/status")
+def upgrade_status():
+    """升级进度（进度环轮询它）。"""
+    return upgrade.status()
+
+
+@app.post("/api/upgrade/start")
+def upgrade_start(request: Request, body: dict = Body(default={})):
+    """开始升级：下载 → （依赖变了就装依赖）→ 快进合并 → 自动重启后端。有任务在跑时默认拒绝（409 + 清单，和重启一样），带 force 才继续。"""
+    _local_only(request)
+    b = restart.blockers(manager.state, _bt_jobs)
+    if b and not body.get("force"):
+        return JSONResponse({"ok": False, "blocked": b, "message": "有任务正在运行：" + "；".join(b) + "。升级完成后会重启后端，会中断它们。"}, status_code=409)
+    return upgrade.start()
 
 
 @app.get("/api/about")
