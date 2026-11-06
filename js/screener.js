@@ -470,7 +470,7 @@ export const screener = {
       try { r = await get('/scan/history'); } catch (e) { clear(box); box.append(h('div', { class: 'alert bad' }, e.message)); return; }
       clear(box);
       const o = r.overall || {};
-      box.append(h('div', { class: 'hint', style: 'margin-bottom:10px' }, '下面只是平均涨跌，没有和「同期买指数」比。要看信号到底有没有比不用它更好 → ', h('a', { href: '#/backtest/score' }, '实盘成绩单')));
+      box.append(h('div', { class: 'hint', style: 'margin-bottom:10px' }, '下面只是平均涨跌，没有和「同期买指数」比。要看信号到底有没有比不用它更好 → ', h('a', { href: '#/market/backtest/score' }, '实盘成绩单')));
       box.append(h('div', { class: 'card soft' }, h('h3', {}, '选股器自身表现（真实前向收益）'),
         h('div', { class: 'grid c4 mt-s' }, ...[['T+1', 'a1'], ['T+3', 'a3'], ['T+5', 'a5'], ['T+10', 'a10']].map(([l, k]) => kvEl('平均 ' + l, fmtPct(o[k]), dirClass(o[k])))),
         h('div', { class: 'grid c4 mt-s' }, kvEl('T+20 平均', fmtPct(o.a20), dirClass(o.a20)), kvEl('T+5 胜率', o.w5 != null ? fmtPct(o.w5, 0, false) : '—'), kvEl('T+20 胜率', o.w20 != null ? fmtPct(o.w20, 0, false) : '—'), kvEl('样本', String(o.n ?? 0))),

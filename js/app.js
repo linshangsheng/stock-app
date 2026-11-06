@@ -9,13 +9,12 @@ import { screener } from './screener.js';
 import { restartBackend, manualRestartHelp } from './restart.js';
 import { watchlist } from './watchlist.js';
 import { portfolio } from './portfolio.js';
-import { backtestView } from './backtest.js';
 import { settingsView } from './settings.js';
 import { marketView } from './market.js';
 import { klineView } from './kline.js';
 import { showDetail } from './detail.js';
 
-const VIEWS = { screener, watchlist, portfolio, backtest: backtestView, settings: settingsView, market: marketView, kline: klineView };
+const VIEWS = { screener, watchlist, portfolio, settings: settingsView, market: marketView, kline: klineView };
 const appEl = $('#app');
 
 export const ctx = {
@@ -61,6 +60,7 @@ async function route() {
   const parts = location.hash.replace(/^#\/?/, '').split('/');
   const name = parts[0] || 'screener';
   if (name === 'news') { ctx.openTab = 'news'; location.replace('#/screener'); return; }       // 资讯已并入「选股」页的一个标签：旧链接 / 书签跳过去
+  if (name === 'backtest') { location.replace('#/market/backtest' + (parts[1] === 'score' ? '/score' : '')); return; }   // 回测已并入「行情」页的「回测与验证」标签：旧链接 / 书签跳过去
   const deepSymbol = parts[1] ? decodeURIComponent(parts[1]) : null;      // #/screener/sh.600519：从行情 / 资讯页点进个股详情
   const view = VIEWS[name] || VIEWS.screener;
   ctx.gen = (ctx.gen || 0) + 1;              // 每次进入页面（含切换 A股 / 美股）加一：旧页面迟到的数据不能再画到新页面上
@@ -75,7 +75,7 @@ async function route() {
     ctx.detailEl.append(h('div', { class: 'empty' }, h('div', { class: 'big' }, '选择一只股票查看详情'), '日 / 周 K 线、均线、触发价与止损线、关键指标。'));
   }
   current = view;
-  ctx.deep = deepSymbol;                       // #/页面/xxx 里的 xxx：选股 / 自选直接打开这只股票的详情；设置、K线页自己解释（view.ownDeepLink）
+  ctx.deep = deepSymbol; ctx.deep2 = parts[2] || null;                       // #/页面/xxx 里的 xxx：选股 / 自选直接打开这只股票的详情；设置、K线页自己解释（view.ownDeepLink）
   try { await view.mount(ctx); if (deepSymbol && view.layout === 'split' && !view.ownDeepLink) showDetail(ctx, deepSymbol); } catch (e) { console.error(e); (view.layout === 'page' ? ctx.pageEl : ctx.listEl).append(h('div', { class: 'alert bad', style: 'margin:16px' }, '页面加载失败：' + e.message)); }
 }
 window.addEventListener('hashchange', route);

@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-ROUTES = ["screener", "watchlist", "portfolio", "market", "kline", "backtest", "backtest/score", "settings", "settings/data", "settings/about"]
+ROUTES = ["screener", "watchlist", "portfolio", "market", "kline", "market/backtest", "market/backtest/score", "settings", "settings/data", "settings/about"]
 NOISE = ("chrome-extension://", "edge://", "ProtocolLaunch", "edge_", "QQBrowser")        # 浏览器自己 / 扩展的日志，与页面无关
 
 
@@ -95,7 +95,9 @@ def test_page_opens_without_errors(base, tmp_path, route):
     assert f'data-view="{name}"' in dom, f"{route}：页面没有挂载（整个页面可能因为某个 JS 文件出错而空白）"
     assert "页面加载失败" not in dom, f"{route}：显示了「页面加载失败」"
     assert not errs, f"{route}：浏览器控制台有报错：\n" + "\n".join(errs[:5])
-    if route == "backtest/score":
+    if route == "market/backtest":                               # 回测已并入行情页的「回测与验证」标签
+        assert '<button class="on">回测与验证' in dom and "bt-run" in dom, "行情页没有打开「回测与验证」标签"
+    if route == "market/backtest/score":
         assert "实盘成绩单" in dom and "sb-card" in dom
     if route == "settings":                                      # 默认打开「通用设置」：自动更新开关（A 股 / 美股各一个）在最上面
         assert "自动更新股票数据" in dom and dom.count("au-row") >= 2 and 'role="switch"' in dom, "设置页没有渲染出「自动更新」开关"
@@ -111,3 +113,11 @@ def test_old_news_link_opens_the_news_tab_in_screener(base, tmp_path):
     assert 'data-view="screener"' in dom and not errs, errs[:3]
     assert '<button class="on" title="资讯' in dom, "没有自动打开「资讯」标签"
     assert 'data-nav="news"' not in dom
+
+
+@pytest.mark.parametrize("old,new_has", [("backtest", "bt-run"), ("backtest/score", "sb-card")])
+def test_old_backtest_link_opens_the_backtest_tab_in_market(base, tmp_path, old, new_has):
+    """回测已并入「行情」页：旧的 #/backtest 链接 / 书签要跳到行情页的「回测与验证」标签；导航栏里不再有单独的「回测」。"""
+    dom, errs = _visit(f"{base}/#/{old}", tmp_path / "p")
+    assert 'data-view="market"' in dom and not errs, errs[:3]
+    assert new_has in dom and 'data-nav="backtest"' not in dom

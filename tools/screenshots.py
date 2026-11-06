@@ -157,7 +157,7 @@ async def run(base: str, out: Path, width: int, height: int):
             await p.goto(base + "/#/portfolio", 4)
             await p.shot(out / "13-持仓页.png")
             # 回测 / 设置
-            await p.goto(base + "/#/backtest", 4)
+            await p.goto(base + "/#/market/backtest", 4)
             await p.shot(out / "14-回测页.png")
             await p.goto(base + "/#/settings", 12)
             await p.shot(out / "15-设置-数据与更新.png")

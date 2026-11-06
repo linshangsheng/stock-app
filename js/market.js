@@ -9,6 +9,7 @@ import { loadVix, vixCard } from './vix.js';
 import { loadQvix, qvixCard } from './qvix.js';
 import { loadCombo, comboCard } from './combo.js';
 import { flowPanel } from './flow.js';
+import { backtestPanel } from './backtest.js';
 
 const REGIME = { NORMAL: ['正常', '正常开仓'], CAUTION: ['谨慎', '仓位上限减半，只做最强候选'], DEFENSIVE: ['防守', '不开新仓'], UNKNOWN: ['未知', '基准数据缺失'] };
 
@@ -24,18 +25,24 @@ export const marketView = {
     // 页面太长，分三个标签：合成图（指数 K 线 · 市场温度 · 恐慌指数）/ 指数择时与均线 / 个股与行业。各块照旧异步加载，图表在隐藏的标签里靠 ResizeObserver 在显示时自动撑满宽度。
     const flowBox = h('div', {});                          // 资金流向：第一次点开才加载（要算全市场几十万行日线，约 1~2 秒）
     const showFlow = () => { if (!this._flow) { this._flow = flowPanel(); flowBox.append(this._flow.el); this._flow.mount(); } };
-    const PAGE_TABS = [['combo', '市场温度与行情', [comboBox]], ['timing', '指数择时与均线', [mvBox, vixBox, kmBox]], ['stocks', '个股与行业', [body]], ['flow', '资金流向', [flowBox]]];
-    let cur = prefs.get('marketTab', 'combo'); if (!PAGE_TABS.some(t => t[0] === cur)) cur = 'combo';
+    const btBox = h('div', {});                            // 回测与验证（原来的「回测」页）：第一次点开才建，#/market/backtest[/score] 直接打开
+    const showBt = () => { if (!this._bt) { this._bt = backtestPanel(ctx.deep2 === 'score' ? 'score' : 'hist'); btBox.append(this._bt.el); } };
+    const PAGE_TABS = [['combo', '市场温度与行情', [comboBox]], ['timing', '指数择时与均线', [mvBox, vixBox, kmBox]], ['stocks', '个股与行业', [body]], ['flow', '资金流向', [flowBox]], ['backtest', '回测与验证', [btBox]]];
+    let cur = ctx.deep === 'backtest' ? 'backtest' : prefs.get('marketTab', 'combo'); if (!PAGE_TABS.some(t => t[0] === cur)) cur = 'combo';
+    if (ctx.deep === 'backtest') prefs.set('marketTab', 'backtest');
     const panels = PAGE_TABS.map(([k, , kids]) => h('div', { hidden: k !== cur ? true : null }, ...kids));
     const tabBar = h('div', { class: 'tabs' }, PAGE_TABS.map(([k, label], i) => h('button', { class: k === cur ? 'on' : '', onclick: () => {
       prefs.set('marketTab', k);
       [...tabBar.children].forEach((b, j) => b.classList.toggle('on', j === i));
       panels.forEach((p, j) => { p.hidden = j !== i; });
       if (k === 'flow') showFlow();
+      if (k === 'backtest') showBt();
     } }, label)));
     el.append(h('div', { class: 'pane-body page' }, h('div', { class: 'row between mb' }, h('h1', {}, state.market === 'US' ? '美股行情' : 'A股行情'), h('span', { class: 'hint', id: 'mk-asof' })),
       tabBar, ...panels));
     if (cur === 'flow') showFlow();
+    if (cur === 'backtest') showBt();
+    setTimeout(() => { const on = tabBar.querySelector('.on'); if (on && tabBar.scrollWidth > tabBar.clientWidth) tabBar.scrollLeft += on.getBoundingClientRect().left - tabBar.getBoundingClientRect().left - 12; }, 30);   // 手机上标签栏横向滚动：让选中的那个露出来
     (async () => {                                       // 顶部合成图：指数 K 线 + 市场温度 + 恐慌指数
       let d;
       try { d = await loadCombo(); } catch (e) { d = { status: 'error', message: e.message }; }
@@ -131,5 +138,5 @@ export const marketView = {
     body.append(h('div', { class: 'card mt' }, h('h3', { style: 'margin-bottom:6px' }, '排行（交易池 L2 内）'), tabs, tbl));
     draw();
   },
-  cleanup() { this._flow?.destroy(); this._flow = null; this._mv?.destroy(); this._mv = null; this._km?.destroy(); this._km = null; this._vix?.destroy(); this._vix = null; this._combo?.destroy(); this._combo = null; },
+  cleanup() { this._bt?.destroy(); this._bt = null; this._flow?.destroy(); this._flow = null; this._mv?.destroy(); this._mv = null; this._km?.destroy(); this._km = null; this._vix?.destroy(); this._vix = null; this._combo?.destroy(); this._combo = null; },
 };
