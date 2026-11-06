@@ -127,7 +127,7 @@ function adjLabel(k) { return `前复权 · ${k.period === 'W' ? '周线' : '日
 function topBar(ctx) {
   return h('div', {},
     h('div', { class: 'mobile-top' }, h('button', { class: 'btn sm', onclick: () => ctx.setMobileDetail(false) }, '← 返回')),
-    ctx.showOverview ? h('div', { class: 'desk-top' }, h('button', { class: 'btn sm ghost', onclick: () => ctx.showOverview() }, '← 市场概览')) : null);
+    ctx.showOverview ? h('div', { class: 'desk-top' }, h('button', { class: 'btn sm ghost', onclick: () => ctx.showOverview() }, '← ' + (ctx.overviewLabel || '市场概览'))) : null);
 }
 
 function kv(k, v, cls = '') { return h('div', { class: 'kv' }, h('span', { class: 'k' }, k), h('span', { class: 'v num ' + cls }, v)); }

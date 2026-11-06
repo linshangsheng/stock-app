@@ -30,6 +30,7 @@ const seg = (items, cur, onPick) => {
 
 export const klineView = {
   layout: 'split',
+  ownDeepLink: true,                      // #/kline/sh.600519：直接看这只股票的 K 线
   async mount(ctx) {
     const gen = ctx.gen, mk = state.market;
     const alive = () => ctx.gen === gen && mk === state.market;          // 切换市场 / 页面后，迟到的数据不再画
@@ -189,6 +190,7 @@ export const klineView = {
       S.items = li.items; S.indices = ix.indices;
     } catch (e) { if (alive()) body.replaceChildren(h('div', { class: 'alert bad', style: 'margin:12px 16px' }, e.message)); return; }
     renderBody();
+    if (ctx.deep) { showStock(ctx.deep); return; }
     if (window.innerWidth <= 860) return;                     // 手机 / 窄屏（左右栏收成一栏，见 style.css 的 860px 断点）：先显示名单，点了再打开图
     const sel = S.sel;
     if (sel?.t === 'stk') showStock(sel.s);

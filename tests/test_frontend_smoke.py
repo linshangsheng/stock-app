@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-ROUTES = ["screener", "watchlist", "portfolio", "market", "news", "kline", "backtest", "backtest/score", "settings"]
+ROUTES = ["screener", "watchlist", "portfolio", "market", "kline", "backtest", "backtest/score", "settings", "settings/data", "settings/about"]
 NOISE = ("chrome-extension://", "edge://", "ProtocolLaunch", "edge_", "QQBrowser")        # 浏览器自己 / 扩展的日志，与页面无关
 
 
@@ -97,5 +97,17 @@ def test_page_opens_without_errors(base, tmp_path, route):
     assert not errs, f"{route}：浏览器控制台有报错：\n" + "\n".join(errs[:5])
     if route == "backtest/score":
         assert "实盘成绩单" in dom and "sb-card" in dom
-    if route == "settings":
-        assert "数据健康" in dom and ("hl-issue" in dom or "数据正常" in dom or "需要留意" in dom or "有问题" in dom), "设置页没有渲染出「数据健康」面板"
+    if route == "settings":                                      # 默认打开「通用设置」：自动更新开关（A 股 / 美股各一个）在最上面
+        assert "自动更新股票数据" in dom and dom.count("au-row") >= 2 and 'role="switch"' in dom, "设置页没有渲染出「自动更新」开关"
+    if route == "settings/data":                                 # #/settings/data 直接打开「数据更新」：里面有数据健康面板
+        assert "数据健康" in dom and ("hl-issue" in dom or "数据正常" in dom or "需要留意" in dom or "有问题" in dom), "设置 → 数据更新 没有渲染出「数据健康」面板"
+    if route == "settings/about":
+        assert "免责声明" in dom, "设置 → 关于 没有渲染出版本信息"
+
+
+def test_old_news_link_opens_the_news_tab_in_screener(base, tmp_path):
+    """资讯已并入「选股」页：旧的 #/news 链接 / 书签要跳到选股页并打开「资讯」标签；导航栏里不再有单独的「资讯」。"""
+    dom, errs = _visit(f"{base}/#/news", tmp_path / "p")
+    assert 'data-view="screener"' in dom and not errs, errs[:3]
+    assert '<button class="on" title="资讯' in dom, "没有自动打开「资讯」标签"
+    assert 'data-nav="news"' not in dom

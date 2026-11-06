@@ -532,3 +532,34 @@ tr.dim { opacity: .55; }
 .kl .draw-legend { margin-top: 8px; }
 .draw-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 5px 10px; border-radius: 8px; background: var(--panel); font-size: 12.5px; }
 .draw-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+
+/* ---------- 滑动开关：开 = 绿色（里面写「开」），关 = 白色（里面写「关」）。开关的绿色是「状态色」，和 A 股的涨跌配色无关，不随配色模式变 ---------- */
+:root { --sw-on: #1fa463; --sw-off-bg: #ffffff; --sw-off-line: #c9ced8; --sw-off-knob: #aeb5c2; --sw-off-txt: #8a93a3; }
+:root[data-theme="dark"] { --sw-on: #2bbf73; --sw-off-bg: #eceff4; --sw-off-line: #eceff4; --sw-off-knob: #98a1b1; --sw-off-txt: #667085; }
+.switch { position: relative; flex: none; width: 64px; height: 30px; padding: 0; border-radius: 15px; cursor: pointer; border: 1.5px solid var(--sw-off-line); background: var(--sw-off-bg);
+  transition: background .24s var(--ease), border-color .24s var(--ease); -webkit-tap-highlight-color: transparent; }
+.switch .sw-knob { position: absolute; top: 3px; left: 3px; width: 21px; height: 21px; border-radius: 50%; background: var(--sw-off-knob); box-shadow: 0 1px 3px rgba(0,0,0,.3);
+  transition: transform .26s var(--ease), background .2s; }
+.switch .sw-txt { position: absolute; top: 0; bottom: 0; right: 9px; display: flex; align-items: center; font-size: 12.5px; font-weight: 700; letter-spacing: .02em; color: var(--sw-off-txt); user-select: none; transition: color .2s; }
+.switch.on { background: var(--sw-on); border-color: var(--sw-on); }
+.switch.on .sw-knob { transform: translateX(34px); background: #fff; }
+.switch.on .sw-txt { right: auto; left: 10px; color: #fff; }
+.switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.switch:active .sw-knob { width: 25px; } .switch.on:active .sw-knob { transform: translateX(30px); }
+
+/* 设置页：左栏分类 + 自动更新开关行 */
+.set-item { display: flex !important; align-items: center; gap: 12px; }
+.set-ico { flex: none; width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; background: var(--field); color: var(--muted); transition: background .2s, color .2s; }
+.set-ico i { width: 20px; height: 20px; display: block; } .set-ico svg { width: 20px; height: 20px; display: block; }
+.set-item.sel .set-ico { background: var(--accent); color: #fff; }
+.set-txt { display: flex; flex-direction: column; min-width: 0; gap: 2px; } .set-desc { font-size: 12px; color: var(--muted); font-weight: 400; }
+.au-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 0; border-top: var(--hair) solid var(--line); } .au-row:first-of-type { margin-top: 8px; }
+.au-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; } .au-name { display: flex; align-items: center; gap: 8px; font-size: 14.5px; }
+.au-status { font-size: 12.5px; font-weight: 600; } .au-status.on { color: var(--sw-on); } .au-status.off { color: var(--muted); }
+.au-note { font-size: 12px; color: var(--warn); } .au-note:empty { display: none; }
+
+/* 选股页「资讯」标签：窄栏里的事件行 */
+.ev-item .ev-ttl { margin-top: 4px; font-weight: 600; font-size: 13.5px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.ev-item .ev-sum { margin-top: 2px; } .ev-item .t2 { align-items: center; gap: 8px; }
+.col-list .f select { max-width: 130px; }
+div.f { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }

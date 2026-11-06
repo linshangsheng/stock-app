@@ -426,6 +426,8 @@ class JobManager:
             if self.state["running"]:
                 return
             for market in ("CN", "US"):                           # 各市场按自己的时区与交易日历独立判断
+                if not settings.auto_update_enabled(market):               # 设置里关掉了这个市场的自动更新：不自动补拉
+                    continue
                 with db.market_db(market) as c:
                     if not c.execute("SELECT 1 FROM daily_bar LIMIT 1").fetchone():
                         continue

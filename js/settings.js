@@ -1,6 +1,11 @@
-// 设置（4.2）：数据源与更新状态、股票池过滤阈值与剔除数量、费用与滑点、涨跌配色、访问口令、备份状态。
+// 设置（4.2）：左右两栏，左边是分类、右边是选中的那一类。
+//   通用设置：各市场的自动更新开关、外观与访问（涨跌配色 / 主题 / 全屏 / 口令）、邮件提醒
+//   交易参数：资金方案（A 股）、费用 / 滑点 / 组合与止损参数
+//   数据更新：数据健康、数据与更新状态（初始化 / 盘后任务链 / 补跑）、股票池
+//   备份与存储：备份与恢复、存储空间
+//   关于：版本、作者、数据来源、第三方组件与许可
 import { get, post, put, state } from './api.js';
-import { h, clear, fmtPct, fmtNum, fmtMoney, toast, confirmBox, modal, dirClass } from './util.js';
+import { h, clear, fmtPct, fmtNum, fmtMoney, toast, confirmBox, modal, dirClass, switchEl, mountIcons } from './util.js';
 import { prefs } from './db.js';
 import { loadAbout, aboutBlock } from './about.js';
 import { healthPanel } from './health.js';
@@ -9,19 +14,49 @@ let pollTimer = null;
 const stopPoll = () => { clearInterval(pollTimer); pollTimer = null; };
 let healthView = null;
 
+const SECTIONS = [
+  ['general', '通用设置', '自动更新开关、外观、邮件提醒', 'gear'],
+  ['trade', '交易参数', '资金方案、费用与风控参数', 'sliders'],
+  ['data', '数据更新', '数据健康、更新与补全、股票池', 'refresh'],
+  ['backup', '备份与存储', '备份与恢复、占用空间', 'archive'],
+  ['about', '关于', '版本、作者、数据来源与许可', 'info'],
+];
+
 export const settingsView = {
-  layout: 'page',
+  layout: 'split',
+  ownDeepLink: true,                       // #/settings/data：直接打开「数据更新」
   async mount(ctx) {
-    const el = ctx.pageEl; clear(el); stopPoll();
-    const wrap = h('div', { class: 'pane-body page' });
-    el.append(wrap);
+    stopPoll();
+    const list = ctx.listEl, pane = ctx.detailEl, wrap = pane;
+    const gen = ctx.gen, alive = () => ctx.gen === gen;
     healthView?.destroy(); const health = healthView = healthPanel();
-    const secData = h('div', { class: 'card mt' }), secAlloc = h('div', { class: 'card mt' }), secPool = h('div', { class: 'card mt' }), secCost = h('div', { class: 'card mt' }), secLook = h('div', { class: 'card mt' }), secNotify = h('div', { class: 'card mt' }), secBackup = h('div', { class: 'card mt' }), secStorage = h('div', { class: 'card mt' }), secAbout = h('div', { class: 'card soft mt' });
-    wrap.append(h('h1', { class: 'mb' }, '设置'), health.el, secData, secAlloc, secPool, secCost, secLook, secNotify, secBackup, secStorage, secAbout);
+    const secAuto = h('div', { class: 'card' }), secData = h('div', { class: 'card mt' }), secAlloc = h('div', { class: 'card' }), secPool = h('div', { class: 'card mt' }), secCost = h('div', { class: 'card mt' }), secLook = h('div', { class: 'card mt' }), secNotify = h('div', { class: 'card mt' }), secBackup = h('div', { class: 'card' }), secStorage = h('div', { class: 'card mt' }), secAbout = h('div', { class: 'card soft' });
+
+    // ---------- 左栏：分类；右栏：选中那一类的内容 ----------
+    const PAGES = { general: [secAuto, secLook, secNotify], trade: [secAlloc, secCost], data: [health.el, secData, secPool], backup: [secBackup, secStorage], about: [secAbout] };
+    let cur = null;
+    function open(key, byUser) {
+      const sec = SECTIONS.find(x => x[0] === key) || SECTIONS[0];
+      cur = sec[0]; prefs.set('settingsTab', cur);
+      if (byUser) ctx.setMobileDetail(true);
+      list.querySelectorAll('.list-item').forEach(x => x.classList.toggle('sel', x.dataset.symbol === cur));
+      pane.replaceChildren(h('div', { class: 'mobile-top' }, h('button', { class: 'btn sm', onclick: () => ctx.setMobileDetail(false) }, '← 返回')),
+        h('div', { class: 'pane-body page' }, h('div', { class: 'row between mb' }, h('h1', {}, sec[1]), h('span', { class: 'hint' }, sec[2])), ...PAGES[cur]));
+      pane.scrollTop = 0;
+    }
+    const nav = h('div', { class: 'set-nav' }, SECTIONS.map(([k, t, d, ico]) => h('button', { class: 'list-item set-item', dataset: { symbol: k }, onclick: () => open(k, true) },
+      h('span', { class: 'set-ico' }, h('i', { 'data-ico': ico })), h('span', { class: 'set-txt' }, h('span', { class: 'name' }, t), h('span', { class: 'set-desc' }, d)))));
+    list.append(h('div', { class: 'pane-head' }, h('div', { class: 'row between' }, h('h1', {}, '设置'))), nav);
+    mountIcons(nav);
+    const want = SECTIONS.some(x => x[0] === ctx.deep) ? ctx.deep : prefs.get('settingsTab', 'general');
+    const narrow = window.innerWidth <= 860;
+    if (!narrow || ctx.deep) open(want, !!ctx.deep && narrow);         // 窄屏：先显示分类列表，点了再进去（带 #/settings/data 这类链接时直接进）
+    else open(want, false), ctx.setMobileDetail(false);
 
     let cfg = {};
-    try { cfg = await get('/settings', {}, { cache: false }); } catch (e) { wrap.append(h('div', { class: 'alert bad' }, e.message)); return; }
-    health.mount();                                  // 数据健康：设置页最上面，单独加载，不拖慢下面的各块
+    try { cfg = await get('/settings', {}, { cache: false }); } catch (e) { if (alive()) pane.replaceChildren(h('div', { class: 'alert bad', style: 'margin:16px' }, e.message)); return; }
+    if (!alive()) return;
+    health.mount();                                  // 数据健康：单独加载，不拖慢下面的各块
 
     // ---------- 数据与更新 ----------
     async function renderData() {
@@ -45,6 +80,7 @@ export const settingsView = {
           h('button', { class: 'btn', disabled: run || !j.has_data ? true : null, onclick: async () => { const r = await post('/jobs/daily', {}); toast(r.message, r.ok ? 'ok' : 'bad'); startPoll(); } }, '运行盘后任务链'),
           h('button', { class: 'btn', disabled: run || !j.has_data ? true : null, onclick: async () => { const r = await post('/jobs/catch_up', {}); toast(r.message, r.ok ? 'ok' : 'bad'); startPoll(); } }, '补跑缺失交易日'),
           h('button', { class: 'btn', disabled: !j.has_data ? true : null, onclick: async () => { toast('扫描中…'); try { await post('/scan/run', {}, { timeout: 300000 }); toast('扫描完成', 'ok'); } catch (e) { toast(e.message, 'bad'); } } }, '仅选股扫描')),
+        cfg.jobs?.auto_update?.[state.market] === false ? h('div', { class: 'alert info mt-s' }, h('b', {}, `${state.market === 'US' ? '美股' : 'A 股'}的「自动更新」是关着的：`), '行情不会自己更新。需要时点下面的「运行盘后任务链」手动更新；想让它自动更新，到「通用设置」打开开关。') : null,
         j.has_data ? h('p', { class: 'hint mt-s' }, state.market === 'US'
           ? '每天的更新是自动的：软件开着时，美股收盘后（北京时间早上）会自动更新并出清单，不用点按钮。「补全 / 继续初始化」只在第一次安装、很久没打开或想刷新股票名单时用；点了之后也会接着更新到最新交易日。'
           : '每天的更新是自动的：软件开着时，A 股收盘约 35 分钟后（15:35 起）自动用批量报价更新（约 1~2 分钟）并出清单，不用点按钮。错过当晚、直到第二天 9:15 以后才打开时，缺的那天只能逐只从 BaoStock 补（约 50 分钟）；周末打开不受影响。「补全 / 继续初始化」只在第一次安装、很久没打开或想刷新股票名单时用；点了之后也会接着更新到最新交易日。') : null);
@@ -80,7 +116,7 @@ export const settingsView = {
       if (pollTimer) return;
       let busy = false, tick = 0;              // 串行轮询：上一轮没返回就跳过；股票池（要构建全市场面板，较重）每约 30 秒才刷新一次
       pollTimer = setInterval(async () => {
-        if (!document.body.contains(wrap)) return stopPoll();
+        if (!document.body.contains(wrap) || !alive()) return stopPoll();
         if (busy || document.hidden) return;
         busy = true;
         try { await renderData(); if (++tick % 12 === 0) await renderPool(); } finally { busy = false; }
@@ -198,6 +234,34 @@ export const settingsView = {
       upd();
     }
 
+    // ---------- 自动更新开关：各市场分开；默认只开 A 股 ----------
+    function renderAuto() {
+      clear(secAuto);
+      const au = { CN: cfg.jobs?.auto_update?.CN ?? true, US: cfg.jobs?.auto_update?.US ?? false };
+      const MK = [['CN', 'A 股', '收盘约 35 分钟后（15:35 起）自动用批量报价更新，约 1~2 分钟，并生成选股清单。'], ['US', '美股', '美股收盘后（北京时间早上）自动更新并生成选股清单。']];
+      const rows = MK.map(([m, name, when]) => {
+        const status = h('div', { class: 'au-status' });
+        const note = h('div', { class: 'au-note' });
+        const paint = () => {
+          status.textContent = au[m] ? '已开启：软件开着时会自动更新' : '已关闭：这个市场不会自动更新，需要时到「数据更新」手动更新';
+          status.className = 'au-status ' + (au[m] ? 'on' : 'off');
+        };
+        const sw = switchEl(au[m], async v => {
+          au[m] = v; paint();
+          try { cfg = await put('/settings', { jobs: { auto_update: { [m]: v } } }); toast(`${name}自动更新已${v ? '开启' : '关闭'}`, 'ok'); }
+          catch (e) { au[m] = !v; sw.set(!v); paint(); toast(e.message, 'bad'); }
+        }, `${name}自动更新`);
+        paint();
+        (async () => {                                   // 还没有这个市场的数据：开着开关也不会更新，提醒先初始化
+          try { const j = await get('/jobs', { market: m }, { market: false, cache: false }); if (!j.has_data) note.textContent = `${name}还没有数据：先到「数据更新」点「初始化数据」，之后才会自动更新。`; } catch { /* 忽略 */ }
+        })();
+        return h('div', { class: 'au-row' }, h('div', { class: 'au-main' }, h('div', { class: 'au-name' }, h('span', { class: 'badge accent' }, name), h('b', {}, `${name}自动更新`)), h('div', { class: 'hint' }, when), status, note), sw);
+      });
+      secAuto.append(h('div', { class: 'card-title' }, h('h2', {}, '自动更新股票数据')),
+        h('p', { class: 'small muted' }, '软件开着时，每个市场收盘后自动补拉行情、生成当天的选股清单；错过的交易日下次打开时会补上。关掉的市场不会自己更新，随时可以到「数据更新」手动更新。默认只开 A 股。'),
+        ...rows);
+    }
+
     // ---------- 外观 / 口令 ----------
     function renderLook() {
       clear(secLook);
@@ -207,8 +271,8 @@ export const settingsView = {
         h('div', { class: 'row between wrap mb' }, h('div', {}, h('div', {}, '涨跌配色'), h('div', { class: 'hint' }, '默认随市场自适应：A股 红涨绿跌、美股 绿涨红跌。只改颜色映射，不影响数据与符号。')),
           seg([['auto', '随市场自适应'], ['red', '全局红涨绿跌'], ['green', '全局绿涨红跌']], mode, v => { prefs.set('colorMode', v); ctx.applyColors(); })),
         h('div', { class: 'row between wrap mb' }, h('div', {}, '主题'), seg([['auto', '跟随系统'], ['light', '浅色'], ['dark', '深色']], theme, v => { prefs.set('theme', v); ctx.applyTheme(); })),
-        h('div', { class: 'row between wrap mb' }, h('div', {}, h('div', {}, '启动后自动全屏'), h('div', { class: 'hint' }, '桌面快捷方式打开的窗口本身就是全屏（按 F11 退出），但鼠标移到屏幕最上沿时 Edge 会滑出一条标题栏。打开后第一次点击 / 按键，这里会把它升级成「网页全屏」——不再有那条标题栏，按 Esc 退出（本次不再自动进入）；左下角 ⛶ 随时切换。关掉这个开关就不升级。')),
-          seg([['on', '开'], ['off', '关']], prefs.get('autoFullscreen', true) ? 'on' : 'off', v => { prefs.set('autoFullscreen', v === 'on'); })),
+        h('div', { class: 'row between mb', style: 'gap:16px' }, h('div', { style: 'min-width:0' }, h('div', {}, '启动后自动全屏'), h('div', { class: 'hint' }, '桌面快捷方式打开的窗口本身就是全屏（按 F11 退出），但鼠标移到屏幕最上沿时 Edge 会滑出一条标题栏。打开后第一次点击 / 按键，这里会把它升级成「网页全屏」——不再有那条标题栏，按 Esc 退出（本次不再自动进入）；左下角 ⛶ 随时切换。关掉这个开关就不升级。')),
+          switchEl(prefs.get('autoFullscreen', true), v => { prefs.set('autoFullscreen', v); }, '启动后自动全屏')),
         h('div', { class: 'row between wrap' }, h('div', {}, h('div', {}, '访问口令'), h('div', { class: 'hint' }, `后端 ${cfg.server.host}:${cfg.server.port}${cfg.server.token_set ? ' · 已设置口令' : ' · 仅本机访问，未设口令'}。开放局域网（host=0.0.0.0）时必须在 config.yaml 设置 server.token（系统含持仓数据）。`)),
           h('button', { class: 'btn sm', onclick: () => { const f = { t: prefs.get('token', '') }; modal('访问口令', h('label', { class: 'f' }, '与后端 server.token 一致', h('input', { type: 'password', value: f.t, oninput: e => { f.t = e.target.value; } })), [{ label: '取消' }, { label: '保存', primary: true, onclick: () => { prefs.set('token', f.t); toast('已保存', 'ok'); } }]); } }, '设置本机口令')));
     }
@@ -275,7 +339,7 @@ export const settingsView = {
       secNotify.append(h('div', { class: 'card-title' }, h('h2', {}, '邮件提醒'), h('span', { class: 'badge ' + (n.ready ? 'ok' : '') }, n.status)),
         h('p', { class: 'small muted' }, '默认不发送任何邮件。填好下面三项并打开开关后，每天盘后任务链跑完会检查一次，有这些事才发：恐慌日（本轮第几个恐慌日、今天买预算的 1/10）、宽基 ETF 规则明天开盘的买卖信号、需要处理的持仓。同一件事同一个交易日只发一封。'),
         h('div', { class: 'form-grid mt' },
-          h('label', { class: 'f full' }, h('span', {}, '开关'), h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: f.enabled ? true : null, onchange: e => { f.enabled = e.target.checked; } }), '打开邮件提醒')),
+          h('div', { class: 'f full' }, h('span', {}, '邮件提醒开关'), h('div', { class: 'row', style: 'gap:10px' }, switchEl(f.enabled, v => { f.enabled = v; }, '邮件提醒'), h('span', { class: 'hint' }, '改完点下面的「保存」才生效'))),
           h('label', { class: 'f' }, h('span', {}, '发件邮箱（用它来发信）'), h('input', { type: 'text', value: f.sender, placeholder: 'you@qq.com', onchange: e => { f.sender = e.target.value.trim(); applyPreset(); } })),
           h('label', { class: 'f' }, h('span', {}, n.password_set ? '授权码（已保存；留空 = 保持不变）' : '授权码'), h('input', { type: 'password', placeholder: n.password_set ? '••••••••' : '邮箱网页里生成的授权码', autocomplete: 'new-password', oninput: e => { f.password = e.target.value; } })),
           h('label', { class: 'f full' }, h('span', {}, '收件邮箱（多个用逗号分隔；留空 = 发给自己）'), h('input', { type: 'text', value: f.recipients, placeholder: '留空 = 发给发件邮箱', oninput: e => { f.recipients = e.target.value; } }))),
@@ -297,7 +361,7 @@ export const settingsView = {
 
     secAbout.id = 'about';
     (async () => {
-      try { const a = await loadAbout(); secAbout.prepend(h('h2', { class: 'mb' }, '关于'), aboutBlock(a), h('hr', { class: 'about-hr' })); }
+      try { const a = await loadAbout(); secAbout.prepend(aboutBlock(a), h('hr', { class: 'about-hr' })); }
       catch (e) { secAbout.prepend(h('div', { class: 'hint' }, '关于：' + e.message)); }
     })();
     secAbout.append(h('details', { class: 'mb' }, h('summary', {}, '检验通过标准（config.yaml 的 validation，默认值）'), h('pre', { class: 'code' }, JSON.stringify(cfg.validation, null, 2))),
@@ -318,7 +382,7 @@ export const settingsView = {
           : h('p', { class: 'hint' }, 'L1 入库粗筛基于入库当天的快照，可能把「过去正常、如今已跌成低价」的股票筛掉，使回测偏乐观。全量初始化完成后运行：python -m server.cli l1-bias --sample 100（在数据库副本上抽样补拉被剔除股票的历史，比较含 / 不含的回测差异）。')));
     }
 
-    renderData(); renderAlloc(); renderPool().then(renderBias); renderCost(); renderLook(); renderNotify(); renderBackup(); renderStorage();
+    renderAuto(); renderData(); renderAlloc(); renderPool().then(renderBias); renderCost(); renderLook(); renderNotify(); renderBackup(); renderStorage();
   },
   cleanup() { stopPoll(); healthView?.destroy(); },
 };

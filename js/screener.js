@@ -10,6 +10,7 @@ import { loadMarketView, marketBrief } from './marketpanel.js';
 import { loadFactorPlan, factorTab, factorLine, factorEvidenceBlock } from './factor.js';
 import { loadKeyMa, keyMaBrief } from './keyma.js';
 import { loadVix, vixBrief } from './vix.js';
+import { newsTab, newsRight } from './news.js';
 
 const REGIME = { NORMAL: ['正常', '正常开仓'], CAUTION: ['谨慎', '仓位上限减半，只做最强候选'], DEFENSIVE: ['防守', '不开新仓'], UNKNOWN: ['未知', '基准数据缺失，按谨慎处理'] };
 const SETUP_ORDER = ['oversold', 'vcp', 'breakout', 'pullback'];
@@ -18,7 +19,8 @@ const SETUP_LABEL = { breakout: '突破', pullback: '回踩', vcp: '波动收缩
 export const screener = {
   layout: 'split',
   async mount(ctx) {
-    const S = { tab: state.market === 'CN' ? 'factor' : 'list', data: null, preview: false, sel: null };      // A 股默认先看低风险组合（资金方案里占 30%）；个股清单证据弱，放到后面
+    const S = { tab: ctx.openTab || (state.market === 'CN' ? 'factor' : 'list'), data: null, preview: false, sel: null };      // ctx.openTab：从别处（如旧的 #/news 链接）指定要打开的标签
+    ctx.openTab = null;      // A 股默认先看低风险组合（资金方案里占 30%）；个股清单证据弱，放到后面
     const el = ctx.listEl;
     const gen = ctx.gen;
     const alive = () => ctx.gen === gen;     // 切换市场 / 页面后，这一份页面的后台请求回来也不再画（否则 A股的数据会盖住美股）
@@ -98,14 +100,31 @@ export const screener = {
       requestAnimationFrame(() => b.init());
       S.rightEv = b; S.right = 'factor';
     }
-    const showRight = () => (S.tab === 'factor' && S.fp?.status === 'ok' ? showFpEvidence() : showOverview());
+    // 资讯标签：右侧显示「事件之后的价格表现」
+    function showNewsRight() {
+      if (!wide() || !S.news) return;
+      ctx.currentSymbol = null; S.sel = null;
+      S.rightEv?.destroy(); [...el.querySelectorAll('.list-item.sel')].forEach(x => x.classList.remove('sel'));
+      clear(ctx.detailEl);
+      const r = newsRight(S.news);
+      ctx.detailEl.append(h('div', { class: 'pane-body overview' }, h('div', { class: 'row between mb' }, h('h2', {}, '资讯 · 事件流')), r.el));
+      requestAnimationFrame(() => r.init());
+      S.rightEv = r; S.right = 'news';
+    }
+    // 右侧（没点开股票时）随标签变：低风险组合 → 回测证据；资讯 → 事件之后的价格表现；其余 → 市场概览
+    const rightKindOf = tab => (tab === 'factor' && S.fp?.status === 'ok' ? 'factor' : tab === 'news' ? 'news' : 'overview');
+    const showRight = () => {
+      const k = rightKindOf(S.tab) === 'news' && !S.news ? 'overview' : rightKindOf(S.tab);
+      ctx.overviewLabel = { factor: '低风险组合', news: '资讯', overview: '市场概览' }[k];
+      return k === 'factor' ? showFpEvidence() : k === 'news' ? showNewsRight() : showOverview();
+    };
     ctx.showOverview = showRight;
     (async () => {
       try { S.mv = await loadMarketView(); } catch (e) { S.mv = { status: 'error', message: e.message }; }
       if (!alive()) return;
       clear(brief); brief.append(marketBrief(S.mv));
       if (S.data) render();
-      if (!ctx.currentSymbol && S.right !== 'factor') showRight();
+      if (!ctx.currentSymbol && S.right !== 'factor' && S.right !== 'news') showRight();
     })();
 
     /** 「明天要做什么」：把宽基 ETF、个股、持仓三件事汇总成一张卡（数据都来自后端，前端只汇总展示）。 */
@@ -142,9 +161,21 @@ export const screener = {
       if (S.tab === 'list') renderList(d);
       else if (S.tab === 'factor') renderFactor();
       else if (S.tab === 'panic') renderPanic(d);
+      else if (S.tab === 'news') renderNews();
       else if (S.tab === 'exec') renderExec(d);
       else if (S.tab === 'filter') renderFilter();
       else renderHistory();
+    }
+
+    function renderNews() {
+      if (!S.news) {
+        S.news = newsTab({
+          onPick: sym => { S.sel = sym; S.rightEv?.destroy(); S.rightEv = null; S.right = 'detail'; showDetail(ctx, sym); },
+          onFilter: () => { if (S.right === 'news') showNewsRight(); },
+        });
+        if (!ctx.currentSymbol) showRight();
+      }
+      el.append(S.news.el);
     }
 
     function renderFactor() {
@@ -156,10 +187,10 @@ export const screener = {
     function tabsBar() {
       // 左栏很窄：标签用短名（鼠标停留显示全名），均分宽度，放得下就不出现横向滚动
       // 顺序按证据强弱：低风险组合 / 恐慌日（资金方案里真正用到的）在前，个股清单（只观察）在后
-      const tabs = [...(state.market === 'CN' ? [['factor', '低风险', '低风险组合']] : []), ['panic', '恐慌日', '恐慌日'], ['list', '个股观察', '个股观察清单（只观察）'],
+      const tabs = [...(state.market === 'CN' ? [['factor', '低风险', '低风险组合']] : []), ['panic', '恐慌日', '恐慌日'], ['list', '个股观察', '个股观察清单（只观察）'], ['news', '资讯', '资讯 · 公告 / 新闻 / 财报日历'],
         ['exec', '次日', '次日执行'], ['filter', '筛选', '条件筛选'], ['hist', '历史', '历史回看']];
       return h('div', { class: 'tabs', style: 'padding:0 8px;margin:0;align-items:center' }, ...tabs.map(([k, l, full]) =>
-        h('button', { class: S.tab === k ? 'on' : '', title: full, onclick: () => { const was = S.tab; S.tab = k; render(); if (!ctx.currentSymbol && (was === 'factor') !== (k === 'factor')) showRight(); } }, l)),
+        h('button', { class: S.tab === k ? 'on' : '', title: full, onclick: () => { const was = S.tab; if (was === 'news' && k !== 'news') { S.news?.destroy(); S.news = null; } S.tab = k; render(); if (!ctx.currentSymbol && rightKindOf(was) !== rightKindOf(k)) showRight(); } }, l)),
         null);
     }
 
@@ -471,7 +502,7 @@ function emptyNoRun(d, ctx, reload, jobs) {
     const step = (n, title, body, action) => h('div', { class: 'onb-step' }, h('span', { class: 'onb-n' }, n), h('div', {}, h('b', {}, title), h('div', { class: 'small muted' }, body), action));
     return h('div', { class: 'onboard' }, h('h2', {}, '欢迎使用 👋'), h('p', { class: 'hint' }, '三步开始：'),
       step('1', '初始化数据', 'A 股全市场 10 年日线，约 6~9 小时；想先试用可以只随机拉 100 只（几分钟）。可以随时中断，下次接着下。',
-        h('a', { class: 'btn sm primary mt-s', href: '#/settings' }, '去设置页初始化')),
+        h('a', { class: 'btn sm primary mt-s', href: '#/settings/data' }, '去设置页初始化')),
       step('2', '填账户资金', '例如 100000。软件按它算每只股票买多少股、每个指数投多少钱；每笔碰到止损最多亏资金的 0.75%。',
         h('a', { class: 'btn sm mt-s', href: '#/portfolio' }, '去持仓页填写')),
       step('3', '每天收盘后看这里', '软件会自动更新数据、选股、体检持仓。最上方的「明天要做什么」告诉你第二天开盘该做什么。', null),
@@ -482,7 +513,7 @@ function emptyNoRun(d, ctx, reload, jobs) {
       h('button', { class: 'btn primary', onclick: async () => {
         toast('正在扫描…');
         try { await post('/scan/run', {}, { timeout: 300000 }); toast('扫描完成', 'ok'); reload(); } catch (e) { toast(e.message, 'bad'); }
-      } }, '立即扫描'), h('a', { class: 'btn', href: '#/settings' }, '去设置页初始化数据')));
+      } }, '立即扫描'), h('a', { class: 'btn', href: '#/settings/data' }, '去设置页初始化数据')));
 }
 
 const RISK_NOTE = { breakout: '「突破」显著差于同日随机买入', pullback: '「回踩」显著差于同日随机买入', oversold: '「强势超跌」在完整成交规则下样本外为负' };
@@ -508,7 +539,7 @@ function statusBar(d, jobs, ctx, recompute) {
   const cell = (k, ...v) => h('div', { class: 'cell' }, h('span', { class: 'k' }, k), h('span', { class: 'v' }, ...v));
   const gateTip = (run?.gate?.checks || []).map(c => `${c.ok ? '✓' : '✗'} ${c.name}: ${c.msg}`).join('\n');
   return h('div', { class: 'status-bar' },
-    cell('数据状态', h('a', { class: 'badge ' + (gate === 'PASS' ? 'ok' : gate ? 'bad' : ''), href: '#/settings', style: 'text-decoration:none', title: gateTip + '\n\n点这里看「数据健康」：新不新、全不全、数据源成不成功' }, gate === 'PASS' ? '完整性 通过' : gate ? '数据不完整' : '—'),
+    cell('数据状态', h('a', { class: 'badge ' + (gate === 'PASS' ? 'ok' : gate ? 'bad' : ''), href: '#/settings/data', style: 'text-decoration:none', title: gateTip + '\n\n点这里看「数据健康」：新不新、全不全、数据源成不成功' }, gate === 'PASS' ? '完整性 通过' : gate ? '数据不完整' : '—'),
       h('span', { class: 'num small muted' }, jobs?.data_asof || d.data_asof || '—')),
     cell(`个股开仓闸门（${run?.regime?.market_name || (state.market === 'US' ? '美股' : 'A股')}）`,
       reg ? h('span', { class: 'pill-state ' + reg, title: REGIME[reg]?.[1] }, REGIME[reg]?.[0] || reg) : '—',

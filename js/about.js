@@ -1,5 +1,5 @@
 // 关于：软件名称、版本、作者与联系方式、版权、免责声明、数据来源与第三方组件。数据来自 /api/about（只在 server/__init__.py 写一次）。
-// 用在「设置」页底部，以及点导航栏左上角 Logo 弹出的小窗。
+// 用在「设置 → 关于」，以及点导航栏左上角 Logo 弹出的小窗。
 import { get } from './api.js';
 import { h, toast, copyText, modal } from './util.js';
 
@@ -38,7 +38,7 @@ export async function openAbout() {
   let a;
   try { a = await loadAbout(); } catch (e) { toast(e.message, 'bad'); return; }
   modal('关于', h('div', {}, aboutBlock(a, { full: false }),
-    h('p', { class: 'hint mt-s' }, '数据来源、第三方组件与许可：见「设置」页底部。')), [{ label: '去设置页', onclick: () => { location.hash = '#/settings'; } }, { label: '关闭', primary: true }]);
+    h('p', { class: 'hint mt-s' }, '数据来源、第三方组件与许可：见「设置 → 关于」。')), [{ label: '去设置页', onclick: () => { location.hash = '#/settings/about'; } }, { label: '关闭', primary: true }]);
 }
 
 function kv(k, v) {

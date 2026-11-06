@@ -183,7 +183,7 @@ def build(market: str, *, jobs_state: dict | None = None, scheduler_on: bool | N
             asof = db.get_meta(c, "data_asof")
             if not has_data or not asof:
                 return {"market": market, "status": "bad", "has_data": False, "headline": "还没有行情数据",
-                        "issues": [{"level": "bad", "title": "还没有行情数据", "hint": "到「设置 → 数据与更新状态」点「初始化数据」。", "where": "settings"}],
+                        "issues": [{"level": "bad", "title": "还没有行情数据", "hint": "到「设置 → 数据更新」点「初始化数据」。", "where": "settings"}],
                         "generated_at": datetime.now().isoformat(timespec="seconds"), "process": _process()}
             fresh = _freshness(c, market, asof)
             cov = _coverage(c, market, asof)
@@ -207,8 +207,11 @@ def build(market: str, *, jobs_state: dict | None = None, scheduler_on: bool | N
     if gate["status"] != "PASS":
         add("bad", "数据完整性闸门没通过：今天不会生成观察清单", "；".join(gate["reasons"]) or "见下面的闸门明细", "gate")
     behind = fresh["behind_days"]
+    auto = settings.auto_update_enabled(market)
     if behind is not None and behind >= 2:
-        add("bad", f"行情数据落后 {behind} 个交易日（截至 {fresh['data_asof']}）", "到「设置」点「补跑缺失交易日」；软件要开着才会自动更新。", "fresh")
+        add("bad", f"行情数据落后 {behind} 个交易日（截至 {fresh['data_asof']}）",
+            "这个市场的「自动更新」是关着的（设置 → 通用设置）：打开它，或到「设置 → 数据更新」点「补跑缺失交易日」手动更新。" if not auto
+            else "到「设置 → 数据更新」点「补跑缺失交易日」；软件要开着才会自动更新。", "fresh")
     elif behind == 1 and jobs["waiting"] and (_ago_hours(jobs["waiting"]["ts"]) or 99) < 3:
         add("info", f"上游还没提供 {fresh['last_closed']} 的数据，软件在等", (jobs["waiting"]["detail"] or "") + "。每隔约 10 分钟探测一次，一有就自动更新，不用手动处理。", "jobs")
     elif behind == 1:
@@ -233,9 +236,9 @@ def build(market: str, *, jobs_state: dict | None = None, scheduler_on: bool | N
     if le and (_ago_hours(le["ts"]) or 999) < 48 and not (jobs["last_ok"] and jobs["last_ok"]["ts"] > le["ts"]):
         add("warn", "最近一次更新任务失败了", f"{le['ts'].replace('T', ' ')} {JOB_NAME.get(le['job'], le['job'])}：{(le['detail'] or '')[:120]}", "jobs")
     if bk["stale"]:
-        add("warn", "备份已经超过 1 天没有更新" if bk["last"] else "还没有任何备份", "持仓和交易记录只有备份能找回；到「设置 → 备份与恢复」手动备份一次。", "backup")
+        add("warn", "备份已经超过 1 天没有更新" if bk["last"] else "还没有任何备份", "持仓和交易记录只有备份能找回；到「设置 → 备份与存储」手动备份一次。", "backup")
     if free_gb is not None and free_gb < 0.5:
-        add("bad", f"磁盘只剩 {free_gb} GB", "空间不够时数据更新会失败；清理磁盘或到「设置 → 存储空间」清理。", "process")
+        add("bad", f"磁盘只剩 {free_gb} GB", "空间不够时数据更新会失败；清理磁盘或到「设置 → 备份与存储」清理。", "process")
     elif free_gb is not None and free_gb < 2:
         add("warn", f"磁盘只剩 {free_gb} GB", "建议留出 2 GB 以上。", "process")
     if idx and idx.get("stale"):
@@ -251,7 +254,7 @@ def build(market: str, *, jobs_state: dict | None = None, scheduler_on: bool | N
     }[status]
     return {"market": market, "status": status, "headline": headline, "has_data": True, "issues": issues,
             "freshness": fresh, "coverage": cov, "gate": {k: gate[k] for k in ("status", "day", "checks", "reasons")} | {"bad_symbols": (gate.get("bad_symbols") or [])[:30]},
-            "sources": sources, "jobs": jobs, "scheduler_on": scheduler_on, "backup": {k: bk[k] for k in ("last", "age_days", "stale", "count", "dir")},
+            "sources": sources, "jobs": jobs, "scheduler_on": scheduler_on, "auto_update": auto, "backup": {k: bk[k] for k in ("last", "age_days", "stale", "count", "dir")},
             "disk_free_gb": free_gb, "process": _process(), "us_index": idx,
             "generated_at": datetime.now().isoformat(timespec="seconds")}
 

@@ -63,6 +63,17 @@ def test_stale_data_is_bad(demo_env, monkeypatch):
     assert r["freshness"]["behind_days"] == 3 and r["status"] == "bad" and "落后 3 个交易日" in titles(r) and "不可信" in r["headline"]
 
 
+def test_stale_hint_says_when_auto_update_is_switched_off(demo_env, monkeypatch):
+    monkeypatch.setattr(backup, "backup_status", lambda: GOOD_BACKUP)
+    later = _add_calendar_days(3)[-1]
+    monkeypatch.setattr(mc, "last_closed_trading_day", lambda conn, market, now=None: later)
+    r = dh.build("CN")
+    assert r["auto_update"] is True and not any("自动更新」是关着的" in i["hint"] for i in r["issues"])
+    settings.save_user_config({"jobs": {"auto_update": {"CN": False}}})
+    r = dh.build("CN")
+    assert r["auto_update"] is False and r["status"] == "bad" and any("自动更新」是关着的" in i["hint"] for i in r["issues"])      # 还是「落后」，但原因写明白
+
+
 def test_one_day_behind_is_only_a_hint(demo_env, monkeypatch):
     monkeypatch.setattr(backup, "backup_status", lambda: GOOD_BACKUP)
     nxt = _add_calendar_days(1)[0]

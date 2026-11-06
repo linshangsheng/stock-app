@@ -112,7 +112,7 @@ export function healthPanel() {
     section('更新任务', j.last_ok ? `上次成功更新：${ago(j.last_ok.ts)}` : '还没有成功更新的记录', !!j.last_error && (!j.last_ok || j.last_ok.ts < j.last_error.ts),
       h('div', { class: 'grid c4 mt-s' },
         kv('上次成功', j.last_ok ? when(j.last_ok.ts) : '—', j.last_ok?.detail || ''), kv('上次失败', j.last_error ? when(j.last_error.ts) : '无', j.last_error?.detail || '', j.last_error ? 'hl-bad' : ''),
-        kv('自动更新', d.scheduler_on ? '开着（软件开着时会自动更新）' : '没开'), kv('现在', j.running ? `正在运行：${j.names[j.running] || j.running}` : '空闲')),
+        kv('自动更新', d.auto_update === false ? '这个市场的自动更新被你关掉了（设置 → 通用设置）' : d.scheduler_on ? '开着（软件开着时会自动更新）' : '没开'), kv('现在', j.running ? `正在运行：${j.names[j.running] || j.running}` : '空闲')),
       j.last_scan ? h('div', { class: 'small mt-s muted' }, `最近一次选股扫描：${j.last_scan.scan_date}，数据闸门 ${j.last_scan.data_gate_status || '—'}`) : null,
       j.recent?.length ? h('div', { class: 'small mt-s' }, j.recent.map(l => h('div', { class: 'num ' + (l.tone === 'bad' ? 'hl-bad' : 'muted') },
         `${when(l.ts)}  ${j.names[l.job] || l.job}  ${l.text}${l.n > 1 ? ` ×${l.n}${l.n_min ? '+' : ''}（最早 ${when(l.first).slice(11)}）` : ''}  ${l.detail || ''}`))) : null);
