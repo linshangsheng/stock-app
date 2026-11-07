@@ -31,7 +31,7 @@ const TODO = [
 function roadmap() {
   return h('div', { class: 'card mt' }, h('div', { class: 'card-title' }, h('h3', {}, '港股现在做到哪了')),
     h('div', { class: 'small', style: 'line-height:1.8' }, TODO.map(([k, v]) => h('div', {}, h('b', {}, k + '：'), v))),
-    h('p', { class: 'hint mt-s' }, '左侧上方的「A股｜港股｜美股」按钮可以随时切换。'));
+    h('p', { class: 'hint mt-s' }, '「A股｜港股｜美股」切换按钮（电脑在左上角，手机在顶部）可以随时切换。'));
 }
 
 /** 选股页里的「指数走势一览」：每个指数一行（收盘、今日、站上哪几条均线），点一行去「行情」页看图。 */

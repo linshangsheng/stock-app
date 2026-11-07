@@ -84,7 +84,7 @@ p, .hint, .alert, .empty { text-wrap: pretty; } h1, h2, h3, .empty .big { text-w
   transform: translateY(calc(var(--i) * 100%)); }
 .market-switch.anim::before { transition: transform .38s var(--spring); }
 .market-switch button { height: 30px; padding: 0; border: 0; border-radius: 9px; background: transparent; cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 500; letter-spacing: .05em;
-  color: rgba(255,255,255,.62); transition: color .22s var(--ease); -webkit-tap-highlight-color: transparent; }
+  color: rgba(255,255,255,.72); transition: color .22s var(--ease); -webkit-tap-highlight-color: transparent; }
 .market-switch button:hover { color: #fff; }
 .market-switch button.on, .market-switch button.on:hover { color: #0c1330; font-weight: 650; }
 .hk-list .list-item { border-radius: 8px; }
@@ -249,19 +249,26 @@ details[open] > summary::before, details.card[open] > summary::before, .km-idx[o
 @media (max-width: 860px) {
   .app { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
   .nav { grid-row: 2; flex-direction: row; background: var(--nav-bg); padding: 4px 6px calc(4px + env(safe-area-inset-bottom)); justify-content: space-around; overflow: visible; gap: 0; box-shadow: inset 0 .5px 0 rgba(255,255,255,.08); }
-  .nav .brand, .nav-foot .badge { display: none; }
-  .nav .market-switch { width: 138px; grid-template-columns: repeat(3, 1fr); margin: 0; align-self: center; }
+  /* 手机：顶部一条深色栏 = 左边 Logo、中间「A股 | 港股 | 美股」分段控件、右边刷新 / 主题；底部导航只留 6 个页面标签（均分，像 iOS 的标签栏）。
+     市场切换是「全局的范围」，不该挤在标签栏里和页面标签抢位置。顶栏和里面的东西都是 fixed，页面内容整体下移一个栏高（.main 的 padding-top）。 */
+  :root { --topbar-h: 52px; }
+  .app::before { content: ""; position: fixed; z-index: 30; top: 0; left: 0; right: 0; height: calc(var(--topbar-h) + env(safe-area-inset-top)); background: var(--nav-bg); box-shadow: inset 0 -.5px 0 rgba(255,255,255,.1); }
+  .nav .brand { position: fixed; z-index: 31; top: calc(env(safe-area-inset-top) + 10px); left: 14px; flex-direction: row; padding: 0; gap: 0; }
+  .nav .brand span { display: none; } .nav .brand img { width: 32px; height: 32px; border-radius: 8px; box-shadow: 0 0 0 .5px rgba(255,255,255,.2); }
+  .nav .market-switch { position: fixed; z-index: 31; top: calc(env(safe-area-inset-top) + 9px); left: 50%; transform: translateX(-50%); width: 184px; margin: 0; grid-template-columns: repeat(3, 1fr); border-radius: 12px; }
   .nav .market-switch::before { height: auto; bottom: 2px; width: calc((100% - 4px) / 3); right: auto; transform: translateX(calc(var(--i) * 100%)); }
-  .nav .market-switch button { height: 28px; font-size: 12px; letter-spacing: .02em; }
-  .nav-foot { margin: 0; padding: 0; flex-direction: row; } .nav a { flex: 1; padding: 6px 2px 5px; font-size: 11px; }
+  .nav .market-switch button { height: 32px; font-size: 13.5px; letter-spacing: .03em; }
+  .nav-foot { position: fixed; z-index: 31; top: calc(env(safe-area-inset-top) + 10px); right: 12px; margin: 0; padding: 0; flex-direction: row; gap: 6px; }
+  .nav-foot .icon-btn { width: 32px; height: 32px; } #fs-btn, .nav-foot .badge { display: none; }
+  .nav a { flex: 1; padding: 6px 2px 5px; font-size: 11px; }
   .nav a.on::before { left: 50%; top: 0; width: 22px; height: 3px; margin: 0 0 0 -11px; border-radius: 0 0 3px 3px; }
-  .main { height: auto; min-height: 0; }
+  .main { height: auto; min-height: 0; padding-top: calc(var(--topbar-h) + env(safe-area-inset-top)); box-sizing: border-box; }
   [data-layout="split"] .main { grid-template-columns: 1fr; }
   [data-layout="split"][data-mobile="detail"] .col-list { display: none; }
   [data-layout="split"]:not([data-mobile="detail"]) .col-detail { display: none; }
   .col-list { border-right: 0; } .chart-main { height: 300px; } .grid.c4 { grid-template-columns: repeat(2, 1fr); } .grid.c3 { grid-template-columns: repeat(2, 1fr); }
   .form-grid { grid-template-columns: 1fr; } .quote-head .price { font-size: 28px; }
-  .pane-head { padding: calc(12px + env(safe-area-inset-top)) 14px 12px; } .pane-body { padding: 16px 14px 40px; }
+  .pane-head { padding: 12px 14px; } .pane-body { padding: 16px 14px 40px; }
   .col-detail .chart-box { margin: 0 10px; }
   .mobile-top { display: flex !important; }
 }
