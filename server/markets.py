@@ -39,7 +39,7 @@ def aux_indices(market: str) -> list[str]:
 
 
 def currency(market: str) -> str:
-    return "CNY" if market == CN else "USD"
+    return {"CN": "CNY", "HK": "HKD"}.get(market, "USD")
 
 
 def cost_cfg(market: str) -> dict:

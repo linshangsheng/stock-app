@@ -12,6 +12,7 @@ import { portfolio } from './portfolio.js';
 import { settingsView } from './settings.js';
 import { marketView } from './market.js';
 import { klineView } from './kline.js';
+import { hkView, hkPlaceholder } from './hk.js';
 import { showDetail } from './detail.js';
 
 const VIEWS = { screener, watchlist, portfolio, settings: settingsView, market: marketView, kline: klineView };
@@ -22,6 +23,7 @@ export const ctx = {
   watchSet: new Set(), detailPeriod: 'D', currentSymbol: null, refreshList: null, pollJobs: null,
   setMobileDetail(on) { appEl.dataset.mobile = on ? 'detail' : ''; },
   async reloadWatch() {
+    if (state.market === 'HK') { ctx.watchSet = new Set(); return; }
     try { const d = await get('/watchlist', {}, { cache: false }); ctx.watchSet = new Set(d.items.map(i => i.symbol)); } catch { /* 未初始化 / US */ }
   },
   applyColors, applyTheme,
@@ -30,7 +32,7 @@ export const ctx = {
 // ---------- 涨跌配色（4.4.1）：随市场自适应，可改全局统一 ----------
 function applyColors() {
   const mode = prefs.get('colorMode', 'auto');
-  const up = mode === 'red' ? 'red' : mode === 'green' ? 'green' : (state.market === 'CN' ? 'red' : 'green');
+  const up = mode === 'red' ? 'red' : mode === 'green' ? 'green' : (state.market === 'US' ? 'green' : 'red');                  // 港股和 A 股一样红涨绿跌
   document.documentElement.dataset.up = up;
   themeChanged();
   restyleCharts();                               // 行情页等其他图表：刷新底色 / 网格 / 文字 / K 线涨跌色
@@ -62,7 +64,7 @@ async function route() {
   if (name === 'news') { ctx.openTab = 'news'; location.replace('#/screener'); return; }       // 资讯已并入「选股」页的一个标签：旧链接 / 书签跳过去
   if (name === 'backtest') { location.replace('#/market/backtest' + (parts[1] === 'score' ? '/score' : '')); return; }   // 回测已并入「行情」页的「回测与验证」标签：旧链接 / 书签跳过去
   const deepSymbol = parts[1] ? decodeURIComponent(parts[1]) : null;      // #/screener/sh.600519：从行情 / 资讯页点进个股详情
-  const view = VIEWS[name] || VIEWS.screener;
+  const view = state.market === 'HK' ? (name === 'settings' ? VIEWS.settings : (name === 'screener' || !VIEWS[name]) ? hkView : hkPlaceholder(name)) : (VIEWS[name] || VIEWS.screener);   // 港股：设置通用；选股页 = 港股指数估值；其余页面还在建设中
   ctx.gen = (ctx.gen || 0) + 1;              // 每次进入页面（含切换 A股 / 美股）加一：旧页面迟到的数据不能再画到新页面上
   current?.cleanup?.();
   ctx.cleanup?.(); ctx.cleanup = null;
@@ -202,7 +204,7 @@ if (fsSupported) {
 (async function boot() {
   mountIcons();
   const saved = prefs.get('market', 'CN');
-  if (saved === 'US' || saved === 'CN') {
+  if (saved === 'US' || saved === 'CN' || saved === 'HK') {
     state.market = saved; setMarketFmt(saved);
     $$('.market-switch button').forEach(x => x.classList.toggle('on', x.dataset.market === saved));
   }

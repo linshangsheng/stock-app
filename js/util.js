@@ -64,7 +64,7 @@ export function fmtAmount(v) {
 }
 let _market = 'CN';
 export function setMarketFmt(m) { _market = m; }
-export const currencySymbol = () => (_market === 'US' ? '$' : '¥');
+export const currencySymbol = () => (_market === 'US' ? '$' : _market === 'HK' ? 'HK$' : '¥');
 export function fmtMoney(v) { return isNum(v) ? currencySymbol() + v.toLocaleString(_market === 'US' ? 'en-US' : 'zh-CN', { maximumFractionDigits: 0 }) : '—'; }
 export const lotName = () => (_market === 'US' ? '股' : '手');
 export function fmtVol(v) {

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import settings
 
-MARKET_DB = {"CN": "ashare.db", "US": "us.db"}
+MARKET_DB = {"CN": "ashare.db", "US": "us.db", "HK": "hk.db"}
 
 MARKET_SCHEMA = """
 CREATE TABLE IF NOT EXISTS securities(

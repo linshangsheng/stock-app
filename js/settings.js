@@ -99,7 +99,7 @@ export const settingsView = {
       }
       if (j.gate) secData.append(h('details', { class: 'mt', open: j.gate.status !== 'PASS' }, h('summary', {}, `数据完整性闸门（${j.gate.day}）：${j.gate.status}`),
         h('table', {}, h('tbody', {}, j.gate.checks.map(c => h('tr', {}, h('td', { style: 'width:20px' }, c.ok ? '✓' : c.hard ? '✗' : '!'), h('td', {}, c.name), h('td', { class: 'small muted' }, c.msg), h('td', { class: 'num small' }, String(c.value))))))));
-      if (state.market === 'CN') {                       // A 股数据源体检：初始化失败（如「CircuitOpen: baostock」）时看哪个源能连上
+      if (state.market !== 'US') {                       // A 股数据源体检（港股还没有自己的数据设置，先显示 A 股的）：初始化失败（如「CircuitOpen: baostock」）时看哪个源能连上
         const box = h('div', { class: 'small mt-s' });
         secData.append(h('div', { class: 'row wrap mt' }, h('button', { class: 'btn sm', onclick: async e => {
           e.target.disabled = true; box.replaceChildren(h('span', { class: 'spinner' }), ' 正在检测（每个源取几天数据，约 5~60 秒）…');
@@ -213,7 +213,7 @@ export const settingsView = {
     // ---------- 资金方案（A 股）：宽基 ETF / 低风险组合 / 个股波段 ----------
     function renderAlloc() {
       clear(secAlloc);
-      if (state.market !== 'CN') { secAlloc.hidden = true; return; }
+      if (state.market === 'US') { secAlloc.hidden = true; return; }
       secAlloc.hidden = false;
       const al = cfg.allocation || {}, fpc = cfg.factor_portfolio || {};
       const F = { etf: Math.round((al.etf ?? 0.7) * 100), factor: Math.round((al.factor ?? 0.3) * 100), n: fpc.n ?? 10 };

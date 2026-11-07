@@ -1,4 +1,4 @@
-"""宽基指数估值（市盈率）与「分批建仓」参考：A 股 5 个宽基指数 + 美股标普500 / 纳斯达克100。
+"""宽基指数估值（市盈率）与「分批建仓」参考：A 股 5 个宽基指数 + 港股恒生指数 / 国企指数 / 恒生科技（独立的港股市场）+ 美股标普500 / 纳斯达克100。
 
 数据：蛋卷基金的指数估值页（danjuanfunds.com，免登录的公开接口，第三方、没有官方保证，可能改版 / 限流 / 中断）：
   * /djapi/index_eva/dj                         一次返回 60 多个指数的当前市盈率 / 市净率 / 各自的历史分位 / 股息率；
@@ -30,12 +30,19 @@ CODES_BY_MARKET = {
     "CN": {"sh.000016": "SH000016", "sh.000300": "SH000300", "sh.000905": "SH000905", "sh.000852": "SH000852", "sz.399006": "SZ399006"},
     "US": {"SPY": "SP500", "QQQ": "NDX"},
 }
+# 港股（独立市场，数据存在 hk.db）：三个指数。没有「市场温度 / 指数规则」，名字和对应 ETF 在这里写死。
+HK_SPEC = {
+    "HK.HSI": {"code": "HKHSI", "name": "恒生指数", "etf": "159920 恒生ETF", "style": "港股大盘"},
+    "HK.HSCEI": {"code": "HKHSCEI", "name": "国企指数", "etf": "510900 恒生国企ETF（H股ETF）", "style": "港股国企"},
+    "HK.HSTECH": {"code": "HKHSTECH", "name": "恒生科技", "etf": "513180 恒生科技ETF", "style": "港股科技"},
+}
+CODES_BY_MARKET["HK"] = {sym: v["code"] for sym, v in HK_SPEC.items()}
 CODES = CODES_BY_MARKET["CN"]                              # 兼容旧名
-METAS = {"CN": "valuation_cn", "US": "valuation_us"}
+METAS = {"CN": "valuation_cn", "US": "valuation_us", "HK": "valuation_hk"}
 META = METAS["CN"]
 STALE_SECONDS = 12 * 3600
 _lock = threading.Lock()
-_bg: dict = {"CN": {"running": False, "last": None}, "US": {"running": False, "last": None}}
+_bg: dict = {m: {"running": False, "last": None} for m in ("CN", "US", "HK")}
 
 
 def vcfg() -> dict:
@@ -161,6 +168,8 @@ def analyze_one(sym: str, name: str, rows: list, cur: dict | None, cfg: dict | N
     years = int(c.get("window_years", 10))
     start = (datetime.fromisoformat(asof) - timedelta(days=int(365.25 * years))).date().isoformat()
     win = [p for p in pts if p[0] >= start]
+    span = (datetime.fromisoformat(asof) - datetime.fromisoformat(win[0][0])).days / 365.25
+    wtext = f"近 {years} 年" if span >= years - 0.6 else f"{win[0][0][:7]} 以来（约 {span:.1f} 年）"          # 有的指数（如恒生科技）没有 10 年历史，如实写
     low_d, low = min(win, key=lambda p: p[1])
     hi_d, hi = max(win, key=lambda p: p[1])
     vals = sorted(v for _, v in win)
@@ -170,18 +179,18 @@ def analyze_one(sym: str, name: str, rows: list, cur: dict | None, cfg: dict | N
     own_pct = sum(1 for v in vals if v <= pe) / len(vals)
     out = {"symbol": sym, "name": name, "asof": asof, "pe": round(pe, 2), "low": round(low, 2), "low_date": low_d, "high": round(hi, 2), "high_date": hi_d,
            "median": round(vals[len(vals) // 2], 2), "gap": round(gap, 4), "enter_price": round(low * (1 + enter), 2),
-           "pct": round(own_pct, 3), "pct_src": cur.get("pe_pct") if cur else None, "pb": cur.get("pb") if cur else None, "pb_pct": cur.get("pb_pct") if cur else None,
+           "window_text": wtext, "span_years": round(span, 1), "pct": round(own_pct, 3), "pct_src": cur.get("pe_pct") if cur else None, "pb": cur.get("pb") if cur else None, "pb_pct": cur.get("pb_pct") if cur else None,
            "dividend_yield": cur.get("yield") if cur else None, "since": win[0][0], "points": len(win),
            "in_zone": gap <= enter + 1e-9, **plan}
     if gap <= enter + 1e-9:
         n = plan["batches_now"]
         nxt = plan["tiers"][n]["gap"] if n < len(plan["tiers"]) else None
-        out["advice"] = (f"进入分批建仓区（距近 {years} 年最低 {gap:+.1%}）：累计买到第 {n} 批（共 {plan['batches_total']} 批，每批 {1 / plan['batches_total']:.0%}）。"
+        out["advice"] = (f"进入分批建仓区（距{wtext}最低 {gap:+.1%}）：累计买到第 {n} 批（共 {plan['batches_total']} 批，每批 {1 / plan['batches_total']:.0%}）。"
                          + (f"市盈率再降到 {low * (1 + nxt):.2f} 以内（距最低 {nxt:+.1%}）再加一批。" if nxt is not None
-                            else f"已经基本是近 {years} 年最低，累计 {n} 批；最后 1 批留作机动，只在创新低后继续明显下探时再用。")
+                            else f"已经基本是{wtext}最低，累计 {n} 批；最后 1 批留作机动，只在创新低后继续明显下探时再用。")
                          + f"每批之间至少隔 {plan['min_days']} 个交易日。")
     else:
-        out["advice"] = f"还没到：距近 {years} 年最低 {gap:+.1%}（进入建仓区要降到 {low * (1 + enter):.2f} 以内，现在 {pe:.2f}）。"
+        out["advice"] = f"还没到：距{wtext}最低 {gap:+.1%}（进入建仓区要降到 {low * (1 + enter):.2f} 以内，现在 {pe:.2f}）。"
     return out
 
 
@@ -191,17 +200,21 @@ def view_items(conn, market: str = "CN") -> dict:
     d = _load(conn, market)
     if not d.get("series"):
         return {"status": "empty", "items": {}, "refreshed_at": None, "stale": True}
-    with settings.market_ctx(market):
-        names = {i["symbol"]: i["name"] for i in market_view.index_list(market)}
+    if market == "HK":
+        names = {sym: v["name"] for sym, v in HK_SPEC.items()}
+    else:
+        with settings.market_ctx(market):
+            names = {i["symbol"]: i["name"] for i in market_view.index_list(market)}
     items = {}
     for sym in CODES_BY_MARKET[market]:
         if sym not in d["series"]:
             continue
         r = analyze_one(sym, names.get(sym, sym), d["series"][sym], (d.get("current") or {}).get(sym))
         if r:
-            items[sym] = r
+            items[sym] = {**r, "etf": HK_SPEC[sym]["etf"], "style": HK_SPEC[sym]["style"]} if market == "HK" else r
     at = d.get("at")
     stale = not at or (datetime.now() - datetime.fromisoformat(at)).total_seconds() > STALE_SECONDS
+    stale = stale or not set(CODES_BY_MARKET[market]) <= set(d["series"])      # 新增了指数而库里还没有：马上去取，不等 12 小时
     return {"status": "ok" if items else "empty", "items": items, "refreshed_at": at, "stale": stale}
 
 
@@ -240,8 +253,8 @@ NOTE = ("市盈率低不等于马上涨：低估值可以持续一两年，所�
         "这套分批方式是按一般做法设计的，没有用历史回测验证过；数据来自第三方网站，可能延迟或中断。只作参考，不是投资建议，不进入选股与回测。")
 
 
-if __name__ == "__main__":                                 # python -m server.valuation [US] ：手动刷新
+if __name__ == "__main__":                                 # python -m server.valuation [US|HK] ：手动刷新
     import sys
-    mk = "US" if "US" in [a.upper() for a in sys.argv[1:]] else "CN"
+    mk = next((a.upper() for a in sys.argv[1:] if a.upper() in ("US", "HK")), "CN")
     with settings.market_ctx(mk), db.market_db(mk) as c:
         print(refresh(c, mk))

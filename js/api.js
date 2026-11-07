@@ -19,7 +19,7 @@ function qs(params = {}) {
 }
 
 export async function api(path, { method = 'GET', body, params = {}, timeout = 60000, market = true, cache = true } = {}) {
-  const p = { ...(market ? { market: state.market } : {}), ...params };
+  const p = { ...(market ? { market: state.market === 'HK' ? 'CN' : state.market } : {}), ...params };      // 港股的个股库还没做：其余接口先按 A 股参数请求（设置页等），港股自己的接口显式传 market=HK
   const url = '/api' + path + qs(p);
   const headers = { 'Content-Type': 'application/json' };
   const token = prefs.get('token', '');

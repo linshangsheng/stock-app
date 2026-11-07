@@ -47,6 +47,13 @@ def _market(m: str) -> str:
     return m
 
 
+def _hk_ok(m: str) -> str:
+    """只给「港股」已经做好的接口用：允许 market=HK（港股的个股行情库、选股等还在做，其余接口仍然只认 CN / US）。"""
+    if (m or "").upper() == "HK":
+        return "HK"
+    return _market(m)
+
+
 def _need_cn(m: str) -> str:
     """校验 market 并把它设为本次请求的配置上下文（A股 / 美股参数各自独立，2.1）。名称沿用历史，现已支持 CN / US。"""
     m = _market(m)
@@ -1207,9 +1214,9 @@ def market_qvix(market: str = "CN"):
 
 @app.get("/api/market/valuation")
 def market_valuation(market: str = "CN"):
-    """宽基指数估值（成分股整体市盈率）：当前值、近 10 年最低 / 最高 / 分位、距最低的幅度，以及分批建仓的参考（A 股 5 个宽基；美股只有标普500 和纳斯达克100）。"""
+    """宽基指数估值（成分股整体市盈率）：当前值、近 10 年最低 / 最高 / 分位、距最低的幅度，以及分批建仓的参考（A 股 5 个宽基；美股标普500 / 纳斯达克100；港股恒生指数 / 国企指数 / 恒生科技）。"""
     from . import valuation
-    market = _market(market)
+    market = _hk_ok(market)
     return _wrap(market, **valuation.build(market))
 
 

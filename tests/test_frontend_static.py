@@ -98,3 +98,15 @@ def test_brackets_balanced():
             if st:
                 bad.append(f.name)
     assert not bad, f"括号不配对：{bad}"
+
+
+def test_market_switch_has_three_markets_and_hk_routes_are_wired():
+    """左上角的市场切换是三个按钮（A股 / 港股 / 美股）；app.js 认得 HK（启动时恢复、涨跌配色红涨绿跌、港股走 hk.js 的页面）；
+    api.js 在港股还没做个股库时，把其余接口按 A 股参数请求（否则设置页等会 400）。"""
+    html = (ROOT / "index.html").read_text(encoding="utf-8")
+    assert re.findall(r'data-market="(\w+)"', html) == ["CN", "HK", "US"]
+    app = (ROOT / "js" / "app.js").read_text(encoding="utf-8")
+    assert "saved === 'HK'" in app and "hkView" in app and "hkPlaceholder" in app and "state.market === 'US' ? 'green' : 'red'" in app
+    assert "state.market === 'HK' ? 'CN' : state.market" in (ROOT / "js" / "api.js").read_text(encoding="utf-8")
+    hk = (ROOT / "js" / "hk.js").read_text(encoding="utf-8")
+    assert "market: 'HK'" in hk                                     # 港股自己的接口显式传 market=HK

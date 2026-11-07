@@ -105,12 +105,18 @@ def fake_http(rows_by_code, cur_by_code, fail_codes=(), fail_current=False):
     return http
 
 
+HK_CODES = [v["code"] for v in valuation.HK_SPEC.values()]
+
+
 def all_rows(low=20.0):
-    return {code: weekly(low=low) for code in valuation.CODES.values()}
+    rows = {code: weekly(low=low) for code in valuation.CODES.values()}
+    rows.update({code: weekly(low=low) for code in HK_CODES})
+    rows["HKHSTECH"] = weekly(low=low, years=6, low_at=1)                                      # 恒生科技：只有约 6 年的数据
+    return rows
 
 
 def all_cur(pe=21.0):
-    return {code: cur_of(pe) for code in valuation.CODES.values()}
+    return {code: cur_of(pe) for code in [*valuation.CODES.values(), *HK_CODES]}
 
 
 def test_refresh_saves_and_merges_with_existing(demo_env, monkeypatch):
@@ -188,6 +194,7 @@ def test_market_view_carries_valuation_per_index(client):
     by = {i["symbol"]: i for i in d["indices"]}
     assert by["sh.000300"]["valuation"]["batches_now"] == 2 and by["sz.399006"]["valuation"]["pe"] == 21.0
     assert d["valuation"]["rule"]["batches_total"] == 5 and d["valuation"]["note"]
+    assert "extra" not in d["valuation"]                                                         # 港股是独立市场，不混进 A 股页面
     json.dumps(d)                                                                                # 可序列化
 
 
@@ -230,3 +237,65 @@ def test_us_market_view_only_marks_spy_and_qqq(us_env, monkeypatch):
     assert by.get("IWM") is None and by.get("DIA") is None
     api = TestClient(main.app).get("/api/market/valuation", params={"market": "US"}).json()
     assert api["status"] == "ok" and [i["symbol"] for i in api["items"]] == ["SPY", "QQQ"]
+
+
+def test_short_history_is_labelled_honestly():
+    rows = weekly(low=20.0, years=6, low_at=1)
+    r = valuation.analyze_one("HK.HSTECH", "恒生科技", rows, cur_of(21.0))
+    assert r["span_years"] < 7 and "约" in r["window_text"] and "近 10 年" not in r["advice"] and r["window_text"] in r["advice"]
+    full = valuation.analyze_one("HK.HSI", "恒生指数", weekly(low=20.0), cur_of(21.0))
+    assert full["window_text"] == "近 10 年"
+
+
+def hk_rows():
+    rows = {code: weekly(low=7.0) for code in HK_CODES}
+    rows["HKHSTECH"] = weekly(low=14.0, years=6, low_at=1)
+    return rows
+
+
+def test_hk_is_its_own_market_with_its_own_database(demo_env, monkeypatch):
+    calls = []
+    inner = fake_http(hk_rows(), {c: cur_of(7.5) for c in HK_CODES})
+
+    def spy(url, timeout=25):
+        calls.append(url)
+        return inner(url, timeout)
+    monkeypatch.setattr(valuation, "_http", spy)
+    from server import settings
+    with settings.market_ctx("HK"), db.market_db("HK") as c:
+        r = valuation.refresh(c, "HK")
+        assert r["ok"] and not r["errors"]
+        v = valuation.view_items(c, "HK")
+        assert [x["name"] for x in v["items"].values()] == ["恒生指数", "国企指数", "恒生科技"]
+        assert all(x["etf"] and x["style"] for x in v["items"].values()) and v["items"]["HK.HSI"]["in_zone"] is True      # 7.5 / 7.0 = +7%
+        assert db.get_meta(c, "valuation_hk") and not db.get_meta(c, "valuation_cn")
+    assert (demo_env / "hk.db").exists() and not any("SH000300" in u or "SP500" in u for u in calls)
+    with db.market_db("CN") as c:
+        assert valuation._load(c, "CN") == {}                                                  # 不和 A 股混存
+
+
+def test_hk_api_and_unfinished_pages_still_reject_hk(demo_env, monkeypatch):
+    from server import main
+    monkeypatch.setattr(valuation, "refresh_async", lambda m="CN": True)
+    monkeypatch.setattr(valuation, "_http", fake_http(hk_rows(), {c: cur_of(9.0) for c in HK_CODES}))
+    with db.market_db("HK") as c:
+        valuation.refresh(c, "HK")
+    cl = TestClient(main.app)
+    d = cl.get("/api/market/valuation", params={"market": "HK"}).json()
+    assert d["market"] == "HK" and d["status"] == "ok" and [i["symbol"] for i in d["items"]] == ["HK.HSI", "HK.HSCEI", "HK.HSTECH"]
+    assert d["items"][2]["window_text"] != "近 10 年"                                           # 恒生科技只有约 6 年
+    assert cl.get("/api/market/view", params={"market": "HK"}).status_code == 400              # 港股的行情库 / 选股还没做：其余接口不接受 HK，不会 500
+    assert cl.get("/api/scan", params={"market": "HK"}).status_code == 400
+
+
+def test_missing_index_in_store_counts_as_stale_so_new_indices_get_fetched(demo_env, monkeypatch):
+    rows = {k: v for k, v in all_rows().items() if k != "SH000016"}
+    cur = {k: v for k, v in all_cur().items() if k != "SH000016"}
+    monkeypatch.setattr(valuation, "_http", fake_http(rows, cur))
+    with db.market_db("CN") as c:
+        valuation.refresh(c)                                                                 # 少一个指数的旧数据：刚取过，但不全
+        v = valuation.view_items(c)
+        assert "sh.000016" not in v["items"] and v["stale"] is True
+        monkeypatch.setattr(valuation, "_http", fake_http(all_rows(), all_cur()))
+        valuation.refresh(c)
+        assert "sh.000016" in valuation.view_items(c)["items"] and valuation.view_items(c)["stale"] is False

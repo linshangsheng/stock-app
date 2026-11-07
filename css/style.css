@@ -75,7 +75,7 @@ p, .hint, .alert, .empty { text-wrap: pretty; } h1, h2, h3, .empty .big { text-w
 .brand:hover { background: var(--nav-hover); }
 .brand svg { color: var(--gold); flex: none; }
 .brand img { display: block; border-radius: 9px; flex: none; width: 34px; height: 34px; box-shadow: 0 0 0 .5px rgba(255,255,255,.2), 0 6px 16px rgba(0,0,0,.4); }
-.market-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; background: rgba(255,255,255,.09); border-radius: 999px; padding: 3px; margin: 0 2px 12px; box-shadow: inset 0 0 0 .5px rgba(255,255,255,.08); }
+.market-switch { display: grid; grid-template-columns: 1fr; gap: 2px; background: rgba(255,255,255,.09); border-radius: 16px; padding: 3px; margin: 0 2px 12px; box-shadow: inset 0 0 0 .5px rgba(255,255,255,.08); }
 .market-switch button { border: 0; background: transparent; padding: 4px 0; border-radius: 999px; cursor: pointer; font-size: 12px; color: var(--nav-text); transition: background .25s var(--ease), color .2s, box-shadow .25s; }
 .market-switch button:hover { color: #fff; }
 .market-switch button.on { background: #fff; color: #0c1330; font-weight: 700; box-shadow: 0 1px 3px rgba(0,0,0,.35); }
@@ -237,7 +237,7 @@ details[open] > summary::before, details.card[open] > summary::before, .km-idx[o
   .app { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
   .nav { grid-row: 2; flex-direction: row; background: var(--nav-bg); padding: 4px 6px calc(4px + env(safe-area-inset-bottom)); justify-content: space-around; overflow: visible; gap: 0; box-shadow: inset 0 .5px 0 rgba(255,255,255,.08); }
   .nav .brand, .nav-foot .badge { display: none; }
-  .nav .market-switch { width: 76px; margin: 0; align-self: center; }
+  .nav .market-switch { width: 132px; grid-template-columns: 1fr 1fr 1fr; border-radius: 999px; margin: 0; align-self: center; }
   .nav-foot { margin: 0; padding: 0; flex-direction: row; } .nav a { flex: 1; padding: 6px 2px 5px; font-size: 11px; }
   .nav a.on::before { left: 50%; top: 0; width: 22px; height: 3px; margin: 0 0 0 -11px; border-radius: 0 0 3px 3px; }
   .main { height: auto; min-height: 0; }

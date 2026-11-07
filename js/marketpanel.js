@@ -39,12 +39,18 @@ export function tomorrowTable(i) {
 /** 已经进入「分批建仓区」的指数（市盈率距近 10 年最低不超过 10%）：['创业板指 累计 2/5 批', ...]。给「明天要做什么」卡用。 */
 export function valuationActs(d) {
   if (!d || d.status !== 'ok') return [];
-  return d.indices.filter(i => i.valuation?.in_zone).map(i => `${i.name} 累计 ${i.valuation.batches_now}/${i.valuation.batches_total} 批（市盈率 ${fmtNum(i.valuation.pe, 1)}，距近 10 年最低 ${fmtPct(i.valuation.gap, 1)}）`);
+  return valRows(d).filter(i => i.valuation.in_zone).map(i => `${i.name} 累计 ${i.valuation.batches_now}/${i.valuation.batches_total} 批（市盈率 ${fmtNum(i.valuation.pe, 1)}，距${i.valuation.window_text || '近 10 年'}最低 ${fmtPct(i.valuation.gap, 1)}）`);
+}
+
+/** 估值表的行：每个有估值的宽基指数 + 只有估值的指数（A 股页面里的港股：恒生指数 / 国企指数 / 恒生科技）。 */
+function valRows(d) {
+  return [...(d?.indices || []).filter(i => i.valuation).map(i => ({ name: i.name, etf: i.etf, valuation: i.valuation })),
+    ...(d?.valuation?.extra || []).map(x => ({ name: x.name, etf: x.etf, valuation: x, hk: true }))];
 }
 
 /** 指数估值与分批建仓参考（只在 A 股、数据来自 /api/market/view 里每个指数的 valuation）。compact = 选股页窄栏用的精简版。 */
-export function valuationBlock(d, { compact = false } = {}) {
-  const items = (d?.indices || []).filter(i => i.valuation);
+export function valuationBlock(d, { compact = false, standalone = false } = {}) {
+  const items = valRows(d);
   if (!items.length) return null;
   const rule = d.valuation?.rule || {}, total = rule.batches_total || 5, enter = rule.enter_gap ?? 0.1;
   const BK = 'valBudget';
@@ -59,7 +65,7 @@ export function valuationBlock(d, { compact = false } = {}) {
     const paint = () => {
       const each = +budget > 0 ? +budget / v.batches_total : 0;
       clear(box).append(h('div', {}, v.advice),
-        h('div', { class: 'tiny muted mt-s' }, `近 ${rule.window_years || 10} 年：最低 ${fmtNum(v.low, 2)}（${v.low_date}）· 中位 ${fmtNum(v.median, 2)} · 最高 ${fmtNum(v.high, 2)}（${v.high_date}）；建仓区上沿 ${fmtNum(v.enter_price, 2)}。`),
+        h('div', { class: 'tiny muted mt-s' }, `${v.window_text || '近 10 年'}：最低 ${fmtNum(v.low, 2)}（${v.low_date}）· 中位 ${fmtNum(v.median, 2)} · 最高 ${fmtNum(v.high, 2)}（${v.high_date}）；建仓区上沿 ${fmtNum(v.enter_price, 2)}。`),
         h('div', { class: 'tiny muted' }, `市盈率历史分位 ${pct0(v.pct)}${v.pb_pct != null ? ` · 市净率分位 ${pct0(v.pb_pct)}` : ''}${v.dividend_yield != null ? ` · 股息率 ${fmtPct(v.dividend_yield, 2, false)}` : ''}；数据截至 ${v.asof}。`),
         each ? h('div', { class: 'tiny mt-s' }, `按你打算投入的 ${money(+budget)}：每批约 ${money(each)}；现在累计应买到 ${v.batches_now} 批 = ${money(each * v.batches_now)}（已经买过的部分请自己对照）。`) : null);
     };
@@ -72,12 +78,12 @@ export function valuationBlock(d, { compact = false } = {}) {
     const sub = h('tr', { class: 'tmr', hidden: true }, h('td', { colspan: compact ? 5 : 6 }, dt.el));
     const tag = v.in_zone ? h('span', { class: 'badge ok' }, `分批建仓 ${v.batches_now}/${v.batches_total} 批`) : h('span', { class: 'muted small' }, '还没到');
     return [h('tr', { style: 'cursor:pointer', title: '点开看这个指数的估值细节和怎么分批', onclick: () => { sub.hidden = !sub.hidden; } },
-      h('td', {}, h('span', { class: 'muted' }, '▸ '), h('b', {}, i.name), h('div', { class: 'tiny faint' }, (i.etf || '').split(' ')[0])),
+      h('td', {}, h('span', { class: 'muted' }, '▸ '), h('b', {}, i.name), h('div', { class: 'tiny faint' }, (i.hk ? '港股 · ' : '') + (i.etf || '').split(' ')[0])),
       h('td', { class: 'num r' }, fmtNum(v.pe, 1)),
-      h('td', { class: 'num r', title: '近 10 年最低出现在 ' + v.low_date }, fmtNum(v.low, 1)),
+      h('td', { class: 'num r', title: `${v.window_text || '近 10 年'}最低，出现在 ${v.low_date}` }, fmtNum(v.low, 1), v.span_years < 9.4 ? h('span', { class: 'tiny', style: 'color:var(--warn)', title: `这个指数只有约 ${v.span_years} 年的数据（${v.since} 起），不是 10 年` }, '*') : null),
       h('td', { class: 'num r', style: v.in_zone ? 'font-weight:700' : '' }, sgn(v.gap)),
       ...(compact ? [] : [h('td', { class: 'num r', title: '现在的市盈率在近 10 年里排第几位（0% = 最便宜）' }, pct0(v.pct))]),
-      h('td', {}, tag)), sub];
+      h('td', { style: 'white-space:nowrap' }, tag)), sub];
   });
   const budgetIn = h('input', { type: 'number', min: 0, step: 1000, value: budget, style: 'width:110px', oninput: e => { budget = e.target.value; prefs.set(BK, budget); painters.forEach(f => f()); } });
   const tiers = (rule.tiers || []).map(t => `距最低 ≤ ${fmtPct(t.gap, 1, false)} → 累计 ${t.batches} 批`);
@@ -86,7 +92,7 @@ export function valuationBlock(d, { compact = false } = {}) {
       h('b', {}, '规则：'), `「距最低」= 现在的市盈率 ÷ 近 10 年最低市盈率 − 1。例如近 10 年最低是 20，市盈率降到 22 以内（≤ ${fmtPct(enter, 0, false)}）就进入建仓区。`,
       h('br'), h('b', {}, `分 ${total} 批，每批 ${fmtPct(1 / total, 0, false)}：`), tiers.join('；'), `；第 ${total} 批留作机动，只在市盈率创出新低后还继续明显下探时再用。`,
       h('br'), h('b', {}, '节奏：'), `每批之间至少隔 ${rule.min_days || 10} 个交易日（约两周），同一档里不要一天买完两批。低估值常常持续一两年（2012~2014、2018、2022~2024 年的低位都拖了很久），所以才要拉开买。`,
-      h('br'), h('b', {}, '和上面的规则是两套思路：'), '趋势仓看「走势」、抄底仓看「恐慌」，这里看「便宜程度」。默认不并进规则仓位；想用就从你准备长期持有的那部分钱里划出来分批买，并且仍然要接受买完后可能继续跌。',
+      standalone ? null : h('br'), standalone ? null : h('b', {}, '和上面的规则是两套思路：'), standalone ? null : '趋势仓看「走势」、抄底仓看「恐慌」，这里看「便宜程度」。默认不并进规则仓位；想用就从你准备长期持有的那部分钱里划出来分批买，并且仍然要接受买完后可能继续跌。',
       h('br'), h('b', {}, '提醒：'), d.valuation?.note),
     h('div', { class: 'row mt-s', style: 'gap:6px;flex-wrap:wrap' }, '这个指数你打算一共投入多少钱（元，可不填）：', budgetIn));
   return h('div', { class: 'card mt-s', style: hot.length ? 'border-left:3px solid var(--warn)' : '' },
