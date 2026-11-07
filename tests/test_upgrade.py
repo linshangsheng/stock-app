@@ -20,6 +20,12 @@ def g(cwd, *args):
     return r.stdout.strip()
 
 
+@pytest.fixture(autouse=True)
+def _isolated_data_dir(tmp_path, monkeypatch):
+    """升级会往 data/upgrade.log 追加一行：测试里必须写到临时目录，不能写进真实的数据目录（以前每跑一次测试，真实日志里就多出几行假的升级记录）。"""
+    monkeypatch.setenv("STOCK_DATA_DIR", str(tmp_path / "data"))
+
+
 @pytest.fixture
 def repos(tmp_path):
     """origin（裸仓库）+ dev（推送用）+ local（被升级的那份，data/ 里有个人数据）。"""

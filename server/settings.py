@@ -25,7 +25,7 @@ USER_EDITABLE = {
 
 
 def auto_update_enabled(market: str) -> bool:
-    """这个市场是否开着「自动更新」（设置 → 通用设置；config.yaml 的 jobs.auto_update）。没配置时：A 股开、美股关。"""
+    """这个市场是否开着「自动更新」（设置 → 通用设置；config.yaml 的 jobs.auto_update）。没配置时：A 股开，港股、美股关。"""
     cfg = load_config().get("jobs", {}).get("auto_update") or {}
     return bool(cfg.get((market or "CN").upper(), (market or "CN").upper() == "CN"))
 

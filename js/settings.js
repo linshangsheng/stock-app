@@ -1,7 +1,7 @@
 // 设置（4.2）：左右两栏，左边是分类、右边是选中的那一类。
-//   通用设置：各市场的自动更新开关、外观与访问（涨跌配色 / 主题 / 全屏 / 口令）、邮件提醒
+//   通用设置：各市场（A 股 / 港股 / 美股）的自动更新开关、外观与访问（涨跌配色 / 主题 / 全屏 / 口令）、邮件提醒
 //   交易参数：资金方案（A 股）、费用 / 滑点 / 组合与止损参数
-//   数据更新：数据健康、数据与更新状态（初始化 / 盘后任务链 / 补跑）、股票池
+//   数据更新：数据健康、数据与更新状态（初始化 / 盘后任务链 / 补跑）、股票池；港股：三个指数的日线与估值状态 + 立即更新
 //   备份与存储：备份与恢复、存储空间
 //   软件升级：从 git 仓库检查 / 一键升级（进度环），升级后自动重启
 //   关于：版本、作者、数据来源、第三方组件与许可
@@ -37,7 +37,9 @@ export const settingsView = {
     const secAuto = h('div', { class: 'card' }), secData = h('div', { class: 'card mt' }), secAlloc = h('div', { class: 'card' }), secPool = h('div', { class: 'card mt' }), secCost = h('div', { class: 'card mt' }), secLook = h('div', { class: 'card mt' }), secNotify = h('div', { class: 'card mt' }), secBackup = h('div', { class: 'card' }), secStorage = h('div', { class: 'card mt' }), secAbout = h('div', { class: 'card soft' });
 
     // ---------- 左栏：分类；右栏：选中那一类的内容 ----------
-    const PAGES = { general: [secAuto, secLook, secNotify], trade: [secAlloc, secCost], data: [health.el, secData, secPool], backup: [secBackup, secStorage], upgrade: [upgrade.el], about: [secAbout] };
+    const HK = state.market === 'HK';                // 港股：「数据更新」「交易参数」两页换成港股自己的内容（A 股 / 美股的数据健康、股票池、费用对它没有意义）
+    const secHk = h('div', { class: 'card' }), secHkTrade = h('div', { class: 'card' });
+    const PAGES = { general: [secAuto, secLook, secNotify], trade: HK ? [secHkTrade] : [secAlloc, secCost], data: HK ? [secHk] : [health.el, secData, secPool], backup: [secBackup, secStorage], upgrade: [upgrade.el], about: [secAbout] };
     let cur = null, upgradeLoaded = false;
     function open(key, byUser) {
       const sec = SECTIONS.find(x => x[0] === key) || SECTIONS[0];
@@ -61,7 +63,7 @@ export const settingsView = {
     let cfg = {};
     try { cfg = await get('/settings', {}, { cache: false }); } catch (e) { if (alive()) pane.replaceChildren(h('div', { class: 'alert bad', style: 'margin:16px' }, e.message)); return; }
     if (!alive()) return;
-    health.mount();                                  // 数据健康：单独加载，不拖慢下面的各块
+    if (!HK) health.mount();                         // 数据健康：单独加载，不拖慢下面的各块
 
     // ---------- 数据与更新 ----------
     async function renderData() {
@@ -242,8 +244,8 @@ export const settingsView = {
     // ---------- 自动更新开关：各市场分开；默认只开 A 股 ----------
     function renderAuto() {
       clear(secAuto);
-      const au = { CN: cfg.jobs?.auto_update?.CN ?? true, US: cfg.jobs?.auto_update?.US ?? false };
-      const MK = [['CN', 'A 股', '收盘约 35 分钟后（15:35 起）自动用批量报价更新，约 1~2 分钟，并生成选股清单。'], ['US', '美股', '美股收盘后（北京时间早上）自动更新并生成选股清单。']];
+      const au = { CN: cfg.jobs?.auto_update?.CN ?? true, HK: cfg.jobs?.auto_update?.HK ?? false, US: cfg.jobs?.auto_update?.US ?? false };
+      const MK = [['CN', 'A 股', '收盘约 35 分钟后（15:35 起）自动用批量报价更新，约 1~2 分钟，并生成选股清单。'], ['HK', '港股', '港股收盘后（16:45 起）自动更新三个指数的日线和估值，几秒钟；现在只有指数，还没有个股和选股清单。'], ['US', '美股', '美股收盘后（北京时间早上）自动更新并生成选股清单。']];
       const rows = MK.map(([m, name, when]) => {
         const status = h('div', { class: 'au-status' });
         const note = h('div', { class: 'au-note' });
@@ -258,13 +260,78 @@ export const settingsView = {
         }, `${name}自动更新`);
         paint();
         (async () => {                                   // 还没有这个市场的数据：开着开关也不会更新，提醒先初始化
-          try { const j = await get('/jobs', { market: m }, { market: false, cache: false }); if (!j.has_data) note.textContent = `${name}还没有数据：先到「数据更新」点「初始化数据」，之后才会自动更新。`; } catch { /* 忽略 */ }
+          try {
+            if (m === 'HK') { const j = await get('/hk/status', { market: 'HK' }, { market: false, cache: false }); if (!j.has_data) note.textContent = '港股还没有数据：切到港股打开任意页面会自动取一次，或到「数据更新」点「立即更新」。'; return; }
+            const j = await get('/jobs', { market: m }, { market: false, cache: false }); if (!j.has_data) note.textContent = `${name}还没有数据：先到「数据更新」点「初始化数据」，之后才会自动更新。`;
+          } catch { /* 忽略 */ }
         })();
         return h('div', { class: 'au-row' }, h('div', { class: 'au-main' }, h('div', { class: 'au-name' }, h('span', { class: 'badge accent' }, name), h('b', {}, `${name}自动更新`)), h('div', { class: 'hint' }, when), status, note), sw);
       });
       secAuto.append(h('div', { class: 'card-title' }, h('h2', {}, '自动更新股票数据')),
-        h('p', { class: 'small muted' }, '软件开着时，每个市场收盘后自动补拉行情、生成当天的选股清单；错过的交易日下次打开时会补上。关掉的市场不会自己更新，随时可以到「数据更新」手动更新。默认只开 A 股。'),
+        h('p', { class: 'small muted' }, '软件开着时，每个市场收盘后自动补拉行情、生成当天的选股清单（港股目前只更新三个指数）；错过的交易日下次打开时会补上。关掉的市场不会自己更新，随时可以到「数据更新」手动更新。默认只开 A 股。'),
         ...rows);
+    }
+
+    // ---------- 港股：数据更新（三个指数的日线 + 估值）----------
+    async function renderHkData() {
+      clear(secHk);
+      let j;
+      try { j = await get('/hk/status', { market: 'HK' }, { market: false, cache: false }); }
+      catch (e) { secHk.append(h('div', { class: 'alert bad' }, e.message)); return; }
+      const last = j.last || {}, SRC = { manual: '手动', auto: '自动更新', page: '打开页面', cli: '命令行' };
+      const btn = h('button', { class: 'btn primary' }, '立即更新港股数据');
+      btn.onclick = async () => {
+        btn.disabled = true; btn.textContent = '更新中…（联网，几秒钟）';
+        try { const r = await post('/hk/refresh', {}, { market: false, timeout: 180000 }); toast(r.message, r.ok ? 'ok' : 'bad'); } catch (e) { toast(e.message, 'bad'); }
+        if (alive()) renderHkData();
+      };
+      secHk.append(h('div', { class: 'card-title' }, h('h2', {}, '港股数据与更新状态'), h('span', { class: 'badge ' + (j.has_data ? 'ok' : 'warn') }, j.has_data ? '已有数据' : '还没有数据')),
+        h('p', { class: 'small muted' }, '港股现在只有三个指数（恒生指数、国企指数、恒生科技）的日线和估值，所以没有「初始化数据 / 盘后任务链 / 股票池」这些项目；港股个股的行情库做好之后会加在这里。'),
+        h('div', { class: 'grid c2' }, kv('自动更新', j.auto_update ? '已开启' : '已关闭'), kv('估值更新于', (j.valuation_at || '—').replace('T', ' ').slice(5, 16)),
+          kv('日线更新于', last.at ? last.at.replace('T', ' ').slice(5, 16) : '—'), kv('上次结果', last.at ? (last.ok ? '成功' : '有失败') : '—')),
+        last.at ? h('div', { class: 'tiny muted mt-s' }, `上次是${SRC[last.source] || last.source || '—'}触发的更新。${j.auto_update ? '' : '自动更新在「通用设置」里打开。'}`) : null,
+        last.errors?.length ? h('div', { class: 'alert warn small mt-s' }, '上次有失败：' + last.errors.slice(0, 3).join('；')) : null,
+        h('div', { class: 'tbl-wrap mt' }, h('table', { class: 'mini' }, h('thead', {}, h('tr', {}, ['指数', '日线条数', '起', '止'].map((x, k) => h('th', { class: k === 1 ? 'r' : '' }, x)))),
+          h('tbody', {}, j.indices.map(i => h('tr', {}, h('td', {}, h('b', {}, i.name)), h('td', { class: 'num r' }, i.rows || '—'), h('td', { class: 'num' }, i.from || '—'), h('td', { class: 'num' }, i.last || '—')))))),
+        h('div', { class: 'row mt' }, btn),
+        h('p', { class: 'hint mt-s' }, '数据来自东方财富（指数日线）和蛋卷基金（估值），都是第三方网站，可能延迟或中断；失败时已有的数据原样保留。恒生科技 2020-07 才发布，所以日线从 2020-07 起。'),
+        libBox);
+      renderHkLib();
+    }
+
+    // 港股个股行情库：名单（成交额前 800 只）+ 10 年日线；初始化可中断续跑，之后每天增量（自动更新开着时由自动更新做）
+    const libBox = h('div', { class: 'mt', style: 'border-top:1px solid var(--line);padding-top:12px' });
+    let libTimer = null;
+    const stopLib = () => { clearInterval(libTimer); libTimer = null; };
+    async function renderHkLib() {
+      let j;
+      try { j = await get('/hk/stocks/status', { market: 'HK' }, { market: false, cache: false }); } catch (e) { clear(libBox).append(h('div', { class: 'alert bad' }, e.message)); return; }
+      if (!alive() || !document.body.contains(libBox)) return stopLib();
+      const job = j.job, run = job.running, last = j.last_run || {};
+      const act = async (kind) => {
+        try { const r = await post('/hk/stocks/job', { kind }, { market: false, timeout: 30000 }); toast(r.message, r.ok ? 'ok' : 'bad'); } catch (e) { toast(e.message, 'bad'); }
+        renderHkLib();
+      };
+      clear(libBox).append(h('div', { class: 'card-title' }, h('h3', {}, '港股个股行情库'), h('span', { class: 'badge ' + (j.ready ? 'ok' : 'warn') }, j.ready ? '已有数据' : '还没初始化')),
+        h('p', { class: 'small muted' }, `取成交额最高的前 ${j.universe_top || 800} 只港股（港股近 3000 只，大部分几乎没人交易），下载 10 年日线（雅虎财经，前复权用）。名单每周刷新一次；掉出前 800 名的不再更新，已下载的日线保留。`),
+        h('div', { class: 'grid c2' }, kv('股票池', j.pool ? `${j.pool} 只` : '—'), kv('已有日线', j.with_bars ? `${j.with_bars} 只` : '—'), kv('日线截至', j.bars_asof || '—'), kv('名单更新于', (j.universe_at || '—').replace('T', ' ').slice(5, 16))),
+        last.at ? h('div', { class: 'tiny muted mt-s' }, `上次任务：${last.kind === 'init' ? '初始化' : '每日更新'}，${last.at.replace('T', ' ').slice(5, 16)}，${last.stopped ? '被中断（下次接着做）' : last.ok ? '成功' : `有 ${last.failed} 只下载失败（再点一次会重试）`}。`) : null,
+        run ? h('div', { class: 'mt-s' }, h('div', { class: 'small' }, job.message), h('progress', { max: job.total || 1, value: job.done || 0, style: 'width:100%' })) : (job.error ? h('div', { class: 'alert bad small mt-s' }, '上次失败：' + job.error) : null),
+        h('div', { class: 'row mt wrap' },
+          run ? h('button', { class: 'btn', onclick: async () => { await post('/hk/stocks/stop', {}, { market: false }); renderHkLib(); } }, '停止（下次接着做）')
+            : [h('button', { class: 'btn' + (j.ready ? '' : ' primary'), onclick: () => act('init') }, j.ready ? '补全缺失的日线' : '初始化港股个股行情库（约几分钟）'),
+              j.ready ? h('button', { class: 'btn primary', onclick: () => act('update') }, '更新日线（增量）') : null]),
+        h('p', { class: 'hint mt-s' }, '初始化可以随时中断，下次点同一个按钮会接着下，不会重头来。打开了港股的「自动更新」后，每个交易日港股收盘后会自动增量更新（只在行情库已经初始化时）。每手股数不批量查（接口慢），在 K 线页看某只股票时才查一次并存下来。'));
+      if (run && !libTimer) libTimer = setInterval(() => { if (!document.body.contains(libBox) || !alive()) return stopLib(); renderHkLib(); }, 2500);
+      if (!run && libTimer) stopLib();
+    }
+
+    // ---------- 港股：交易参数 ----------
+    function renderHkTrade() {
+      clear(secHkTrade);
+      secHkTrade.append(h('div', { class: 'card-title' }, h('h2', {}, '港股的交易参数')),
+        h('div', { class: 'alert info small' }, '港股现在只有指数，没有持仓和个股交易，所以这里还没有可以设置的项目。'),
+        h('p', { class: 'small muted mt-s' }, '等做到港股个股和持仓时，会加在这里：资金方案、费用（佣金、平台费、双边印花税 0.1%、交易征费等）、每手股数、止损与仓位。这些参数港股和 A 股 / 美股都不一样，要单独校准，不会照搬。'));
     }
 
     // ---------- 外观 / 口令 ----------
@@ -273,7 +340,7 @@ export const settingsView = {
       const mode = prefs.get('colorMode', 'auto'), theme = prefs.get('theme', 'auto');
       const seg = (items, cur, on) => { const w = h('div', { class: 'seg' }); items.forEach(([v, l]) => { const b = h('button', { class: v === cur ? 'on' : '', onclick: () => { [...w.children].forEach(c => c.classList.remove('on')); b.classList.add('on'); on(v); } }, l); w.append(b); }); return w; };
       secLook.append(h('h2', { class: 'mb' }, '外观与访问'),
-        h('div', { class: 'row between wrap mb' }, h('div', {}, h('div', {}, '涨跌配色'), h('div', { class: 'hint' }, '默认随市场自适应：A股 红涨绿跌、美股 绿涨红跌。只改颜色映射，不影响数据与符号。')),
+        h('div', { class: 'row between wrap mb' }, h('div', {}, h('div', {}, '涨跌配色'), h('div', { class: 'hint' }, '默认随市场自适应：A股、港股 红涨绿跌，美股 绿涨红跌。只改颜色映射，不影响数据与符号。')),
           seg([['auto', '随市场自适应'], ['red', '全局红涨绿跌'], ['green', '全局绿涨红跌']], mode, v => { prefs.set('colorMode', v); ctx.applyColors(); })),
         h('div', { class: 'row between wrap mb' }, h('div', {}, '主题'), seg([['auto', '跟随系统'], ['light', '浅色'], ['dark', '深色']], theme, v => { prefs.set('theme', v); ctx.applyTheme(); })),
         h('div', { class: 'row between mb', style: 'gap:16px' }, h('div', { style: 'min-width:0' }, h('div', {}, '启动后自动全屏'), h('div', { class: 'hint' }, '桌面快捷方式打开的窗口本身就是全屏（按 F11 退出），但鼠标移到屏幕最上沿时 Edge 会滑出一条标题栏。打开后第一次点击 / 按键，这里会把它升级成「网页全屏」——不再有那条标题栏，按 Esc 退出（本次不再自动进入）；左下角 ⛶ 随时切换。关掉这个开关就不升级。')),
@@ -387,7 +454,8 @@ export const settingsView = {
           : h('p', { class: 'hint' }, 'L1 入库粗筛基于入库当天的快照，可能把「过去正常、如今已跌成低价」的股票筛掉，使回测偏乐观。全量初始化完成后运行：python -m server.cli l1-bias --sample 100（在数据库副本上抽样补拉被剔除股票的历史，比较含 / 不含的回测差异）。')));
     }
 
-    renderAuto(); renderData(); renderAlloc(); renderPool().then(renderBias); renderCost(); renderLook(); renderNotify(); renderBackup(); renderStorage();
+    if (HK) { renderAuto(); renderHkData(); renderHkTrade(); renderLook(); renderNotify(); renderBackup(); renderStorage(); }
+    else { renderAuto(); renderData(); renderAlloc(); renderPool().then(renderBias); renderCost(); renderLook(); renderNotify(); renderBackup(); renderStorage(); }
   },
   cleanup() { stopPoll(); healthView?.destroy(); upgradeView?.destroy(); },
 };

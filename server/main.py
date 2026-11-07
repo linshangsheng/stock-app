@@ -206,9 +206,10 @@ def about():
             "data_sources": [
                 {"name": "BaoStock", "use": "A 股日线、复权因子、交易日历、股票名单、行业、季频财务与财报披露日"},
                 {"name": "腾讯行情（网页接口）", "use": "A 股每日收盘批量报价（盘后增量主路径）、全市场快照（入库粗筛）"},
-                {"name": "东方财富（网页接口）", "use": "A 股全市场快照（备用）、融资融券 / 龙虎榜 / 北向资金等资金数据"},
+                {"name": "东方财富（网页接口）", "use": "A 股全市场快照（备用）、融资融券 / 龙虎榜 / 北向资金等资金数据；港股恒生指数 / 国企指数 / 恒生科技的指数日线"},
+                {"name": "蛋卷基金（指数估值，网页接口）", "use": "A 股宽基、港股三大指数、美股标普500 / 纳斯达克100 的指数估值（成分股整体市盈率、市净率、股息率及近 10 年历史）"},
                 {"name": "巨潮资讯", "use": "A 股公告"},
-                {"name": "Yahoo Finance（yfinance）", "use": "美股日线、指数（标普500、纳斯达克100 等）、行业、财报日期、新闻"},
+                {"name": "Yahoo Finance（yfinance）", "use": "美股日线、指数（标普500、纳斯达克100 等）、行业、财报日期、新闻；港股个股日线"},
                 {"name": "Nasdaq Trader", "use": "美股股票名单"},
                 {"name": "SEC EDGAR", "use": "美股公告与内部人交易"}],
             "third_party": [
@@ -1218,6 +1219,78 @@ def market_valuation(market: str = "CN"):
     from . import valuation
     market = _hk_ok(market)
     return _wrap(market, **valuation.build(market))
+
+
+@app.get("/api/hk/overview")
+def hk_overview():
+    """港股：恒生指数 / 国企指数 / 恒生科技 的价格、均线位置、近 300 日走势（+ 估值摘要）。第一次没有数据时后台联网取。"""
+    from . import hk
+    return _wrap("HK", **hk.build())
+
+
+@app.get("/api/hk/status")
+def hk_status():
+    """港股数据状态（设置 → 数据更新）：每个指数的日线范围、估值更新时间、最近一次刷新结果、自动更新开关。"""
+    from . import hk
+    return _wrap("HK", **hk.status())
+
+
+@app.post("/api/hk/refresh")
+def hk_refresh():
+    """手动更新港股：三个指数的日线 + 估值（联网，几秒钟）。"""
+    from . import hk
+    if hk._bg["running"]:
+        return {"ok": False, "message": "港股正在更新中，请稍等几秒。"}
+    with db.market_db("HK") as c:
+        info = hk.refresh_all(c, "manual")
+    return {"ok": info["ok"], "message": "港股已更新。" if info["ok"] else "港股更新没有全部成功：" + "；".join(info["errors"][:3]), "info": info}
+
+
+@app.get("/api/hk/stocks/status")
+def hk_stocks_status():
+    """港股个股行情库：名单 / 日线数量、日线截至哪天、名单更新时间、最近一次任务结果、正在跑的任务进度。"""
+    from . import hk_stocks
+    return _wrap("HK", **hk_stocks.status())
+
+
+@app.post("/api/hk/stocks/job")
+def hk_stocks_job(body: dict = Body(default={})):
+    """开始港股个股行情库任务：kind = init（取名单 + 10 年日线，可中断续跑）| update（每日增量）。"""
+    from . import hk_stocks
+    try:
+        return hk_stocks.start_job(str(body.get("kind", "update")))
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.post("/api/hk/stocks/stop")
+def hk_stocks_stop():
+    from . import hk_stocks
+    return {"job": hk_stocks.stop_job()}
+
+
+@app.get("/api/hk/stocks/search")
+def hk_stocks_search(q: str = ""):
+    """港股搜索（代码 / 名称 / 拼音首字母）；不输入时给成交额最高的几只。"""
+    from . import hk_stocks
+    with db.market_db("HK") as c:
+        return _wrap("HK", items=hk_stocks.search(c, q))
+
+
+@app.get("/api/hk/stocks/kline")
+def hk_stocks_kline(symbol: str):
+    """港股个股 K 线（前复权）+ 均线 + 摘要。"""
+    from . import hk_stocks
+    with db.market_db("HK") as c:
+        return _wrap("HK", **hk_stocks.kline(c, symbol))
+
+
+@app.get("/api/hk/stocks/lot")
+def hk_stocks_lot(symbol: str):
+    """每手股数（按需联网查一次，慢，约几秒；查到后缓存）。"""
+    from . import hk_stocks
+    with db.market_db("HK") as c:
+        return hk_stocks.lot_size(c, symbol)
 
 
 @app.get("/api/market/key_ma")

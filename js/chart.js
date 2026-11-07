@@ -204,7 +204,7 @@ export class StockChart {
 }
 
 /** 通用折线图（回测权益曲线 / 回撤 / 基准对比）。series: [{name, color, data:[{time,value}], area?:bool}] */
-export function lineChart(el, series, { height = 260, percent = false } = {}) {
+export function lineChart(el, series, { height = 260, percent = false, fmt = null } = {}) {
   const c = themeColors();
   const chart = makeChart(el, { ...baseOptions(c, height), width: el.clientWidth, rightPriceScale: { borderColor: c.grid } });
   for (const s of series) {
@@ -213,7 +213,7 @@ export function lineChart(el, series, { height = 260, percent = false } = {}) {
         invertFilledArea: true,            // 回撤 <= 0：填充线与 0 轴之间的区域
         priceFormat: percent ? { type: 'custom', formatter: v => (v * 100).toFixed(1) + '%' } : undefined })
       : chart.addLineSeries({ color: s.color, lineWidth: 2, priceLineVisible: false, title: s.name,
-        priceFormat: percent ? undefined : { type: 'custom', formatter: v => Math.abs(v) >= 1e4 ? (v / 1e4).toFixed(0) + '万' : v.toFixed(2) } });
+        priceFormat: percent ? undefined : { type: 'custom', formatter: fmt || (v => Math.abs(v) >= 1e4 ? (v / 1e4).toFixed(0) + '万' : v.toFixed(2)) } });
     ser.setData(s.data);
   }
   chart.timeScale().fitContent();

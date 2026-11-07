@@ -425,6 +425,12 @@ class JobManager:
 
     def tick(self):
         try:
+            if settings.auto_update_enabled("HK"):                    # 港股（只有三个指数的日线 + 估值，几秒钟，在后台线程里做，不占任务链）
+                from . import hk
+                with db.market_db("HK") as c:
+                    due = hk.auto_due(c)
+                if due:
+                    hk.refresh_async("auto")
             if self.state["running"]:
                 return
             for market in ("CN", "US"):                           # 各市场按自己的时区与交易日历独立判断

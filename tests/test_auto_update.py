@@ -30,12 +30,14 @@ def test_missing_config_falls_back_to_cn_on_us_off(demo_env, monkeypatch):
 
 
 def test_switch_roundtrips_through_the_settings_api(client):
-    assert client.get("/api/settings").json()["jobs"]["auto_update"] == {"CN": True, "US": False}
+    assert client.get("/api/settings").json()["jobs"]["auto_update"] == {"CN": True, "HK": False, "US": False}                # 默认只开 A 股；港股（只更新三个指数）也默认关
     r = client.put("/api/settings", json={"jobs": {"auto_update": {"US": True}}}).json()
-    assert r["jobs"]["auto_update"] == {"CN": True, "US": True}                      # 只改美股，A 股不受影响
+    assert r["jobs"]["auto_update"] == {"CN": True, "HK": False, "US": True}          # 只改美股，A 股、港股不受影响
     assert settings.auto_update_enabled("US") is True
     r = client.put("/api/settings", json={"jobs": {"auto_update": {"CN": False}}}).json()
-    assert r["jobs"]["auto_update"] == {"CN": False, "US": True} and settings.auto_update_enabled("CN") is False
+    assert r["jobs"]["auto_update"] == {"CN": False, "HK": False, "US": True} and settings.auto_update_enabled("CN") is False
+    r = client.put("/api/settings", json={"jobs": {"auto_update": {"HK": True}}}).json()
+    assert r["jobs"]["auto_update"]["HK"] is True and settings.auto_update_enabled("HK") is True and settings.auto_update_enabled("US") is True
     assert r["jobs"]["poll_interval_minutes"] == 10                                  # 其余 jobs 参数没被覆盖掉
 
 
