@@ -230,7 +230,9 @@ class JobManager:
                 if tx is not None:                                                 # A 股恐慌指数 QVIX：后台取最新几行（第三方站点慢，不阻塞任务链）
                     from . import qvix
                     qvix.refresh_async()
-                have = c.execute("SELECT MAX(date) FROM daily_bar").fetchone()[0]
+                    from . import valuation                                        # 宽基指数估值（市盈率）：同样后台取，失败不影响任务链
+                    valuation.refresh_async()
+                have =c.execute("SELECT MAX(date) FROM daily_bar").fetchone()[0]
                 if have is None or have < day:
                     res["status"] = "waiting_data"
                     db.log_job(c, "daily", "waiting", f"上游尚未提供 {day} 数据（已有 {have}）")

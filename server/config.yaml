@@ -239,6 +239,17 @@ key_ma:
     - {key: spx, name: 标普500,     market: US, symbol: "^GSPC",   etf: "513500 标普500ETF（QDII，A 股账户可买，注意溢价）"}
     - {key: ndx, name: 纳斯达克100, market: US, symbol: "^NDX",    etf: "513100 / 159941 纳指ETF（QDII，A 股账户可买，注意溢价）"}
 
+# 宽基指数估值与分批建仓参考（server/valuation.py；只在 A 股提供，只做展示和提醒，不进选股和回测）。
+# 规则：市盈率距「近 10 年最低」不超过 enter_gap（例：最低 20 → 22 以内）就进入建仓区；进入后按 tiers 的距离阶梯累计买到第 1~4 批，
+# 共 batches 批（每批 1/batches，最后一批留作机动）；每批之间至少隔 min_days_between 个交易日。阶梯与批数是按一般做法设计的，没有回测验证过。
+valuation:
+  enabled: true
+  window_years: 10
+  enter_gap: 0.10
+  tiers: [0.10, 0.06, 0.03, 0.005]
+  batches: 5
+  min_days_between: 10
+
 # 低风险多因子组合（server/factor_portfolio.py；验证见 tools/factor_research.py 与 CHANGELOG v0.7.0）：
 # 定期调仓、等金额持有「低换手 + 低波动」综合分前 N 名；不用止损止盈，调仓日按名单买卖。
 #   全市场回测（5133 只，2018~2026，事先写好 8 个方案，2018~2022 选、2023~ 验）：样本内年化约 0~+1%（同期交易池等权 -5%），

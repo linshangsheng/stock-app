@@ -1144,6 +1144,12 @@ def market_view_get(market: str = "CN"):
                            "stock_max_positions": settings.cfg()["portfolio"]["max_positions"],
                            "stock_risk_per_trade": acct.get("risk_per_trade") or settings.cfg()["portfolio"]["risk_per_trade"]}
         d["indices"] = [{**i, "hold_amount": round(per_index * i["position"], 2)} for i in d["indices"]]
+    if d.get("status") == "ok" and market == "CN":                       # 宽基指数估值与分批建仓参考（只读库里已有的，过期在后台刷新；没有就不显示）
+        from . import valuation
+        v = valuation.for_view()
+        if v:
+            d["indices"] = [{**i, "valuation": v["items"].get(i["symbol"])} for i in d["indices"]]
+            d["valuation"] = {"refreshed_at": v["refreshed_at"], "stale": v["stale"], "rule": {"enter_gap": valuation.vcfg().get("enter_gap", 0.10), **valuation.plan_for(None)}, "note": valuation.NOTE}
     return _wrap(market, **d)
 
 
@@ -1197,6 +1203,16 @@ def market_qvix(market: str = "CN"):
     if market != "CN":
         return _wrap(market, status="unsupported", message="美股的恐慌指数是 VIX。")
     return _wrap(market, **qvix.build())
+
+
+@app.get("/api/market/valuation")
+def market_valuation(market: str = "CN"):
+    """A 股宽基指数估值（成分股整体市盈率）：当前值、近 10 年最低 / 最高 / 分位、距最低的幅度，以及分批建仓的参考（只在 A 股提供）。"""
+    from . import valuation
+    market = _market(market)
+    if market != "CN":
+        return _wrap(market, status="unsupported", message="指数估值与分批建仓参考目前只做了 A 股宽基指数。")
+    return _wrap(market, **valuation.build())
 
 
 @app.get("/api/market/key_ma")

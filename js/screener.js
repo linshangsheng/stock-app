@@ -6,7 +6,7 @@ import { h, clear, fmtPrice, fmtPct, fmtNum, fmtMoney, dirClass, code, toast, co
 import { prefs } from './db.js';
 import { showDetail } from './detail.js';
 import { openTradeForm } from './portfolio.js';
-import { loadMarketView, marketBrief } from './marketpanel.js';
+import { loadMarketView, marketBrief, valuationActs } from './marketpanel.js';
 import { loadFactorPlan, factorTab, factorLine, factorEvidenceBlock } from './factor.js';
 import { loadKeyMa, keyMaBrief } from './keyma.js';
 import { loadVix, vixBrief } from './vix.js';
@@ -132,6 +132,7 @@ export const screener = {
       const mv = S.mv, run = d.run;
       const day = run?.valid_until ? shortDate(run.valid_until) : '下一交易日';
       const etfActs = mv?.status === 'ok' ? mv.indices.filter(i => i.next_open?.actions?.length).map(i => `${i.name}：${i.next_open.actions.join('、')}`) : null;
+      const valsActs = valuationActs(mv);
       const buys = (d.candidates || []).filter(c => c.fit !== false && run?.official && !run?.is_stale);
       const must = S.health?.summary?.levels?.must ?? 0, watch = S.health?.summary?.levels?.watch ?? 0;
       const fl = factorLine(S.fp), al = S.fp?.allocation;
@@ -143,6 +144,7 @@ export const screener = {
         mv?.portfolio?.health?.status === '警告' ? h('div', { class: 'alert bad small mt-s' }, '⚠ ETF 规则：', mv.portfolio.health.text) : null,
         line('📊', '宽基 ETF', etfActs == null ? '市场温度计算中…' : etfActs.length ? etfActs.join('；') + '（开盘按市价成交，高开低开都一样）' : '5 个指数都没有买卖信号，不操作',
           () => { location.hash = '#/market'; }),
+        valsActs.length ? line('🏷️', '指数估值：分批建仓', valsActs.join('；') + ' —— 每批之间隔两周以上，不要一次买完；详情在右侧「市场概览」', () => { location.hash = '#/market'; }) : null,
         state.market === 'CN' ? line('🧺', '低风险组合' + (al?.sleeve ? `（${fmtMoney(al.sleeve)}，${S.fp.params.n} 只）` : ''), fl.body, () => { S.tab = 'factor'; render(); if (!ctx.currentSymbol) showRight(); }) : null,
         line('📈', swing0 ? '个股波段（默认不分钱，只观察）' : '个股波段', buys.length ? buys.map(c => `${c.name}${swing0 ? '' : ' 开盘买' + (c.op?.planned_shares ? ' ' + c.op.planned_shares + ' 股' : '')}（止损 ${fmtPrice(c.stop_price)}）`).join('；') + (swing0 ? ' —— 想练手再看，点这里' : ' —— 点这里看高开 / 低开各买多少')
           : (run?.is_stale ? '这份清单已过期，等今天收盘后的新清单' : '今天没有符合条件的股票'),
