@@ -208,6 +208,7 @@ def about():
                 {"name": "腾讯行情（网页接口）", "use": "A 股每日收盘批量报价（盘后增量主路径）、全市场快照（入库粗筛）"},
                 {"name": "东方财富（网页接口）", "use": "A 股全市场快照（备用）、融资融券 / 龙虎榜 / 北向资金等资金数据；港股恒生指数 / 国企指数 / 恒生科技的指数日线"},
                 {"name": "蛋卷基金（指数估值，网页接口）", "use": "A 股宽基、港股三大指数、美股标普500 / 纳斯达克100 的指数估值（成分股整体市盈率、市净率、股息率及近 10 年历史）"},
+                {"name": "东方财富数据中心（中美国债收益率）", "use": "中国 / 美国 10 年期国债收益率（日频），用来算股债利差"},
                 {"name": "巨潮资讯", "use": "A 股公告"},
                 {"name": "Yahoo Finance（yfinance）", "use": "美股日线、指数（标普500、纳斯达克100 等）、行业、财报日期、新闻；港股个股日线"},
                 {"name": "Nasdaq Trader", "use": "美股股票名单"},
@@ -1157,7 +1158,7 @@ def market_view_get(market: str = "CN"):
         v = valuation.for_view(market)
         if v:
             d["indices"] = [{**i, "valuation": v["items"].get(i["symbol"])} for i in d["indices"]]
-            d["valuation"] = {"refreshed_at": v["refreshed_at"], "stale": v["stale"], "rule": {"enter_gap": valuation.vcfg().get("enter_gap", 0.10), **valuation.plan_for(None)}, "note": valuation.NOTE}
+            d["valuation"] = {"refreshed_at": v["refreshed_at"], "stale": v["stale"], "bond": v.get("bond"), "rule": {"enter_gap": valuation.vcfg().get("enter_gap", 0.10), **valuation.plan_for(None)}, "note": valuation.NOTE}
     return _wrap(market, **d)
 
 

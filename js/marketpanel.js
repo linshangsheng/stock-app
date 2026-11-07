@@ -53,6 +53,7 @@ export function valuationBlock(d, { compact = false, standalone = false } = {}) 
   const items = valRows(d);
   if (!items.length) return null;
   const rule = d.valuation?.rule || {}, total = rule.batches_total || 5, enter = rule.enter_gap ?? 0.1;
+  const bond = d.valuation?.bond || null;
   const BK = 'valBudget';
   let budget = prefs.get(BK, '');
   const hot = items.filter(i => i.valuation.in_zone);
@@ -66,6 +67,8 @@ export function valuationBlock(d, { compact = false, standalone = false } = {}) 
       const each = +budget > 0 ? +budget / v.batches_total : 0;
       clear(box).append(h('div', {}, v.advice),
         h('div', { class: 'tiny muted mt-s' }, `${v.window_text || '近 10 年'}：最低 ${fmtNum(v.low, 2)}（${v.low_date}）· 中位 ${fmtNum(v.median, 2)} · 最高 ${fmtNum(v.high, 2)}（${v.high_date}）；建仓区上沿 ${fmtNum(v.enter_price, 2)}。`),
+        v.spread != null ? h('div', { class: 'tiny mt-s' }, h('b', {}, '股债利差：'), `盈利收益率 ${fmtNum(v.ey, 2)}%（= 100 ÷ 市盈率）− ${bond?.name || '10 年期国债'} ${fmtNum(v.bond_yield, 2)}% = `, h('b', {}, `${fmtNum(v.spread, 2)}%`),
+          v.spread_pct != null ? `。近 10 年里这个利差的分位 ${pct0(v.spread_pct)}（中位 ${fmtNum(v.spread_median, 2)}%，区间 ${fmtNum(v.spread_min, 2)}% ~ ${fmtNum(v.spread_max, 2)}%）：分位越高 = 股票相对国债越便宜，现在算「${v.spread_label}」。` : '。（历史不足一年，没有分位）') : null,
         h('div', { class: 'tiny muted' }, `市盈率历史分位 ${pct0(v.pct)}${v.pb_pct != null ? ` · 市净率分位 ${pct0(v.pb_pct)}` : ''}${v.dividend_yield != null ? ` · 股息率 ${fmtPct(v.dividend_yield, 2, false)}` : ''}；数据截至 ${v.asof}。`),
         each ? h('div', { class: 'tiny mt-s' }, `按你打算投入的 ${money(+budget)}：每批约 ${money(each)}；现在累计应买到 ${v.batches_now} 批 = ${money(each * v.batches_now)}（已经买过的部分请自己对照）。`) : null);
     };
@@ -75,13 +78,15 @@ export function valuationBlock(d, { compact = false, standalone = false } = {}) 
   const painters = [];
   const rows = items.flatMap(i => {
     const v = i.valuation, dt = detail(i); painters.push(dt.paint);
-    const sub = h('tr', { class: 'tmr', hidden: true }, h('td', { colspan: compact ? 5 : 6 }, dt.el));
+    const sub = h('tr', { class: 'tmr', hidden: true }, h('td', { colspan: compact ? 6 : 7 }, dt.el));
     const tag = v.in_zone ? h('span', { class: 'badge ok' }, `分批建仓 ${v.batches_now}/${v.batches_total} 批`) : h('span', { class: 'muted small' }, '还没到');
     return [h('tr', { style: 'cursor:pointer', title: '点开看这个指数的估值细节和怎么分批', onclick: () => { sub.hidden = !sub.hidden; } },
       h('td', {}, h('span', { class: 'muted' }, '▸ '), h('b', {}, i.name), h('div', { class: 'tiny faint' }, (i.hk ? '港股 · ' : '') + (i.etf || '').split(' ')[0])),
       h('td', { class: 'num r' }, fmtNum(v.pe, 1)),
       h('td', { class: 'num r', title: `${v.window_text || '近 10 年'}最低，出现在 ${v.low_date}` }, fmtNum(v.low, 1), v.span_years < 9.4 ? h('span', { class: 'tiny', style: 'color:var(--warn)', title: `这个指数只有约 ${v.span_years} 年的数据（${v.since} 起），不是 10 年` }, '*') : null),
       h('td', { class: 'num r', style: v.in_zone ? 'font-weight:700' : '' }, sgn(v.gap)),
+      h('td', { class: 'num r', style: 'white-space:nowrap', title: v.spread != null ? `盈利收益率 ${fmtNum(v.ey, 2)}% − ${bond?.name || '国债'} ${fmtNum(v.bond_yield, 2)}%；${v.spread_label ? '近 10 年分位 ' + pct0(v.spread_pct) + '，' + v.spread_label : '历史不足一年，没有分位'}` : '没有国债数据（正在后台取，第一次要几分钟）' },
+        v.spread != null ? [fmtNum(v.spread, 1) + '%', v.spread_label ? h('div', { class: 'tiny', style: 'white-space:nowrap;color:' + (v.spread_label === '股票相对便宜' ? 'var(--ok, #1a9b5b)' : v.spread_label === '股票相对偏贵' ? 'var(--warn)' : 'var(--muted)') }, v.spread_label.replace('股票相对', '')) : null] : '—'),
       ...(compact ? [] : [h('td', { class: 'num r', title: '现在的市盈率在近 10 年里排第几位（0% = 最便宜）' }, pct0(v.pct))]),
       h('td', { style: 'white-space:nowrap' }, tag)), sub];
   });
@@ -91,6 +96,7 @@ export function valuationBlock(d, { compact = false, standalone = false } = {}) 
     h('div', { class: 'small', style: 'margin:6px 0;line-height:1.7' },
       h('b', {}, '规则：'), `「距最低」= 现在的市盈率 ÷ 近 10 年最低市盈率 − 1。例如近 10 年最低是 20，市盈率降到 22 以内（≤ ${fmtPct(enter, 0, false)}）就进入建仓区。`,
       h('br'), h('b', {}, `分 ${total} 批，每批 ${fmtPct(1 / total, 0, false)}：`), tiers.join('；'), `；第 ${total} 批留作机动，只在市盈率创出新低后还继续明显下探时再用。`,
+      h('br'), h('b', {}, '股债利差（表里新增的一列）：'), '盈利收益率（100 ÷ 市盈率）减去 10 年期国债收益率。国债利率下降时，同样的市盈率相对国债更划算；利率上升时相反。分位是和这个指数自己近 10 年的利差比，分位越高 = 股票相对国债越便宜。它只是参考，不影响上面分几批；而且利率为什么变很重要（经济变差导致的降息，股市不一定好），A 股样本里这个关系并不强。',
       h('br'), h('b', {}, '节奏：'), `每批之间至少隔 ${rule.min_days || 10} 个交易日（约两周），同一档里不要一天买完两批。低估值常常持续一两年（2012~2014、2018、2022~2024 年的低位都拖了很久），所以才要拉开买。`,
       standalone ? null : h('br'), standalone ? null : h('b', {}, '和上面的规则是两套思路：'), standalone ? null : '趋势仓看「走势」、抄底仓看「恐慌」，这里看「便宜程度」。默认不并进规则仓位；想用就从你准备长期持有的那部分钱里划出来分批买，并且仍然要接受买完后可能继续跌。',
       h('br'), h('b', {}, '提醒：'), d.valuation?.note),
@@ -99,10 +105,12 @@ export function valuationBlock(d, { compact = false, standalone = false } = {}) 
     h('div', { class: 'row between' }, h('b', {}, '指数估值 · 分批建仓参考'),
       evBadge('弱', '「起点估值越低、之后几年平均回报越好」是一般经验，但这套 5 批的分法没有用本软件的数据回测过；指数历史只有近 10 年，真正的低位只有几轮。只作参考。')),
     h('div', { class: 'mt-s' }, summary),
+    bond ? h('div', { class: 'tiny muted mt-s' }, `${bond.name} ${fmtNum(bond.yield, 2)}%（${bond.asof}）`, bond.chg_1y != null ? `，比一年前${bond.chg_1y >= 0 ? '高' : '低'} ${fmtNum(Math.abs(bond.chg_1y), 2)} 个百分点` : '', bond.note ? '。' + bond.note : '') : null,
     h('div', { class: 'tbl-wrap mt-s' }, h('table', { class: 'mini' },
       h('thead', {}, h('tr', {}, h('th', {}, '指数（点开）'), h('th', { class: 'r', title: '成分股整体滚动市盈率' }, '市盈率'),
         h('th', { class: 'r', title: '近 10 年最低（每周一个点）' }, '10年最低'),
         h('th', { class: 'r', title: '现在比近 10 年最低高出多少；≤ 10% 进入建仓区' }, '距最低'),
+        h('th', { class: 'r', title: '股债利差 = 指数盈利收益率（1 ÷ 市盈率）− 10 年期国债收益率。越大 = 股票相对国债越便宜。只是参考，不影响分批建仓的批数' }, '股债利差'),
         ...(compact ? [] : [h('th', { class: 'r', title: '市盈率在近 10 年里的分位，0% = 最便宜' }, '分位')]),
         h('th', {}, '建议'))), h('tbody', {}, rows))),
     how,

@@ -19,7 +19,7 @@ function maChips(i) {
 /** 把 /api/market/valuation（港股）整理成 valuationBlock 要的形状。 */
 function asMarketView(v) {
   return { status: 'ok', indices: v.items.map(i => ({ symbol: i.symbol, name: i.name, etf: i.etf, valuation: i })),
-    valuation: { refreshed_at: v.refreshed_at, stale: v.stale, rule: v.rule, note: v.note } };
+    valuation: { refreshed_at: v.refreshed_at, stale: v.stale, rule: v.rule, note: v.note, bond: v.bond } };
 }
 
 const TODO = [

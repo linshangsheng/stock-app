@@ -20,7 +20,7 @@ import logging
 import threading
 from datetime import datetime, timedelta, timezone
 
-from . import db, settings
+from . import bonds, db, settings
 
 log = logging.getLogger(__name__)
 BASE = "https://danjuanfunds.com/djapi/index_eva"
@@ -153,8 +153,8 @@ def plan_for(gap: float | None, cfg: dict | None = None) -> dict:
             "tiers": [{"gap": t, "batches": k + 1} for k, t in enumerate(tiers)], "min_days": int(c.get("min_days_between", 10))}
 
 
-def analyze_one(sym: str, name: str, rows: list, cur: dict | None, cfg: dict | None = None) -> dict | None:
-    """rows = [[日期, 市盈率], ...]（按日期升序）；cur = 当前估值（可为 None，则用历史最后一个点）。"""
+def analyze_one(sym: str, name: str, rows: list, cur: dict | None, cfg: dict | None = None, bond: list | None = None) -> dict | None:
+    """rows = [[日期, 市盈率], ...]（按日期升序）；cur = 当前估值（可为 None，则用历史最后一个点）；bond = 10 年期国债收益率 [[日期, %], ...]（有就加上股债利差）。"""
     c = cfg or vcfg()
     if not rows and not cur:
         return None
@@ -191,6 +191,8 @@ def analyze_one(sym: str, name: str, rows: list, cur: dict | None, cfg: dict | N
                          + f"每批之间至少隔 {plan['min_days']} 个交易日。")
     else:
         out["advice"] = f"还没到：距{wtext}最低 {gap:+.1%}（进入建仓区要降到 {low * (1 + enter):.2f} 以内，现在 {pe:.2f}）。"
+    if bond:
+        bonds.add_spread(out, win, bond)
     return out
 
 
@@ -206,16 +208,18 @@ def view_items(conn, market: str = "CN") -> dict:
         with settings.market_ctx(market):
             names = {i["symbol"]: i["name"] for i in market_view.index_list(market)}
     items = {}
+    bd = bonds.load(conn, market)
+    brows = bd.get("rows") or []
     for sym in CODES_BY_MARKET[market]:
         if sym not in d["series"]:
             continue
-        r = analyze_one(sym, names.get(sym, sym), d["series"][sym], (d.get("current") or {}).get(sym))
+        r = analyze_one(sym, names.get(sym, sym), d["series"][sym], (d.get("current") or {}).get(sym), bond=brows)
         if r:
             items[sym] = {**r, "etf": HK_SPEC[sym]["etf"], "style": HK_SPEC[sym]["style"]} if market == "HK" else r
     at = d.get("at")
     stale = not at or (datetime.now() - datetime.fromisoformat(at)).total_seconds() > STALE_SECONDS
     stale = stale or not set(CODES_BY_MARKET[market]) <= set(d["series"])      # 新增了指数而库里还没有：马上去取，不等 12 小时
-    return {"status": "ok" if items else "empty", "items": items, "refreshed_at": at, "stale": stale}
+    return {"status": "ok" if items else "empty", "items": items, "bond": bonds.info(brows, market), "bond_stale": bonds.stale(bd), "refreshed_at": at, "stale": stale}
 
 
 def build(market: str = "CN") -> dict:
@@ -225,6 +229,8 @@ def build(market: str = "CN") -> dict:
     with settings.market_ctx(market), db.market_db(market) as c:
         v = view_items(c, market)
     started = False
+    if v.get("bond_stale"):
+        bonds.refresh_async(market)                                      # 国债收益率单独在后台取（第一次要几分钟），取到后下次打开就有股债利差
     if v["status"] != "ok" or v["stale"]:
         started = refresh_async(market)
     if v["status"] != "ok":
@@ -232,7 +238,7 @@ def build(market: str = "CN") -> dict:
     c2 = vcfg()
     order = list(CODES_BY_MARKET[market])
     return {"status": "ok", "items": [v["items"][s] for s in order if s in v["items"]], "refreshed_at": v["refreshed_at"], "stale": v["stale"],
-            "rule": {"enter_gap": float(c2.get("enter_gap", 0.10)), "window_years": int(c2.get("window_years", 10)), **plan_for(None, c2)},
+            "bond": v.get("bond"), "rule": {"enter_gap": float(c2.get("enter_gap", 0.10)), "window_years": int(c2.get("window_years", 10)), **plan_for(None, c2)},
             "source": "蛋卷基金·指数估值（成分股整体滚动市盈率，每周一个点的近 10 年历史）",
             "note": NOTE}
 
@@ -243,6 +249,8 @@ def for_view(market: str = "CN") -> dict | None:
         return None
     with settings.market_ctx(market), db.market_db(market) as c:
         v = view_items(c, market)
+    if v.get("bond_stale"):
+        bonds.refresh_async(market)
     if v["status"] != "ok" or v["stale"]:
         refresh_async(market)
     return v if v["status"] == "ok" else None

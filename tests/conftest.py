@@ -13,6 +13,16 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("STOCKAPP_NO_TRIM", "1")       # 测试里每个用例都重新构建一次上下文，「归还内存」会让整套测试慢约 15%；真实使用里构建一天只有几次，不受影响。memtrim 本身有专门的测试
 
 
+@pytest.fixture(autouse=True)
+def _no_bond_network(monkeypatch):
+    """国债收益率（server/bonds.py）在后台线程里联网取：测试里一律不联网（想测它的测试自己再换成假的 _page）。"""
+    from server import bonds
+
+    def offline(*a, **k):
+        raise RuntimeError("测试环境不联网")
+    monkeypatch.setattr(bonds, "_page", offline)
+
+
 def _reload_settings(demo: bool):
     from server import settings
     settings.load_config(reload=True)
