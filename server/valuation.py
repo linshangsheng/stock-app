@@ -1,4 +1,4 @@
-"""A 股宽基指数估值（市盈率）与「分批建仓」参考。
+"""宽基指数估值（市盈率）与「分批建仓」参考：A 股 5 个宽基指数 + 美股标普500 / 纳斯达克100。
 
 数据：蛋卷基金的指数估值页（danjuanfunds.com，免登录的公开接口，第三方、没有官方保证，可能改版 / 限流 / 中断）：
   * /djapi/index_eva/dj                         一次返回 60 多个指数的当前市盈率 / 市净率 / 各自的历史分位 / 股息率；
@@ -25,12 +25,17 @@ from . import db, settings
 log = logging.getLogger(__name__)
 BASE = "https://danjuanfunds.com/djapi/index_eva"
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"}
-# 本软件的指数代码 -> 蛋卷的指数代码
-CODES = {"sh.000016": "SH000016", "sh.000300": "SH000300", "sh.000905": "SH000905", "sh.000852": "SH000852", "sz.399006": "SZ399006"}
-META = "valuation_cn"
+# 本软件的指数代码 -> 蛋卷的指数代码（美股只做标普500 和纳斯达克100，对应软件里的 SPY / QQQ；罗素2000 / 道琼斯不显示）
+CODES_BY_MARKET = {
+    "CN": {"sh.000016": "SH000016", "sh.000300": "SH000300", "sh.000905": "SH000905", "sh.000852": "SH000852", "sz.399006": "SZ399006"},
+    "US": {"SPY": "SP500", "QQQ": "NDX"},
+}
+CODES = CODES_BY_MARKET["CN"]                              # 兼容旧名
+METAS = {"CN": "valuation_cn", "US": "valuation_us"}
+META = METAS["CN"]
 STALE_SECONDS = 12 * 3600
 _lock = threading.Lock()
-_bg: dict = {"running": False, "last": None}
+_bg: dict = {"CN": {"running": False, "last": None}, "US": {"running": False, "last": None}}
 
 
 def vcfg() -> dict:
@@ -68,17 +73,18 @@ def fetch_history(code: str) -> list[list]:
     return [[_day(r["ts"]), round(float(r["pe"]), 4)] for r in rows if r.get("pe") and r.get("ts")]
 
 
-def _load(conn) -> dict:
+def _load(conn, market: str = "CN") -> dict:
     try:
-        return json.loads(db.get_meta(conn, META) or "{}")
+        return json.loads(db.get_meta(conn, METAS[market]) or "{}")
     except ValueError:
         return {}
 
 
-def refresh(conn) -> dict:
-    """联网取最新（5 个指数的历史 + 当前），与库里已有的历史合并后保存。任何一步失败都不抛出，返回原因（已有的数据原样保留）。"""
+def refresh(conn, market: str = "CN") -> dict:
+    """联网取最新（各指数的历史 + 当前），与库里已有的历史合并后保存。任何一步失败都不抛出，返回原因（已有的数据原样保留）。"""
+    codes = CODES_BY_MARKET[market]
     with _lock:
-        old = _load(conn)
+        old = _load(conn, market)
         series = {k: dict((d, v) for d, v in rows) for k, rows in (old.get("series") or {}).items()}
         current = dict(old.get("current") or {})
         errors = []
@@ -87,7 +93,7 @@ def refresh(conn) -> dict:
             cur = fetch_current()
         except Exception as e:  # noqa: BLE001 - 第三方网页
             errors.append(f"当前估值：{type(e).__name__}: {str(e)[:100]}")
-        for sym, code in CODES.items():
+        for sym, code in codes.items():
             try:
                 for d, v in fetch_history(code):
                     series.setdefault(sym, {})[d] = v
@@ -95,36 +101,37 @@ def refresh(conn) -> dict:
                 errors.append(f"{sym} 历史：{type(e).__name__}: {str(e)[:100]}")
             if code in cur:
                 current[sym] = cur[code]
-        ok = bool(series) and not (len(errors) >= len(CODES) + 1)
+        ok = bool(series) and not (len(errors) >= len(codes) + 1)
         if ok:
-            db.set_meta(conn, META, json.dumps({"at": datetime.now().isoformat(timespec="seconds"),
+            db.set_meta(conn, METAS[market], json.dumps({"at": datetime.now().isoformat(timespec="seconds"),
                                                 "series": {k: sorted([d, v] for d, v in s.items()) for k, s in series.items()},
                                                 "current": current}, ensure_ascii=False))
             conn.commit()
         return {"ok": ok, "errors": errors}
 
 
-def refresh_async() -> bool:
+def refresh_async(market: str = "CN") -> bool:
     """后台刷新（不阻塞页面和盘后任务链）。返回是否新开了一个后台任务。"""
-    if _bg["running"]:
+    bg = _bg[market]
+    if bg["running"]:
         return False
-    _bg["running"] = True
+    bg["running"] = True
 
     def run():
         try:
-            with settings.market_ctx("CN"), db.market_db("CN") as c:
-                _bg["last"] = refresh(c)
+            with settings.market_ctx(market), db.market_db(market) as c:
+                bg["last"] = refresh(c, market)
         except Exception as e:  # noqa: BLE001
-            _bg["last"] = {"ok": False, "errors": [str(e)[:150]]}
+            bg["last"] = {"ok": False, "errors": [str(e)[:150]]}
         finally:
-            _bg["running"] = False
-    threading.Thread(target=run, name="valuation", daemon=True).start()
+            bg["running"] = False
+    threading.Thread(target=run, name=f"valuation-{market}", daemon=True).start()
     return True
 
 
-def is_demo() -> bool:
+def is_demo(market: str = "CN") -> bool:
     """演示数据模式不联网。"""
-    return (settings.base_cfg().get("datasource") or {}).get("cn") == "demo"
+    return (settings.base_cfg().get("datasource") or {}).get(market.lower()) == "demo"
 
 
 # ---- 分析 ----------------------------------------------------------------------------------------
@@ -178,15 +185,16 @@ def analyze_one(sym: str, name: str, rows: list, cur: dict | None, cfg: dict | N
     return out
 
 
-def view_items(conn) -> dict:
+def view_items(conn, market: str = "CN") -> dict:
     """库里已有的估值结果（不联网）：{status, items: {指数代码: 分析结果}, refreshed_at, stale}"""
     from . import market_view
-    d = _load(conn)
+    d = _load(conn, market)
     if not d.get("series"):
         return {"status": "empty", "items": {}, "refreshed_at": None, "stale": True}
-    names = {i["symbol"]: i["name"] for i in market_view.index_list("CN")}
+    with settings.market_ctx(market):
+        names = {i["symbol"]: i["name"] for i in market_view.index_list(market)}
     items = {}
-    for sym in CODES:
+    for sym in CODES_BY_MARKET[market]:
         if sym not in d["series"]:
             continue
         r = analyze_one(sym, names.get(sym, sym), d["series"][sym], (d.get("current") or {}).get(sym))
@@ -197,33 +205,33 @@ def view_items(conn) -> dict:
     return {"status": "ok" if items else "empty", "items": items, "refreshed_at": at, "stale": stale}
 
 
-def build() -> dict:
-    """/api/market/valuation：A 股宽基指数的估值与分批建仓参考。"""
-    if is_demo():
+def build(market: str = "CN") -> dict:
+    """/api/market/valuation：宽基指数（A 股 5 个 / 美股标普500 + 纳斯达克100）的估值与分批建仓参考。"""
+    if is_demo(market):
         return {"status": "demo", "message": "演示数据模式不联网，没有指数估值。", "items": []}
-    with settings.market_ctx("CN"), db.market_db("CN") as c:
-        v = view_items(c)
+    with settings.market_ctx(market), db.market_db(market) as c:
+        v = view_items(c, market)
     started = False
     if v["status"] != "ok" or v["stale"]:
-        started = refresh_async()
+        started = refresh_async(market)
     if v["status"] != "ok":
-        return {"status": "loading", "message": "第一次使用：正在联网取指数估值历史（几秒钟），稍后刷新。" + ("" if started else "（取数进行中）"), "items": [], "bg": _bg.get("last")}
+        return {"status": "loading", "message": "第一次使用：正在联网取指数估值历史（几秒钟），稍后刷新。" + ("" if started else "（取数进行中）"), "items": [], "bg": _bg[market].get("last")}
     c2 = vcfg()
-    order = [s for s in CODES]
+    order = list(CODES_BY_MARKET[market])
     return {"status": "ok", "items": [v["items"][s] for s in order if s in v["items"]], "refreshed_at": v["refreshed_at"], "stale": v["stale"],
             "rule": {"enter_gap": float(c2.get("enter_gap", 0.10)), "window_years": int(c2.get("window_years", 10)), **plan_for(None, c2)},
             "source": "蛋卷基金·指数估值（成分股整体滚动市盈率，每周一个点的近 10 年历史）",
             "note": NOTE}
 
 
-def for_view() -> dict | None:
+def for_view(market: str = "CN") -> dict | None:
     """给 /api/market/view 用：只读库里已有的结果，过期就在后台刷新；演示模式 / 没有数据返回 None。"""
-    if is_demo() or not vcfg().get("enabled", True):
+    if is_demo(market) or not vcfg().get("enabled", True):
         return None
-    with settings.market_ctx("CN"), db.market_db("CN") as c:
-        v = view_items(c)
+    with settings.market_ctx(market), db.market_db(market) as c:
+        v = view_items(c, market)
     if v["status"] != "ok" or v["stale"]:
-        refresh_async()
+        refresh_async(market)
     return v if v["status"] == "ok" else None
 
 
@@ -232,6 +240,8 @@ NOTE = ("市盈率低不等于马上涨：低估值可以持续一两年，所�
         "这套分批方式是按一般做法设计的，没有用历史回测验证过；数据来自第三方网站，可能延迟或中断。只作参考，不是投资建议，不进入选股与回测。")
 
 
-if __name__ == "__main__":                                 # python -m server.valuation  ：手动刷新
-    with settings.market_ctx("CN"), db.market_db("CN") as c:
-        print(refresh(c))
+if __name__ == "__main__":                                 # python -m server.valuation [US] ：手动刷新
+    import sys
+    mk = "US" if "US" in [a.upper() for a in sys.argv[1:]] else "CN"
+    with settings.market_ctx(mk), db.market_db(mk) as c:
+        print(refresh(c, mk))

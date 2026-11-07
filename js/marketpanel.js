@@ -69,12 +69,12 @@ export function valuationBlock(d, { compact = false } = {}) {
   const painters = [];
   const rows = items.flatMap(i => {
     const v = i.valuation, dt = detail(i); painters.push(dt.paint);
-    const sub = h('tr', { class: 'tmr', hidden: true }, h('td', { colspan: compact ? 4 : 6 }, dt.el));
+    const sub = h('tr', { class: 'tmr', hidden: true }, h('td', { colspan: compact ? 5 : 6 }, dt.el));
     const tag = v.in_zone ? h('span', { class: 'badge ok' }, `分批建仓 ${v.batches_now}/${v.batches_total} 批`) : h('span', { class: 'muted small' }, '还没到');
     return [h('tr', { style: 'cursor:pointer', title: '点开看这个指数的估值细节和怎么分批', onclick: () => { sub.hidden = !sub.hidden; } },
       h('td', {}, h('span', { class: 'muted' }, '▸ '), h('b', {}, i.name), h('div', { class: 'tiny faint' }, (i.etf || '').split(' ')[0])),
       h('td', { class: 'num r' }, fmtNum(v.pe, 1)),
-      ...(compact ? [] : [h('td', { class: 'num r', title: v.low_date }, fmtNum(v.low, 1))]),
+      h('td', { class: 'num r', title: '近 10 年最低出现在 ' + v.low_date }, fmtNum(v.low, 1)),
       h('td', { class: 'num r', style: v.in_zone ? 'font-weight:700' : '' }, sgn(v.gap)),
       ...(compact ? [] : [h('td', { class: 'num r', title: '现在的市盈率在近 10 年里排第几位（0% = 最便宜）' }, pct0(v.pct))]),
       h('td', {}, tag)), sub];
@@ -95,7 +95,7 @@ export function valuationBlock(d, { compact = false } = {}) {
     h('div', { class: 'mt-s' }, summary),
     h('div', { class: 'tbl-wrap mt-s' }, h('table', { class: 'mini' },
       h('thead', {}, h('tr', {}, h('th', {}, '指数（点开）'), h('th', { class: 'r', title: '成分股整体滚动市盈率' }, '市盈率'),
-        ...(compact ? [] : [h('th', { class: 'r', title: '近 10 年最低（每周一个点）' }, '10年最低')]),
+        h('th', { class: 'r', title: '近 10 年最低（每周一个点）' }, '10年最低'),
         h('th', { class: 'r', title: '现在比近 10 年最低高出多少；≤ 10% 进入建仓区' }, '距最低'),
         ...(compact ? [] : [h('th', { class: 'r', title: '市盈率在近 10 年里的分位，0% = 最便宜' }, '分位')]),
         h('th', {}, '建议'))), h('tbody', {}, rows))),

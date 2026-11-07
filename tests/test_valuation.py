@@ -145,9 +145,9 @@ def test_refresh_failure_keeps_old_data_and_never_raises(demo_env, monkeypatch):
 
 
 def test_first_use_starts_background_fetch_then_serves(demo_env, monkeypatch):
-    monkeypatch.setattr(valuation, "is_demo", lambda: False)
+    monkeypatch.setattr(valuation, "is_demo", lambda m="CN": False)
     started = []
-    monkeypatch.setattr(valuation, "refresh_async", lambda: started.append(1) or True)
+    monkeypatch.setattr(valuation, "refresh_async", lambda m="CN": started.append(1) or True)
     d = valuation.build()
     assert d["status"] == "loading" and started
     monkeypatch.setattr(valuation, "_http", fake_http(all_rows(), all_cur(21.0)))
@@ -160,7 +160,7 @@ def test_first_use_starts_background_fetch_then_serves(demo_env, monkeypatch):
 
 def test_demo_mode_never_touches_the_network(demo_env, monkeypatch):
     called = []
-    monkeypatch.setattr(valuation, "refresh_async", lambda: called.append(1))
+    monkeypatch.setattr(valuation, "refresh_async", lambda m="CN": called.append(1))
     assert valuation.is_demo() and valuation.build()["status"] == "demo" and valuation.for_view() is None and not called
 
 
@@ -168,8 +168,8 @@ def test_demo_mode_never_touches_the_network(demo_env, monkeypatch):
 @pytest.fixture
 def client(demo_env, monkeypatch):
     from server import main, market_view
-    monkeypatch.setattr(valuation, "is_demo", lambda: False)
-    monkeypatch.setattr(valuation, "refresh_async", lambda: True)
+    monkeypatch.setattr(valuation, "is_demo", lambda m="CN": False)
+    monkeypatch.setattr(valuation, "refresh_async", lambda m="CN": True)
     monkeypatch.setattr(valuation, "_http", fake_http(all_rows(), all_cur(21.0)))
     with db.market_db("CN") as c:
         valuation.refresh(c)
@@ -177,11 +177,9 @@ def client(demo_env, monkeypatch):
     return TestClient(main.app)
 
 
-def test_api_valuation_and_unsupported_market(client):
+def test_api_valuation_cn(client):
     d = client.get("/api/market/valuation").json()
     assert d["status"] == "ok" and len(d["items"]) == 5 and d["items"][1]["symbol"] == "sh.000300" and d["items"][1]["in_zone"] is True
-    us = client.get("/api/market/valuation", params={"market": "US"}).json()
-    assert us["status"] == "unsupported"
 
 
 def test_market_view_carries_valuation_per_index(client):
@@ -191,3 +189,44 @@ def test_market_view_carries_valuation_per_index(client):
     assert by["sh.000300"]["valuation"]["batches_now"] == 2 and by["sz.399006"]["valuation"]["pe"] == 21.0
     assert d["valuation"]["rule"]["batches_total"] == 5 and d["valuation"]["note"]
     json.dumps(d)                                                                                # 可序列化
+
+
+# ---------------------------------------------------------------- 美股：只有标普500 / 纳斯达克100
+def us_rows(low=16.0):
+    return {"SP500": weekly(low=low), "NDX": weekly(low=low + 4)}
+
+
+def test_us_refresh_uses_its_own_codes_and_storage(us_env, monkeypatch):
+    calls = []
+    inner = fake_http(us_rows(), {"SP500": cur_of(23.0), "NDX": cur_of(26.0)})
+
+    def spy(url, timeout=25):
+        calls.append(url)
+        return inner(url, timeout)
+    monkeypatch.setattr(valuation, "_http", spy)
+    from server import settings
+    with settings.market_ctx("US"), db.market_db("US") as c:
+        r = valuation.refresh(c, "US")
+        assert r["ok"] and not r["errors"]
+        v = valuation.view_items(c, "US")
+        assert set(v["items"]) == {"SPY", "QQQ"}                                              # 罗素2000 / 道琼斯不显示
+        assert v["items"]["SPY"]["name"] == "标普500" and v["items"]["QQQ"]["name"] == "纳斯达克100" and v["items"]["SPY"]["low"] == 16.0
+        assert valuation._load(c, "CN") == {}                                                  # 不和 A 股混存
+    assert any("pe_history/SP500" in u for u in calls) and any("pe_history/NDX" in u for u in calls) and not any("SH000300" in u for u in calls)
+
+
+def test_us_market_view_only_marks_spy_and_qqq(us_env, monkeypatch):
+    from server import main, market_view, settings
+    monkeypatch.setattr(valuation, "is_demo", lambda m="CN": False)
+    monkeypatch.setattr(valuation, "refresh_async", lambda m="CN": True)
+    monkeypatch.setattr(valuation, "_http", fake_http(us_rows(), {"SP500": cur_of(17.0), "NDX": cur_of(30.0)}))
+    with settings.market_ctx("US"), db.market_db("US") as c:
+        valuation.refresh(c, "US")
+        market_view.ensure_breadth(c, "US")
+    d = TestClient(main.app).get("/api/market/view", params={"market": "US"}).json()
+    assert d["status"] == "ok"
+    by = {i["symbol"]: i.get("valuation") for i in d["indices"]}
+    assert by["SPY"]["in_zone"] is True and by["SPY"]["batches_now"] >= 1 and by["QQQ"]["in_zone"] is False
+    assert by.get("IWM") is None and by.get("DIA") is None
+    api = TestClient(main.app).get("/api/market/valuation", params={"market": "US"}).json()
+    assert api["status"] == "ok" and [i["symbol"] for i in api["items"]] == ["SPY", "QQQ"]

@@ -19,8 +19,8 @@ const SETUP_LABEL = { breakout: '突破', pullback: '回踩', vcp: '波动收缩
 export const screener = {
   layout: 'split',
   async mount(ctx) {
-    const S = { tab: ctx.openTab || (state.market === 'CN' ? 'factor' : 'list'), data: null, preview: false, sel: null };      // ctx.openTab：从别处（如旧的 #/news 链接）指定要打开的标签
-    ctx.openTab = null;      // A 股默认先看低风险组合（资金方案里占 30%）；个股清单证据弱，放到后面
+    const S = { tab: ctx.openTab || 'list', data: null, preview: false, sel: null };      // ctx.openTab：从别处（如旧的 #/news 链接）指定要打开的标签
+    ctx.openTab = null;      // 默认先看「个股观察」（A 股美股一样）：这样右侧一直是「市场概览」，不会一打开就被低风险组合的回测证据顶掉
     const el = ctx.listEl;
     const gen = ctx.gen;
     const alive = () => ctx.gen === gen;     // 切换市场 / 页面后，这一份页面的后台请求回来也不再画（否则 A股的数据会盖住美股）
@@ -188,8 +188,8 @@ export const screener = {
 
     function tabsBar() {
       // 左栏很窄：标签用短名（鼠标停留显示全名），均分宽度，放得下就不出现横向滚动
-      // 顺序按证据强弱：低风险组合 / 恐慌日（资金方案里真正用到的）在前，个股清单（只观察）在后
-      const tabs = [...(state.market === 'CN' ? [['factor', '低风险', '低风险组合']] : []), ['panic', '恐慌日', '恐慌日'], ['list', '个股观察', '个股观察清单（只观察）'], ['news', '资讯', '资讯 · 公告 / 新闻 / 财报日历'],
+      // 「个股观察」放第一个（默认打开的标签）；后面按证据强弱：低风险组合 / 恐慌日（资金方案里真正用到的）在前
+      const tabs = [['list', '个股观察', '个股观察清单（只观察）'], ...(state.market === 'CN' ? [['factor', '低风险', '低风险组合']] : []), ['panic', '恐慌日', '恐慌日'], ['news', '资讯', '资讯 · 公告 / 新闻 / 财报日历'],
         ['exec', '次日', '次日执行'], ['filter', '筛选', '条件筛选'], ['hist', '历史', '历史回看']];
       return h('div', { class: 'tabs', style: 'padding:0 8px;margin:0;align-items:center' }, ...tabs.map(([k, l, full]) =>
         h('button', { class: S.tab === k ? 'on' : '', title: full, onclick: () => { const was = S.tab; if (was === 'news' && k !== 'news') { S.news?.destroy(); S.news = null; } S.tab = k; render(); if (!ctx.currentSymbol && rightKindOf(was) !== rightKindOf(k)) showRight(); } }, l)),
