@@ -15,6 +15,7 @@ import { klineView } from './kline.js';
 import { hkView, hkMarketView, hkKlineView, hkPlaceholder } from './hk.js';
 import { showDetail } from './detail.js';
 import { ensureLogin, loginScreen, forcePasswordScreen, loginShowing } from './auth.js';
+import './install.js';                                 // 越早 import 越好：要在浏览器发出「可以安装」事件之前就开始监听
 
 const VIEWS = { screener, watchlist, portfolio, settings: settingsView, market: marketView, kline: klineView };
 const appEl = $('#app');

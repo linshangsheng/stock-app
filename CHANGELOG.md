@@ -28,6 +28,17 @@
 
 > 下一个版本的改动，版本号发布时再定。
 
+### 新增（安装成 App）
+- **「设置 → 我的账号」里新增「安装」卡片**（新增 `js/install.js`；`js/account.js` 挂卡片；`index.html` 加 iPhone 要的页面标记；`sw.js` 缓存清单加 `install.js`）。回答「能不能做个按钮，一键安装，不用去浏览器里各种点」。
+  - **电脑 / 安卓的 Edge、Chrome（含 MacBook 的 Chrome / Edge）**：浏览器发 `beforeinstallprompt` 事件，`install.js` 一启动就接住存起来（`app.js` 最先 import 它），卡片上的按钮调用它的 `prompt()` → 系统弹出确认框 → 再点一次「安装」。装好后（`appinstalled`）卡片变成「已安装」。
+  - **iPhone / iPad**：苹果不允许网页触发安装，没有任何办法一键。卡片上是「怎么安装（图文）」，弹出**三步图文引导**（内联 SVG 画的：Safari 底部工具栏里高亮「分享」→ 分享列表里高亮「添加到主屏幕」→ 添加对话框里高亮「添加」和「顺势」图标；iPad 的分享按钮在地址栏右边，图和文字都区分；iOS 上的 Chrome / Edge 提示分享按钮位置不同）。iPadOS 的 Safari 假装成 Mac，靠触摸点数识别。
+  - **MacBook 的 Safari**：同样不能代劳，图文引导「文件 → 添加到程序坞」（macOS 14 / Safari 17 以上，旧系统提示改用 Chrome / Edge）。
+  - **其余情况都说清楚原因**：微信 / QQ 内置浏览器（装不了，教你「在浏览器中打开」）、Firefox 电脑版（不支持）、**http 地址（浏览器不允许，等配上 https 自动变一键）**、浏览器没给安装事件（多半已装过：写 Chrome / Edge 的手动步骤 + 「再检查一次」）、已经是从图标打开的（「已安装」）。
+  - 判断逻辑是纯函数 `detectState()`，我在浏览器里用 16 组真实的浏览器标识逐个核对过（iPhone Safari / iPhone Chrome / iPad / Mac Safari / Mac Chrome / Windows Edge / Firefox / 微信安卓 / 微信 iOS / 安卓 Chrome，各带或不带安装事件、http 或 https、已安装），全部分到预期的类别。
+  - **页面标记**：`mobile-web-app-capable`、`apple-mobile-web-app-capable`、`apple-mobile-web-app-title=顺势`、`apple-mobile-web-app-status-bar-style=black-translucent`（状态栏透明，我们自己的深色顶栏连刘海安全区一起铺在下面）。原来就有清单（standalone、192 / 512 图标、可遮罩图标）、`apple-touch-icon`、有 fetch 处理的 `sw.js`，没动。
+  - **验证**：`tests/test_frontend_static.py` 新增 1 个（清单 / 图标文件 / 页面标记 / sw 的 fetch 处理 / install.js 的事件监听 / app.js 最先 import / 卡片挂在我的账号里）；浏览器冒烟测试多检查「设置 → 我的账号」里有「安装」卡片；内置预览里看了桌面端卡片、iPhone 图文引导（375 宽）和 Mac Safari 图文引导。
+  - **没验证 / 要知道的**：**没有在真的 iPhone、MacBook 和安卓手机上试过**（内置预览不发安装事件，一键安装弹窗和 iPhone 的实际操作步骤我只能按苹果和 Chrome 的行为写，真机上哪一步对不上请告诉我）；一键安装**要 HTTPS**，现在服务器还是 http 的话卡片只会写原因；装出来的 App 和浏览器的登录状态是分开的，第一次要重新登录。
+
 ### 新增（账号有效期）
 - **管理员可以给每个普通账号设有效期**（`server/accounts.py` 的 `expires_at`、`set_expiry()`；`PUT /api/accounts/{id}` 接受 `expires_at`（日期或 null = 永久）和 `extend_days`（续期天数）；`POST /api/accounts` 也能带 `expires_at`；`js/account.js` 新建账号里加「有效期」选择、账号管理表加「有效期」列和「有效期」按钮、「我的账号」显示有效期）。
   - **规则**：到期日**含当天**（到 2026-12-31 就是 31 号当天还能用，1 号起不能）；到期 = 和「暂停」一样：已登录的下一次请求就被挤下线（401，`account_expired`，「账号已到期，请联系管理员续期」），登录被拒（403），**数据保留**，续期后恢复；密码不对时不透露账号到期；登录记录里有「账号已到期」。管理员账号没有有效期，不能设；普通账号不能改自己的有效期（接口 403）；到期的账号不发提醒邮件。

@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-ROUTES = ["screener", "watchlist", "portfolio", "market", "kline", "market/backtest", "market/backtest/score", "settings", "settings/data", "settings/about", "settings/upgrade"]
+ROUTES = ["screener", "watchlist", "portfolio", "market", "kline", "market/backtest", "market/backtest/score", "settings", "settings/data", "settings/about", "settings/upgrade", "settings/account"]
 NOISE = ("chrome-extension://", "edge://", "ProtocolLaunch", "edge_", "QQBrowser")        # 浏览器自己 / 扩展的日志，与页面无关
 
 
@@ -116,6 +116,8 @@ def test_page_opens_without_errors(base, tmp_path, route):
         assert "数据健康" in dom and ("hl-issue" in dom or "数据正常" in dom or "需要留意" in dom or "有问题" in dom), "设置 → 数据更新 没有渲染出「数据健康」面板"
     if route == "settings/upgrade":                              # 软件升级：打开就开始联网检查；没网也只显示错误说明，不能出 JS 报错
         assert "软件升级" in dom and ("正在联网检查更新" in dom or "已是最新版本" in dom or "发现" in dom or "检查失败" in dom or "alert" in dom), "设置 → 软件升级 没有渲染出来"
+    if route == "settings/account":                              # 我的账号：有「安装」卡片（无头浏览器里 localhost 是安全环境，但不会给出安装事件，所以是「没有一键安装」或「已安装」之一）
+        assert "install-card" in dom and ("安装到电脑" in dom or "安装到手机" in dom), "设置 → 我的账号 没有渲染出「安装」卡片"
     if route == "settings/about":
         assert "免责声明" in dom, "设置 → 关于 没有渲染出版本信息"
 

@@ -6,6 +6,7 @@ import { get, post, put, del, state } from './api.js';
 import { h, clear, toast, modal, confirmBox, mountIcons } from './util.js';
 import { prefs } from './db.js';
 import { isAdmin, logout } from './auth.js';
+import { installCard } from './install.js';
 
 const kv = (k, v) => h('div', { class: 'kv' }, h('span', { class: 'k' }, k), h('span', { class: 'v' }, v));
 const seg = (items, cur, on) => { const w = h('div', { class: 'seg' }); items.forEach(([v, l]) => { const b = h('button', { class: v === cur ? 'on' : '', onclick: () => { [...w.children].forEach(c => c.classList.remove('on')); b.classList.add('on'); on(v); } }, l); w.append(b); }); return w; };
@@ -60,7 +61,8 @@ export function accountPanel(ctx) {
     h('div', { class: 'row between wrap mb' }, h('div', {}, h('div', {}, '涨跌配色'), h('div', { class: 'hint' }, '默认随市场自适应：A股、港股 红涨绿跌，美股 绿涨红跌。')),
       seg([['auto', '随市场自适应'], ['red', '全局红涨绿跌'], ['green', '全局绿涨红跌']], prefs.get('colorMode', 'auto'), v => { prefs.set('colorMode', v); ctx.applyColors(); })),
     h('div', { class: 'row between wrap' }, h('div', {}, '主题'), seg([['auto', '跟随系统'], ['light', '浅色'], ['dark', '深色']], prefs.get('theme', 'auto'), v => { prefs.set('theme', v); ctx.applyTheme(); })));
-  return { els: admin ? [card] : [card, look] };
+  const install = installCard();
+  return { els: admin ? [card, install] : [card, install, look] };
 }
 
 /** 设置 → 账号管理（管理员）。 */

@@ -21,7 +21,7 @@ const stopPoll = () => { clearInterval(pollTimer); pollTimer = null; };
 let healthView = null, upgradeView = null, usersView = null;
 
 const ABOUT = ['about', '关于', '版本、作者、数据来源与许可', 'info'];
-const ACCOUNT = ['account', '我的账号', '密码、退出登录、提醒邮箱、外观', 'user'];
+const ACCOUNT = ['account', '我的账号', '密码、退出登录、安装到桌面、提醒邮箱、外观', 'user'];
 const ADMIN_SECTIONS = [                     // 管理员：全部设置 + 账号管理
   ['general', '通用设置', '自动更新开关、外观、邮件提醒', 'gear'],
   ['trade', '交易参数', '资金方案、费用与风控参数', 'sliders'],

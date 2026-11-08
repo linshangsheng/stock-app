@@ -805,3 +805,13 @@ html[data-role="user"] .admin-only { display: none !important; }       /* 普通
   .wl-row .t1 > .num:nth-last-child(1) { grid-column: 3; grid-row: 2; font-size: 14.5px; text-align: right; min-width: 0 !important; }
   .wl-row .t2 { margin-top: 8px; align-items: center; }
 }
+
+/* ---- 安装卡片和图文引导（js/install.js）---- */
+.install-card { margin-top: 14px; }
+.ig { display: flex; flex-direction: column; gap: 12px; }
+.ig-step { display: flex; gap: 12px; align-items: flex-start; }
+.ig-n { flex: none; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: #fff; font-size: 14px; font-weight: 700; margin-top: 1px; }
+.ig-body { min-width: 0; flex: 1; }
+.ig-t { font-size: 15px; font-weight: 650; line-height: 1.45; margin-bottom: 8px; }
+.ig-img { border-radius: 14px; overflow: hidden; background: var(--bg); box-shadow: 0 0 0 .5px var(--line-strong); } .ig-img svg { display: block; width: 100%; height: auto; }
+.ig .hint { margin-top: 6px; }

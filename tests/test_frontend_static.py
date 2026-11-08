@@ -110,3 +110,21 @@ def test_market_switch_has_three_markets_and_hk_routes_are_wired():
     assert "state.market === 'HK' ? 'CN' : state.market" in (ROOT / "js" / "api.js").read_text(encoding="utf-8")
     hk = (ROOT / "js" / "hk.js").read_text(encoding="utf-8")
     assert "market: 'HK'" in hk                                     # 港股自己的接口显式传 market=HK
+
+
+def test_app_is_installable_and_the_install_hooks_are_in_place():
+    """「安装」卡片依赖的东西都在：清单（standalone + 192/512 图标，文件真实存在）、iPhone 要的几行页面标记、sw.js 有 fetch 处理（浏览器判定可安装的条件）、
+    install.js 在 app.js 里最先被 import 并监听 beforeinstallprompt、卡片挂在「我的账号」里。"""
+    import json
+    mf = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
+    assert mf["display"] == "standalone" and mf["start_url"] == "/" and mf["name"]
+    sizes = {i["sizes"]: i["src"] for i in mf["icons"] if i.get("purpose") == "any" and i["src"].endswith(".png")}
+    assert {"192x192", "512x512"} <= set(sizes) and all((ROOT / p).exists() for p in sizes.values())
+    html = (ROOT / "index.html").read_text(encoding="utf-8")
+    for tag in ('rel="manifest"', "apple-mobile-web-app-capable", "apple-mobile-web-app-title", "apple-mobile-web-app-status-bar-style", 'rel="apple-touch-icon"', "viewport-fit=cover"):
+        assert tag in html, f"index.html 缺 {tag}"
+    assert "addEventListener('fetch'" in (ROOT / "sw.js").read_text(encoding="utf-8")
+    inst = (ROOT / "js" / "install.js").read_text(encoding="utf-8")
+    assert "beforeinstallprompt" in inst and "appinstalled" in inst and "export function detectState" in inst
+    assert "import './install.js'" in (ROOT / "js" / "app.js").read_text(encoding="utf-8")
+    assert "installCard" in (ROOT / "js" / "account.js").read_text(encoding="utf-8")
