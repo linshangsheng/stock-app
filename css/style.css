@@ -622,3 +622,91 @@ html[data-role="user"] .admin-only { display: none !important; }       /* 普通
   background: var(--bg-glass); -webkit-backdrop-filter: blur(20px) saturate(1.6); backdrop-filter: blur(20px) saturate(1.6); box-shadow: var(--shadow); border-radius: 16px; padding: 10px 14px; }
 #pw-bar[hidden] { display: none; }
 @media (max-width: 860px) { #pw-bar { bottom: calc(76px + env(safe-area-inset-bottom)); } }
+
+/* ============================================================================================================
+   手机精修（v2）——「iOS 风」：悬浮的玻璃标签栏 + 分组圆角卡片 + 更松的节奏 + 手指好点的尺寸
+   设计原则：① 一屏只讲一件事，卡片之间留 12px 呼吸；② 数字大、说明小，粗体只给关键结果；③ 所有可点的东西至少 44px；
+            ④ 横着滚的表格改成「一行一张小卡片」；⑤ 底部标签栏悬浮、半透明，内容能从它下面滑过；⑥ 深浅主题都靠变量，不写死颜色。
+   只在 ≤ 860px 生效，电脑端一点都不动。
+   ============================================================================================================ */
+@media (max-width: 860px) {
+  :root { --tab-h: 62px; --gutter: 14px; }
+
+  /* 1 悬浮玻璃标签栏：模糊放在 ::before 上（nav 自己不能有 backdrop-filter——它会让里面 fixed 的顶栏元素改成相对 nav 定位） */
+  .app { grid-template-rows: 1fr; }
+  .nav { position: fixed; z-index: 40; left: 10px; right: 10px; bottom: calc(8px + env(safe-area-inset-bottom)); grid-row: auto; height: var(--tab-h); padding: 5px; border-radius: 24px;
+    background: transparent; box-shadow: 0 12px 32px rgba(5,8,26,.34), 0 2px 6px rgba(5,8,26,.2); align-items: stretch; }
+  .nav::before { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; background: rgba(12,19,48,.86);
+    -webkit-backdrop-filter: blur(22px) saturate(1.7); backdrop-filter: blur(22px) saturate(1.7); box-shadow: inset 0 0 0 .5px rgba(255,255,255,.14), inset 0 1px 0 rgba(255,255,255,.08); }
+  .nav a { flex: 1; justify-content: center; gap: 2px; padding: 4px 0 3px; border-radius: 19px; font-size: 10.5px; letter-spacing: .01em; }
+  .nav a i { width: 24px; height: 24px; }
+  .nav a.on { background: rgba(255,255,255,.13); box-shadow: none; }
+  .nav a.on::before { display: none; }
+  .col-list, .col-detail, .col-page { padding-bottom: calc(var(--tab-h) + 26px + env(safe-area-inset-bottom)); }
+  #update-bar, #pw-bar { bottom: calc(var(--tab-h) + 22px + env(safe-area-inset-bottom)); }
+  #toast-root { right: 14px; left: 14px; bottom: calc(var(--tab-h) + 22px + env(safe-area-inset-bottom)); align-items: center; }
+
+  /* 2 分组卡片：选股页的三块（明天要做什么 / 市场温度 / 数据状态）都是浮在页面上的圆角卡片 */
+  .act-card { margin: 12px var(--gutter) 10px; padding: 16px 12px 6px; border-radius: 22px; }
+  .act-card > .row.between { padding: 0 6px 6px; align-items: center; flex-wrap: wrap; gap: 6px 10px; } .act-card > .row.between b { font-size: 17px; letter-spacing: -.02em; white-space: nowrap; }
+  .act-line { align-items: center; gap: 12px; padding: 12px 6px; margin-top: 0; border-radius: 14px; }
+  .act-line + .act-line::before { left: 54px; top: -.5px; }
+  .act-ico { flex: none; width: 38px; height: 38px; display: grid; place-items: center; border-radius: 12px; background: var(--panel); font-size: 19px; line-height: 1; }
+  .act-line > div { min-width: 0; flex: 1; }
+  .act-t { font-size: 12px; letter-spacing: .01em; margin-bottom: 1px; }
+  .act-b { font-size: 14.5px; font-weight: 600; line-height: 1.45; letter-spacing: -.006em; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+  .act-line.link::after { content: "›"; flex: none; align-self: center; margin-left: 2px; color: var(--faint); font-size: 24px; font-weight: 300; line-height: 1; }
+  .act-line.link:active { background: var(--panel); }
+  .col-list .mkt-brief, .col-list .status-bar { margin: 10px var(--gutter); padding: 16px 14px; border: 0; border-radius: 20px; background: var(--panel); box-shadow: none; }
+  .col-list .status-bar { gap: 14px 16px; }
+  .zone-pill { font-size: 12.5px; }
+
+  /* 3 选股页的标签：吸在顶栏下面，毛玻璃底；点一下的面积更大 */
+  .col-list .tabs { position: sticky; top: 0; z-index: 6; margin: 4px 0 12px; padding: 0 var(--gutter); background: var(--canvas-glass); -webkit-backdrop-filter: blur(18px) saturate(1.6); backdrop-filter: blur(18px) saturate(1.6); }
+  [data-view="screener"] .col-list .tabs { background: color-mix(in srgb, var(--bg) 82%, transparent); }
+  .col-list .tabs button { padding: 13px 8px; font-size: 14px; }
+
+  /* 4 页面标题：大标题，更像 iOS；页面布局（行情 / 持仓 / K线 …）没有「上一级」，去掉没用的「← 返回」 */
+  [data-layout="page"] .mobile-top { display: none !important; }
+  .pane-body h1 { font-size: 28px; letter-spacing: -.03em; }
+  .pane-body { padding: 14px var(--gutter) 40px; }
+  .card { border-radius: 18px; padding: 16px 14px; }
+  .card + .card { margin-top: 12px; }
+  .card-title h2 { font-size: 17px; }
+
+  /* 5 手指好点：按钮、输入框、列表行 */
+  .btn { min-height: 44px; padding: 8px 18px; border-radius: 12px; font-size: 14.5px; }
+  .btn.sm { min-height: 36px; padding: 6px 14px; border-radius: 10px; font-size: 13.5px; }
+  input[type=text], input[type=number], input[type=date], input[type=password], input[type=search], select { min-height: 44px; border-radius: 12px; font-size: 16px; }   /* 16px：iPhone 点输入框不会自动放大页面 */
+  .list-item { padding: 14px 14px; }
+  .seg { border-radius: 11px; padding: 2.5px; } .seg button { padding: 7px 14px; border-radius: 9px; font-size: 13px; }
+
+  /* 6 个股详情：价格更大、三个操作按钮等宽、图表控件一行排整齐 */
+  .quote-head { padding: 16px var(--gutter) 10px; gap: 14px; }
+  .quote-head .price { font-size: 38px; }
+  .quote-head > .row.wrap { display: grid; grid-template-columns: 1fr 1fr 1.25fr; gap: 8px; width: 100%; }
+  .quote-head > .row.wrap .btn { padding: 8px 6px; justify-content: center; white-space: nowrap; }
+  .chart-tools { padding: 6px var(--gutter); gap: 8px; }
+  .chart-tools .seg { flex: 1 1 auto; } .chart-tools .seg button { flex: 1; white-space: nowrap; padding: 7px 9px; }
+  .chart-tools .seg:first-child { flex: 0 0 auto; }
+  .chart-tools .btn.sm { flex: 1 1 calc(50% - 4px); }
+  .chart-tools .hint { flex: 0 0 100%; order: 9; }
+  .col-detail .chart-box { margin: 0 var(--gutter); border-radius: 16px; overflow: hidden; }
+  .ind-grid { gap: 12px; }
+}
+
+/* 7 宽基 / ETF 表：手机上一个指数一张小卡片（名称 + 今日涨跌 + 规则仓位，下面两行说明），不再横向滚动、不再被裁掉最后一列 */
+@media (max-width: 640px) {
+  table.etf-tbl, table.etf-tbl tbody { display: block; }
+  table.etf-tbl thead { display: none; }
+  table.etf-tbl tr:not(.tmr) { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px 14px; align-items: center; padding: 13px 2px; border-bottom: var(--hair) solid var(--line); }
+  table.etf-tbl tr:not(.tmr):last-of-type { border-bottom: 0; }
+  table.etf-tbl td { border: 0; padding: 0; text-align: left; }
+  table.etf-tbl td:nth-child(1) { font-size: 15px; }
+  table.etf-tbl td:nth-child(2) { font-size: 15px; font-weight: 650; text-align: right; }
+  table.etf-tbl td:nth-child(3) { text-align: right; }
+  table.etf-tbl td:nth-child(n+4) { grid-column: 1 / -1; font-size: 13px; line-height: 1.5; color: var(--text); }
+  table.etf-tbl td:nth-child(n+4)::before { content: attr(data-label); display: inline-block; min-width: 6.6em; margin-right: 6px; color: var(--muted); font-size: 12px; }
+  table.etf-tbl tr.tmr { display: block; } table.etf-tbl tr.tmr td { display: block; padding: 0 0 8px; }
+  .tbl-wrap { margin-left: -2px; margin-right: -2px; }
+}

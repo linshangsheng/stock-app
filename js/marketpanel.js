@@ -134,8 +134,8 @@ export function marketBrief(d) {
       h('td', { class: 'num r ' + dirClass(i.chg_1d) }, fmtPct(i.chg_1d, 1)),
       h('td', { class: 'r' }, h('span', { class: 'badge ' + (i.position >= 1 ? 'ok' : i.position > 0 ? 'accent' : '') }, fmtPct(i.position, 0, false)),
         i.hold_amount != null ? h('div', { class: 'tiny muted num' }, money(i.hold_amount)) : null),
-      h('td', { class: 'small' }, next, h('span', { class: 'tiny muted num' }, ` (${fmtPct(dist, 1)})`)),
-      h('td', { class: 'small' + (i.next_open?.actions?.length ? '' : ' muted') }, i.next_open?.actions?.length ? i.next_open.actions.join('；') : '不操作')), sub];
+      h('td', { class: 'small', dataset: { label: '趋势仓下一步' } }, next, h('span', { class: 'tiny muted num' }, ` (${fmtPct(dist, 1)})`)),
+      h('td', { class: 'small' + (i.next_open?.actions?.length ? '' : ' muted'), dataset: { label: '明天开盘' } }, i.next_open?.actions?.length ? i.next_open.actions.join('；') : '不操作')), sub];
   });
   const al = d.allocation;
   const allocLine = al ? h('div', { class: 'tiny mt-s' }, h('b', {}, '资金方案：'),
@@ -150,7 +150,7 @@ export function marketBrief(d) {
     gauge(t.b20, t.cuts),
     h('div', { class: 'tiny muted mt-s' }, t.hint),
     allocLine,
-    h('div', { class: 'tbl-wrap mt-s' }, h('table', { class: 'mini' }, h('thead', {}, h('tr', {}, h('th', { title: '#名次 = 近 20 日涨幅强弱；趋势仓只做前 2 名。点指数名展开明天的情景' }, '宽基 / ETF（点开）'), h('th', { class: 'r' }, '今日'), h('th', { class: 'r' }, '规则仓位'), h('th', {}, '趋势仓下一步'),
+    h('div', { class: 'tbl-wrap mt-s' }, h('table', { class: 'mini etf-tbl' }, h('thead', {}, h('tr', {}, h('th', { title: '#名次 = 近 20 日涨幅强弱；趋势仓只做前 2 名。点指数名展开明天的情景' }, '宽基 / ETF（点开）'), h('th', { class: 'r' }, '今日'), h('th', { class: 'r' }, '规则仓位'), h('th', {}, '趋势仓下一步'),
       h('th', { title: '指数规则只看收盘：明天高开还是低开都不改变信号' }, '明天开盘'))),
       h('tbody', {}, rows))),
     valuationBlock(d, { compact: true }));
