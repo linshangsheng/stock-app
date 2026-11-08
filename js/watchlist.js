@@ -71,7 +71,7 @@ export const watchlist = {
 
     function row(it) {
       const q = it.quote;
-      return h('button', { class: 'list-item' + (S.sel === it.symbol ? ' sel' : '') + (S.flash?.has(it.symbol) ? ' flash' : ''), dataset: { symbol: it.symbol },
+      return h('button', { class: 'list-item wl-row' + (S.sel === it.symbol ? ' sel' : '') + (S.flash?.has(it.symbol) ? ' flash' : ''), dataset: { symbol: it.symbol },
         onclick: () => { S.sel = it.symbol; [...el.querySelectorAll('.list-item')].forEach(x => x.classList.toggle('sel', x.dataset.symbol === it.symbol)); showDetail(ctx, it.symbol); } },
         h('div', { class: 't1' }, h('span', { class: 'name' }, it.name), h('span', { class: 'code num' }, code(it.symbol)), it.industry ? h('span', { class: 'badge' }, it.industry) : null,
           h('span', { class: 'grow' }),

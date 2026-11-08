@@ -654,7 +654,8 @@ html[data-role="user"] .admin-only { display: none !important; }       /* 普通
   .act-ico { flex: none; width: 38px; height: 38px; display: grid; place-items: center; border-radius: 12px; background: var(--panel); font-size: 19px; line-height: 1; }
   .act-line > div { min-width: 0; flex: 1; }
   .act-t { font-size: 12px; letter-spacing: .01em; margin-bottom: 1px; }
-  .act-b { font-size: 14.5px; font-weight: 600; line-height: 1.45; letter-spacing: -.006em; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+  .act-b { font-size: 14.5px; font-weight: 600; line-height: 1.45; letter-spacing: -.006em; }
+  .act-b .act-s { display: block; margin-top: 3px; font-size: 13px; font-weight: 400; line-height: 1.5; color: var(--muted); } .act-dash { display: none; }
   .act-line.link::after { content: "›"; flex: none; align-self: center; margin-left: 2px; color: var(--faint); font-size: 24px; font-weight: 300; line-height: 1; }
   .act-line.link:active { background: var(--panel); }
   .col-list .mkt-brief, .col-list .status-bar { margin: 10px var(--gutter); padding: 16px 14px; border: 0; border-radius: 20px; background: var(--panel); box-shadow: none; }
@@ -709,4 +710,98 @@ html[data-role="user"] .admin-only { display: none !important; }       /* 普通
   table.etf-tbl td:nth-child(n+4)::before { content: attr(data-label); display: inline-block; min-width: 6.6em; margin-right: 6px; color: var(--muted); font-size: 12px; }
   table.etf-tbl tr.tmr { display: block; } table.etf-tbl tr.tmr td { display: block; padding: 0 0 8px; }
   .tbl-wrap { margin-left: -2px; margin-right: -2px; }
+}
+
+/* ============================================================================================================
+   手机字号层级（v3）——像苹果那样只留 6 档字号，该大就大、该小就小。
+     11  标签栏文字、排名小徽标（再小就看不清了）
+     12  说明里最小的字：徽标、表头、字段名（kv 的 k）、代码、图例
+     13  次要说明：提示（hint）、small、tiny 里的整句话
+     15  正文：列表行、按钮、表格内容、输入框前的字
+     17  小标题 / 关键数字：卡片标题、字段值（kv 的 v）、空状态标题
+     22 / 28 / 38  页面大标题 / 分栏大标题 / 个股价格
+   之前一屏里有 14 种字号（10、11、11.5、12、12.5、13、13.5、14、14.5、15、17、19 …），而且整句说明用 11~12px，手机上太小。
+   框（按钮 / 输入框 / 分段控件 / 徽标）的高度也统一：输入框 44、按钮 44（小按钮 36）、分段控件按钮 34、徽标 24、顶栏小图标 38。
+   ============================================================================================================ */
+@media (max-width: 860px) {
+  body { font-size: 15px; line-height: 1.55; }
+  .tiny { font-size: 12.5px; line-height: 1.5; } .small { font-size: 13.5px; line-height: 1.55; }
+  .hint, .alert { font-size: 13.5px; line-height: 1.6; }
+  .alert.small, .alert .small { font-size: 13px; }
+  p.hint, .hint.mt-s { margin-top: 8px; }
+
+  /* 字段名小、字段值大：kv（卡片里的「名称 / 数值」对）*/
+  .kv { gap: 3px; } .kv .k { font-size: 12.5px; } .kv .v { font-size: 18px; letter-spacing: -.015em; }
+  .grid { gap: 16px 14px; }
+
+  /* 徽标 / 标签 / 排名：统一 24px 高 */
+  .badge { font-size: 12.5px; line-height: 20px; padding: 2px 10px; }
+  .tag { font-size: 12.5px; line-height: 20px; padding: 2px 10px; }
+  .rank-badge { font-size: 11.5px; padding: 1px 6px; }
+  .zone-pill { font-size: 13px; padding: 4px 12px; }
+  .code.num, .num.code { font-size: 12.5px; }
+
+  /* 标题：小标题 17、h3 是分组名（小、灰、略粗）*/
+  h1 { font-size: 28px; } h2 { font-size: 18px; } h3 { font-size: 13px; letter-spacing: .01em; }
+  .pane-head h1 { font-size: 26px; letter-spacing: -.028em; }
+  .card-title h2, .pane-body h2 { font-size: 18px; }
+  .empty .big { font-size: 18px; }
+  .act-card > .row.between b { font-size: 18px; }
+  .act-t { font-size: 13px; } .act-b { font-size: 15px; line-height: 1.5; }
+  .fp-head .fp-headline { font-size: 16px; } .fp-kv .kv .v { font-size: 16px; }
+
+  /* 表格：表头 12 灰、内容 14；大表继续允许左右滑 */
+  table.mini th, table th { font-size: 12.5px; padding: 8px 8px; }
+  table.mini td { font-size: 14px; padding: 9px 8px; }
+  table.mini td.small, table.mini .small { font-size: 13.5px; }
+
+  /* 列表行（自选 / K 线 / 持仓 / 搜索结果）：名称 16 粗、代码 12.5 灰、价格和涨跌 16、第二行 13 */
+  .list-item .name, .list-item b { font-size: 16px; }
+  .list-item .t2, .list-item .t2 span { font-size: 13px; }
+  .list-item .num { font-size: 15.5px; }
+  .list-item .px, .list-item .price { font-size: 17px; font-weight: 650; }
+
+  /* 框：按钮 / 输入框 / 分段控件 / 顶栏小图标 */
+  .btn { font-size: 15px; } .btn.sm { font-size: 14px; }
+  .seg button { min-height: 34px; font-size: 14px; }
+  .icon-btn { width: 38px; height: 38px; border-radius: 12px; font-size: 16px; }
+  .nav-foot { gap: 8px; }
+  .market-switch button { font-size: 14px; }
+  .tabs button { font-size: 15px; } .col-list .tabs button { font-size: 15px; padding: 13px 9px; }
+  .nav a, .nav a span { font-size: 11px; }
+  label.f > span, .f > span { font-size: 13px; }
+  .alert { padding: 12px 16px; border-radius: 14px; }
+
+  /* 指数卡 / 图例 / 其他数字 */
+  .idx-card .px { font-size: 24px; } .idx-card .nm { font-size: 13px; }
+  .combo-legend { font-size: 13px; }
+  .quote-head .price { font-size: 40px; }
+  .quote-head h1 { font-size: 26px; }
+  .badge.accent, .badge.ok, .badge.warn { font-size: 12.5px; }
+  .ev-row .when { font-size: 13px; } .ev-row .ttl { font-size: 15.5px; } .ev-row .meta { font-size: 13px; }
+  details > summary { font-size: 15px; }
+}
+@media (max-width: 860px) {
+  .status-bar .cell .k { font-size: 12.5px; } .status-bar .cell .v { font-size: 14.5px; }
+}
+@media (max-width: 640px) {
+  table.etf-tbl td { padding: 0; }                                     /* 上面 table.mini td 的内边距不要带进小卡片 */
+  table.etf-tbl td:nth-child(n+4) { font-size: 14px; }
+  table.etf-tbl td:nth-child(n+4)::before { font-size: 13px; min-width: 7em; }
+  table.etf-tbl td:nth-child(1) { font-size: 16px; } table.etf-tbl td:nth-child(2) { font-size: 16px; }
+  table.mini.plan td { font-size: 14px; }
+}
+
+/* 自选股的行（手机）：左边「名称（大）/ 代码 + 行业」，右边「现价（大）/ 涨跌幅」，下面一行小字（涨跌额、成交额、备注、移出）。
+   之前名称、代码、行业、现价、涨跌幅全挤在一行里，名称被挤成两行。 */
+@media (max-width: 860px) {
+  .wl-row .t1 { display: grid; grid-template-columns: minmax(0, max-content) 1fr auto; column-gap: 10px; row-gap: 3px; align-items: center; }
+  .wl-row .t1 > .name { grid-column: 1 / 3; grid-row: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 17px; }
+  .wl-row .t1 > .code { grid-column: 1; grid-row: 2; }
+  .wl-row .t1 > .badge { grid-column: 2; grid-row: 2; justify-self: start; }
+  .wl-row .t1 > .grow { display: none; }
+  .wl-row .t1 > .live-dot { grid-column: 2; grid-row: 1; justify-self: end; }
+  .wl-row .t1 > .num:nth-last-child(2) { grid-column: 3; grid-row: 1; font-size: 19px; text-align: right; }
+  .wl-row .t1 > .num:nth-last-child(1) { grid-column: 3; grid-row: 2; font-size: 14.5px; text-align: right; min-width: 0 !important; }
+  .wl-row .t2 { margin-top: 8px; align-items: center; }
 }

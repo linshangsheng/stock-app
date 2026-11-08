@@ -2,6 +2,7 @@
 
 - 管理员（id=1，默认用户名 root / 密码 123456）可以建账号、暂停、重置密码、删除（连数据一起删）；其他账号只能改自己的密码、设自己的提醒邮箱。
 - 密码只存加盐哈希（scrypt），谁都看不到原文，管理员也一样；管理员重置的是「临时密码」，对方登录后必须马上改成自己的。
+- 管理员可以给每个普通账号设有效期（到某一天为止，含当天；不设 = 永久）：过了那天登录不了、已登录的立刻下线，数据保留，续期后恢复；管理员账号没有有效期。
 - 一个账号同一时间只有一处登录：新的登录会把旧的踢下线（旧的下一次请求收到「已在别处登录」）。
 - 登录有防猜密码：同一用户名 + 同一 IP 连续输错 5 次、或同一 IP 累计输错 30 次，锁 15 分钟。
 - 数据：data/accounts.db（账号、会话、登录记录）；管理员的个人库仍是 data/portfolio.db，其他账号在 data/users/<id>/portfolio.db（见 db.portfolio_path）。
@@ -18,7 +19,7 @@ import secrets
 import shutil
 import threading
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from . import db, settings
@@ -42,7 +43,7 @@ USER_WRITE = ("/api/watchlist", "/api/kline/list", "/api/account", "/api/positio
 
 MESSAGES = {
     "none": "请先登录", "expired": "登录已过期，请重新登录", "kicked": "这个账号已在另一台设备登录，你已被下线",
-    "paused": "账号已被暂停，请联系管理员", "reset": "密码已被管理员重置，请用新密码登录", "logout": "已退出登录", "deleted": "账号不存在",
+    "paused": "账号已被暂停，请联系管理员", "reset": "密码已被管理员重置，请用新密码登录", "logout": "已退出登录", "deleted": "账号不存在", "account_expired": "账号已到期，请联系管理员续期",
 }
 
 SCHEMA = """
@@ -50,7 +51,7 @@ CREATE TABLE IF NOT EXISTS users(
   id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL, ukey TEXT NOT NULL UNIQUE,
   pw_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'user', status TEXT NOT NULL DEFAULT 'active',
   must_change INTEGER NOT NULL DEFAULT 0, pw_default INTEGER NOT NULL DEFAULT 0,
-  notify_to TEXT NOT NULL DEFAULT '', created_at TEXT, last_login_at TEXT, last_login_ip TEXT
+  notify_to TEXT NOT NULL DEFAULT '', created_at TEXT, last_login_at TEXT, last_login_ip TEXT, expires_at TEXT
 );
 CREATE TABLE IF NOT EXISTS sessions(
   token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, created_at REAL, last_seen REAL, ip TEXT, ua TEXT, revoked TEXT
@@ -131,6 +132,9 @@ def _path() -> Path:
 def _conn():
     conn = db._connect(_path())
     conn.executescript(SCHEMA)
+    if "expires_at" not in {r[1] for r in conn.execute("PRAGMA table_info(users)")}:       # 旧版本建的账号库：补上「有效期」列
+        conn.execute("ALTER TABLE users ADD COLUMN expires_at TEXT")
+        conn.commit()
     if not conn.execute("SELECT 1 FROM users LIMIT 1").fetchone():        # 第一次：建管理员（id 固定为 1：它的个人库就是原来的 data/portfolio.db）
         now = datetime.now().isoformat(timespec="seconds")
         conn.execute("INSERT INTO users(id,username,ukey,pw_hash,role,status,must_change,pw_default,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
@@ -139,10 +143,20 @@ def _conn():
     return conn
 
 
+def _expiry(r) -> tuple[str | None, bool, int | None]:
+    """(有效期到哪天, 是否已过期, 还剩几天)。有效期含当天：到期日当天还能用，第二天起不能。管理员没有有效期。"""
+    exp = None if r["role"] == "admin" else r["expires_at"]
+    if not exp:
+        return None, False, None
+    left = (date.fromisoformat(exp) - date.today()).days
+    return exp, left < 0, left
+
+
 def _pub(r) -> dict:
+    exp, expired, left = _expiry(r)
     return {"id": r["id"], "username": r["username"], "role": r["role"], "status": r["status"], "must_change": bool(r["must_change"]),
             "default_password": bool(r["pw_default"]), "notify_to": r["notify_to"] or "", "created_at": r["created_at"],
-            "last_login_at": r["last_login_at"]}
+            "last_login_at": r["last_login_at"], "expires_at": exp, "expired": expired, "days_left": left}
 
 
 def auth_required() -> bool:
@@ -224,6 +238,10 @@ def login(username: str, password: str, ip: str, ua: str = "") -> dict:
                 _log(conn, uname, ip, False, "账号已暂停")
                 conn.commit()
                 raise AuthError(403, "paused", MESSAGES["paused"])
+            if _expiry(row)[1]:
+                _log(conn, uname, ip, False, "账号已到期")
+                conn.commit()
+                raise AuthError(403, "account_expired", MESSAGES["account_expired"])
             kicked = bool(conn.execute("SELECT 1 FROM sessions WHERE user_id=? AND revoked IS NULL AND last_seen>?", (row["id"], now - SESSION_DAYS * 86400)).fetchone())
             _revoke(conn, row["id"], "kicked")
             token = secrets.token_urlsafe(32)
@@ -263,6 +281,8 @@ def authenticate(token: str | None) -> tuple[dict | None, str]:
                 return None, "deleted"
             if u["status"] != "active":
                 return None, "paused"
+            if _expiry(u)[1]:
+                return None, "account_expired"
             if now - (s["last_seen"] or 0) > 120:
                 conn.execute("UPDATE sessions SET last_seen=? WHERE token_hash=?", (now, s["token_hash"]))
                 conn.commit()
@@ -344,7 +364,7 @@ def notify_users() -> list[dict]:
     """要单独发提醒邮件的账号：不是管理员、没被暂停、填了收件邮箱（管理员的提醒走「设置 → 邮件提醒」）。"""
     conn = _conn()
     try:
-        return [_pub(r) for r in conn.execute("SELECT * FROM users WHERE id<>? AND status='active' AND notify_to<>'' ORDER BY id", (settings.ADMIN_ID,))]
+        return [_pub(r) for r in conn.execute("SELECT * FROM users WHERE id<>? AND status='active' AND notify_to<>'' ORDER BY id", (settings.ADMIN_ID,)) if not _expiry(r)[1]]
     finally:
         conn.close()
 
@@ -372,16 +392,26 @@ def login_log(limit: int = 100) -> list[dict]:
         conn.close()
 
 
-def create_user(username: str, password: str, notify_to: str = "") -> dict:
+def _check_date(value) -> str | None:
+    if value in (None, ""):
+        return None
+    try:
+        return date.fromisoformat(str(value)).isoformat()
+    except ValueError:
+        raise AuthError(400, "bad_date", "有效期要写成 年-月-日，比如 2026-12-31")
+
+
+def create_user(username: str, password: str, notify_to: str = "", expires_at: str | None = None) -> dict:
     name = validate_username(username)
     validate_password(password)
+    exp = _check_date(expires_at)
     with _lock:
         conn = _conn()
         try:
             if conn.execute("SELECT 1 FROM users WHERE ukey=?", (name.lower(),)).fetchone():
                 raise AuthError(409, "exists", "已经有这个用户名了")
-            cur = conn.execute("INSERT INTO users(username,ukey,pw_hash,role,status,must_change,pw_default,notify_to,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                               (name, name.lower(), hash_password(password), "user", "active", 1, 0, "", datetime.now().isoformat(timespec="seconds")))
+            cur = conn.execute("INSERT INTO users(username,ukey,pw_hash,role,status,must_change,pw_default,notify_to,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                               (name, name.lower(), hash_password(password), "user", "active", 1, 0, "", datetime.now().isoformat(timespec="seconds"), exp))
             conn.commit()
             uid = cur.lastrowid
         finally:
@@ -412,6 +442,28 @@ def set_password(user_id: int, password: str) -> None:
             conn.commit()
         finally:
             conn.close()
+
+
+def set_expiry(user_id: int, expires_at: str | None = None, extend_days: int | None = None) -> dict:
+    """设有效期：expires_at = 具体日期（含当天；None / 空 = 永久）；extend_days = 在「今天和现在的到期日里较晚的那天」上再加 N 天（续期用；原来是永久的从今天算起）。"""
+    with _lock:
+        conn = _conn()
+        try:
+            r = _target(conn, user_id)
+            if extend_days is not None:
+                n = int(extend_days)
+                if not 1 <= n <= 3660:
+                    raise AuthError(400, "bad_days", "续期天数要在 1~3660 之间")
+                cur = r["expires_at"]
+                base = max(date.today(), date.fromisoformat(cur)) if cur else date.today()
+                new = (base + timedelta(days=n)).isoformat()
+            else:
+                new = _check_date(expires_at)
+            conn.execute("UPDATE users SET expires_at=? WHERE id=?", (new, r["id"]))
+            conn.commit()
+        finally:
+            conn.close()
+    return get_user(user_id)
 
 
 def set_status(user_id: int, status: str) -> None:

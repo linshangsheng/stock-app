@@ -137,12 +137,16 @@ export const screener = {
       const must = S.health?.summary?.levels?.must ?? 0, watch = S.health?.summary?.levels?.watch ?? 0;
       const fl = factorLine(S.fp), al = S.fp?.allocation;
       const swing0 = al && al.swing === 0;
-      const line = (icon, title, body, onclick) => h('div', { class: 'act-line' + (onclick ? ' link' : ''), onclick },
-        h('span', { class: 'act-ico' }, icon), h('div', {}, h('div', { class: 'act-t' }, title), h('div', { class: 'act-b' }, body)));
+      const line = (icon, title, body, onclick) => {
+        const [main, ...rest] = typeof body === 'string' ? body.split(' —— ') : [body];
+        return h('div', { class: 'act-line' + (onclick ? ' link' : ''), onclick },
+          h('span', { class: 'act-ico' }, icon), h('div', {}, h('div', { class: 'act-t' }, title),
+            h('div', { class: 'act-b' }, main, rest.length ? h('span', { class: 'act-s' }, h('span', { class: 'act-dash' }, ' —— '), rest.join(' —— ')) : null)));
+      };
       return h('div', { class: 'act-card' },
         h('div', { class: 'row between' }, h('b', {}, `明天（${day}）要做什么`), mv?.status === 'ok' ? h('span', { class: 'zone-pill z' + mv.thermometer.zone }, `温度 ${mv.thermometer.zone_name} ${fmtPct(mv.thermometer.b20, 0, false)}`) : null),
         mv?.portfolio?.health?.status === '警告' ? h('div', { class: 'alert bad small mt-s' }, '⚠ ETF 规则：', mv.portfolio.health.text) : null,
-        line('📊', '宽基 ETF', etfActs == null ? '市场温度计算中…' : etfActs.length ? etfActs.join('；') + '（开盘按市价成交，高开低开都一样）' : '5 个指数都没有买卖信号，不操作',
+        line('📊', '宽基 ETF', etfActs == null ? '市场温度计算中…' : etfActs.length ? etfActs.join('；') + ' —— 开盘按市价成交，高开低开都一样' : '5 个指数都没有买卖信号，不操作',
           () => { location.hash = '#/market'; }),
         valsActs.length ? line('🏷️', '指数估值：分批建仓', valsActs.join('；') + ' —— 每批之间隔两周以上，不要一次买完；详情在右侧「市场概览」', () => { location.hash = '#/market'; }) : null,
         state.market === 'CN' ? line('🧺', '低风险组合' + (al?.sleeve ? `（${fmtMoney(al.sleeve)}，${S.fp.params.n} 只）` : ''), fl.body, () => { S.tab = 'factor'; render(); if (!ctx.currentSymbol) showRight(); }) : null,

@@ -351,3 +351,82 @@ def test_backup_and_restore_include_the_account_db_and_every_accounts_portfolio(
     assert out[f"users_{uid}_portfolio.db"]["watchlist"] == 1 and upath.exists() and "accounts.db" in out
     assert any(i["key"] in ("accounts", "users") for i in backup.storage_report()["items"])
     assert json.loads(json.dumps(accounts.list_users()))                                      # 账号库恢复后仍能读
+
+
+# ---------------------------------------------------------------- 有效期
+def _uid(admin, name="alice"):
+    return [u["id"] for u in admin.get("/api/accounts").json()["users"] if u["username"] == name][0]
+
+
+def _day(offset):
+    from datetime import date, timedelta
+    return (date.today() + timedelta(days=offset)).isoformat()
+
+
+def test_new_accounts_are_permanent_and_the_admin_never_expires(main, admin):
+    new_user(admin)
+    users = {u["username"]: u for u in admin.get("/api/accounts").json()["users"]}
+    assert users["alice"]["expires_at"] is None and users["alice"]["expired"] is False and users["alice"]["days_left"] is None
+    assert admin.put("/api/accounts/1", json={"expires_at": _day(-1)}).status_code == 400              # 管理员不能设有效期
+    assert admin.get("/api/auth/me").json()["user"]["expires_at"] is None
+
+
+def test_expiry_is_inclusive_and_an_expired_account_cannot_log_in_but_keeps_its_data(main, admin):
+    sym = admin.get("/api/search", params={"q": "演示股票00"}).json()["items"][0]["symbol"]
+    alice = new_user(admin)
+    alice.put("/api/watchlist", json={"add": [{"symbol": sym}]})
+    uid = _uid(admin)
+    today = admin.put(f"/api/accounts/{uid}", json={"expires_at": _day(0)}).json()["user"]
+    assert today["expires_at"] == _day(0) and today["expired"] is False and today["days_left"] == 0         # 含当天：今天还能用
+    assert alice.get("/api/watchlist").status_code == 200
+    gone = admin.put(f"/api/accounts/{uid}", json={"expires_at": _day(-1)}).json()["user"]
+    assert gone["expired"] is True and gone["days_left"] == -1
+    r = alice.get("/api/watchlist")
+    assert r.status_code == 401 and r.json()["code"] == "account_expired" and "到期" in r.json()["detail"]      # 已登录的立刻下线
+    p = login(device(main), "alice", "alice-pass")
+    assert p.status_code == 403 and p.json()["code"] == "account_expired"
+    assert login(device(main), "alice", "wrong").json()["code"] == "bad_login"                          # 密码不对时不透露账号到期
+    assert (settings.data_dir() / "users" / str(uid) / "portfolio.db").exists()                          # 数据还在
+    assert any(x["username"] == "alice" and x["ok"] == 0 and "到期" in x["note"] for x in admin.get("/api/accounts").json()["log"])
+    assert accounts.notify_users() == [] or all(u["username"] != "alice" for u in accounts.notify_users())
+    again = device(main)
+    admin.put(f"/api/accounts/{uid}", json={"expires_at": _day(30)})                                      # 续期后恢复
+    assert login(again, "alice", "alice-pass").status_code == 200 and len(again.get("/api/watchlist").json()["items"]) == 1
+
+
+def test_extend_counts_from_today_or_from_the_current_end_date_whichever_is_later(main, admin):
+    new_user(admin)
+    uid = _uid(admin)
+    ext = lambda n: admin.put(f"/api/accounts/{uid}", json={"extend_days": n}).json()["user"]["expires_at"]   # noqa: E731
+    assert ext(30) == _day(30)                                                                            # 原来是永久：从今天算
+    assert ext(30) == _day(60)                                                                            # 还没到期：在到期日上再加
+    admin.put(f"/api/accounts/{uid}", json={"expires_at": _day(-10)})
+    assert ext(7) == _day(7)                                                                              # 已经过期：从今天算
+    assert admin.put(f"/api/accounts/{uid}", json={"extend_days": 0}).status_code == 400
+    assert admin.put(f"/api/accounts/{uid}", json={"extend_days": 99999}).status_code == 400
+    assert admin.put(f"/api/accounts/{uid}", json={"expires_at": None}).json()["user"]["expires_at"] is None   # 改成永久
+    assert admin.put(f"/api/accounts/{uid}", json={"expires_at": "明天"}).status_code == 400
+    assert admin.put(f"/api/accounts/{uid}", json={"expires_at": "2026-13-45"}).status_code == 400
+
+
+def test_create_with_an_expiry_and_ordinary_users_cannot_change_it(main, admin):
+    assert admin.post("/api/accounts", json={"username": "bob", "password": "abcdef", "expires_at": _day(90)}).json()["user"]["expires_at"] == _day(90)
+    assert admin.post("/api/accounts", json={"username": "carol", "password": "abcdef", "expires_at": "bad"}).status_code == 400
+    bob = TestClient(admin.app, client=REMOTE)
+    assert login(bob, "bob", "abcdef").json()["user"]["days_left"] in (89, 90)
+    assert bob.post("/api/auth/password", json={"old": "abcdef", "new": "bob-pass"}).status_code == 200
+    me = bob.get("/api/auth/me").json()["user"]
+    assert me["expires_at"] == _day(90) and me["expired"] is False
+    assert bob.put(f"/api/accounts/{me['id']}", json={"expires_at": None}).status_code == 403              # 自己不能给自己续期
+
+
+def test_an_old_accounts_db_without_the_expiry_column_is_upgraded(main, admin):
+    new_user(admin)
+    con = sqlite3.connect(accounts._path())
+    con.execute("ALTER TABLE users DROP COLUMN expires_at")                                              # 模拟旧版本建的库
+    con.commit()
+    con.close()
+    users = accounts.list_users()
+    assert {u["username"] for u in users} == {"root", "alice"} and all(u["expires_at"] is None for u in users)
+    uid = [u["id"] for u in users if u["username"] == "alice"][0]
+    assert accounts.set_expiry(uid, expires_at=_day(5))["expires_at"] == _day(5)

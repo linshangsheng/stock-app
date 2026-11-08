@@ -1,6 +1,6 @@
 // 设置 → 「我的账号」（所有账号）和「账号管理」（只有管理员）。
 //   · 我的账号：改密码、（普通账号）提醒收件邮箱、涨跌配色 / 主题（存在这台设备上）、退出登录。
-//   · 账号管理：新建、重置密码（设临时密码，对方登录后必须改成自己的）、暂停 / 恢复、改名、删除（连数据一起删）、登录记录。
+//   · 账号管理：新建、重置密码（设临时密码，对方登录后必须改成自己的）、暂停 / 恢复、改名、设有效期（到期自动登录不了、数据保留，续期后恢复）、删除（连数据一起删）、登录记录。
 //   管理员看不到任何人的密码：库里只存哈希；管理员能做的只有「设一个新的临时密码」。
 import { get, post, put, del, state } from './api.js';
 import { h, clear, toast, modal, confirmBox, mountIcons } from './util.js';
@@ -12,6 +12,10 @@ const seg = (items, cur, on) => { const w = h('div', { class: 'seg' }); items.fo
 const fmtTime = t => (t ? t.replace('T', ' ').slice(0, 16) : '—');
 const pwInput = (ph, ac = 'new-password') => h('input', { type: 'password', placeholder: ph, autocomplete: ac, style: 'width:100%' });
 const field = (label, input) => h('label', { class: 'f', style: 'display:block;margin-top:10px' }, h('span', { class: 'small muted' }, label), input);
+const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const inDays = n => { const d = new Date(); d.setDate(d.getDate() + n); return ymd(d); };
+/** 有效期的文字：永久 / 2026-12-31（还剩 12 天）/ 已到期。 */
+const expText = u => (u.role === 'admin' || !u.expires_at ? '永久' : u.expired ? `${u.expires_at} 已到期` : `${u.expires_at}（${u.days_left > 0 ? '还剩 ' + u.days_left + ' 天' : '今天是最后一天'}）`);
 const randomPw = () => { const c = 'abcdefghjkmnpqrstuvwxyz23456789'; return Array.from(crypto.getRandomValues(new Uint8Array(8)), x => c[x % c.length]).join(''); };
 
 /** 改自己的密码（要输入旧密码）。 */
@@ -37,7 +41,8 @@ export function accountPanel(ctx) {
   const mail = h('input', { type: 'text', placeholder: 'you@qq.com（多个用逗号分隔）', style: 'width:min(320px,100%)' });
   const mailNote = h('div', { class: 'hint mt-s' });
   card.append(h('div', { class: 'card-title' }, h('h2', {}, '我的账号'), h('span', { class: 'badge ' + (admin ? 'ok' : '') }, admin ? '管理员' : '普通账号')),
-    h('div', { class: 'grid c4' }, kv('用户名', u.username || '—'), kv('身份', admin ? '管理员' : '普通账号'), kv('最近登录', fmtTime(u.last_login_at))),
+    h('div', { class: 'grid c4' }, kv('用户名', u.username || '—'), kv('身份', admin ? '管理员' : '普通账号'), kv('有效期', expText(u)), kv('最近登录', fmtTime(u.last_login_at))),
+    !admin && u.expires_at && !u.expired && u.days_left <= 7 ? h('div', { class: 'alert warn mt' }, `账号还有 ${u.days_left > 0 ? u.days_left + ' 天' : '不到 1 天'}到期。到期后登录不了（数据会保留），请联系管理员续期。`) : null,
     h('p', { class: 'hint mt-s' }, admin ? '管理员可以管理所有账号和全部设置。' : '自选股、持仓和账户是你自己的，别人看不到；数据更新、交易参数等其他设置由管理员统一管理。'),
     u.default_password && state.auth ? h('div', { class: 'alert warn mt' }, '你还在用默认密码（root / 123456），请马上改掉。') : null,
     h('div', { class: 'row wrap mt' }, h('button', { class: 'btn primary', onclick: changePasswordDialog }, '修改密码'),
@@ -68,11 +73,17 @@ export function usersPanel() {
   function createDlg() {
     const name = h('input', { type: 'text', placeholder: '2~32 个字符：中文、字母、数字、_ -', autocomplete: 'off', style: 'width:100%' });
     const pw = h('input', { type: 'text', value: randomPw(), autocomplete: 'off', style: 'width:100%' });
+    const exp = h('select', { style: 'width:100%', onchange: () => { day.hidden = exp.value !== 'custom'; } },
+      [['', '永久（不设有效期）'], ['30', '30 天'], ['90', '90 天'], ['365', '1 年'], ['custom', '指定到哪一天…']].map(([v, l]) => h('option', { value: v }, l)));
+    const day = h('input', { type: 'date', min: ymd(new Date()), hidden: true, style: 'width:100%;margin-top:6px' });
     modal('新建账号', h('div', {}, field('用户名', name), field('初始密码（临时，至少 6 位）', pw),
       h('div', { class: 'row mt-s' }, h('button', { class: 'btn sm', type: 'button', onclick: () => { pw.value = randomPw(); } }, '换一个随机的')),
+      field('有效期（到这一天为止，含当天；到期后登录不了，数据保留，可以续期）', h('div', {}, exp, day)),
       h('p', { class: 'hint mt-s' }, '把用户名和这个初始密码告诉对方。对方第一次登录必须改成自己的密码，改完以后你也不知道。新账号是普通账号：有自己的自选、持仓和账户，设置由你统一管理。')),
     [{ label: '取消' }, { label: '创建', primary: true, onclick: async () => {
-      try { await post('/accounts', { username: name.value.trim(), password: pw.value }, { market: false }); } catch (e) { toast(e.message, 'bad'); return false; }
+      const expires_at = exp.value === 'custom' ? (day.value || null) : exp.value ? inDays(+exp.value) : null;
+      if (exp.value === 'custom' && !day.value) { toast('请选一个日期', 'bad'); return false; }
+      try { await post('/accounts', { username: name.value.trim(), password: pw.value, expires_at }, { market: false }); } catch (e) { toast(e.message, 'bad'); return false; }
       toast(`已创建账号 ${name.value.trim()}`, 'ok'); load();
     } }]);
   }
@@ -82,6 +93,23 @@ export function usersPanel() {
     modal(`重置「${u.username}」的密码`, h('div', {}, field('新的临时密码（至少 6 位）', pw),
       h('p', { class: 'hint mt-s' }, '设好后对方会被立刻挤下线，要用这个临时密码登录，并且登录后必须改成自己的。旧密码作废。')),
     [{ label: '取消' }, { label: '重置', primary: true, onclick: () => act(() => put(`/accounts/${u.id}/password`, { password: pw.value }, { market: false }), `已重置，把临时密码告诉 ${u.username}`).then(r => r !== false) }]);
+  }
+
+  function expiryDlg(u) {
+    const day = h('input', { type: 'date', value: u.expires_at || '', style: 'width:100%' });
+    let m;
+    const go = (patch, ok) => act(() => put(`/accounts/${u.id}`, patch, { market: false }), ok).then(r => { if (r !== false) m.close(); });
+    const quick = (label, patch, ok) => h('button', { class: 'btn sm', type: 'button', onclick: () => go(patch, ok) }, label);
+    m = modal(`「${u.username}」的有效期`, h('div', {},
+      h('p', { class: 'small' }, '现在：', h('b', {}, expText(u))),
+      h('div', { class: 'row wrap mt-s', style: 'gap:8px' }, quick('续 30 天', { extend_days: 30 }, '已续 30 天'), quick('续 90 天', { extend_days: 90 }, '已续 90 天'), quick('续 1 年', { extend_days: 365 }, '已续 1 年'), quick('改成永久', { expires_at: null }, '已改成永久')),
+      h('p', { class: 'hint mt-s' }, '「续」是在今天和现在的到期日里较晚的那天上再加（已经过期的从今天算起；原来是永久的从今天算起）。'),
+      field('或者直接指定到哪一天为止（含当天）', day),
+      h('p', { class: 'hint mt-s' }, '到期后：对方立刻被挤下线、登录不了，自选 / 持仓等数据保留，续期后恢复。管理员账号没有有效期。')),
+    [{ label: '关闭' }, { label: '保存这个日期', primary: true, onclick: async () => {
+      if (!day.value) { toast('请选一个日期，或者点「改成永久」', 'bad'); return false; }
+      return act(() => put(`/accounts/${u.id}`, { expires_at: day.value }, { market: false }), `有效期改到 ${day.value}`).then(r => r !== false);
+    } }]);
   }
 
   function renameDlg(u) {
@@ -107,15 +135,17 @@ export function usersPanel() {
     clear(card);
     card.append(h('div', { class: 'card-title' }, h('h2', {}, '账号管理'), h('button', { class: 'btn primary', onclick: createDlg }, '+ 新建账号')),
       h('p', { class: 'small muted' }, `共 ${r.users.length} 个账号。你是管理员（最高权限，数据在原来的个人库里）；其他账号是普通账号，只能改自己的密码，看不到别人的数据。管理员也看不到任何人的密码。`),
-      h('div', { class: 'tbl-wrap mt-s' }, h('table', { class: 'mini' }, h('thead', {}, h('tr', {}, ['用户名', '状态', '最近登录', '创建时间', '操作'].map(t => h('th', {}, t)))),
+      h('div', { class: 'tbl-wrap mt-s' }, h('table', { class: 'mini' }, h('thead', {}, h('tr', {}, ['用户名', '状态', '有效期', '最近登录', '创建时间', '操作'].map(t => h('th', {}, t)))),
         h('tbody', {}, r.users.map(u => h('tr', {},
           h('td', {}, h('b', {}, u.username), u.role === 'admin' ? h('span', { class: 'badge ok', style: 'margin-left:6px' }, '管理员') : null, u.online ? h('span', { class: 'badge accent', style: 'margin-left:6px' }, '在线') : null),
-          h('td', {}, u.status === 'paused' ? h('span', { class: 'badge warn' }, '已暂停') : u.must_change ? h('span', { class: 'badge' }, '待改密码') : h('span', { class: 'badge ok' }, '正常')),
+          h('td', {}, u.status === 'paused' ? h('span', { class: 'badge warn' }, '已暂停') : u.expired ? h('span', { class: 'badge warn' }, '已到期') : u.must_change ? h('span', { class: 'badge' }, '待改密码') : h('span', { class: 'badge ok' }, '正常')),
+          h('td', { class: 'small num' + (u.expired ? '' : u.days_left != null && u.days_left <= 7 ? '' : ' muted'), style: u.expired || (u.days_left != null && u.days_left <= 7) ? 'color:var(--warn)' : '' }, expText(u)),
           h('td', { class: 'small muted num' }, fmtTime(u.last_login_at), u.last_login_ip ? h('div', { class: 'tiny faint' }, u.last_login_ip) : null),
           h('td', { class: 'small muted num' }, fmtTime(u.created_at)),
           h('td', {}, h('div', { class: 'row wrap', style: 'gap:6px' },
             h('button', { class: 'btn sm', onclick: () => renameDlg(u) }, '改名'),
             u.role === 'admin' ? null : [
+              h('button', { class: 'btn sm', onclick: () => expiryDlg(u) }, '有效期'),
               h('button', { class: 'btn sm', onclick: () => resetDlg(u) }, '重置密码'),
               u.status === 'paused'
                 ? h('button', { class: 'btn sm primary', onclick: () => act(() => put(`/accounts/${u.id}`, { status: 'active' }, { market: false }), `已恢复 ${u.username}`) }, '恢复')

@@ -220,16 +220,20 @@ def accounts_list():
 
 @app.post("/api/accounts")
 def accounts_create(body: dict = Body(...)):
-    return {"user": accounts.create_user(body.get("username"), body.get("password"), body.get("notify_to") or "")}
+    return {"user": accounts.create_user(body.get("username"), body.get("password"), body.get("notify_to") or "", body.get("expires_at"))}
 
 
 @app.put("/api/accounts/{uid}")
 def accounts_update(uid: int, body: dict = Body(...)):
-    """改用户名（含管理员自己）或 暂停 / 恢复。"""
+    """改用户名（含管理员自己）、暂停 / 恢复、设有效期（expires_at = 日期或 null 永久；extend_days = 续期天数）。"""
     if "username" in body:
         accounts.rename_user(uid, body["username"])
     if "status" in body:
         accounts.set_status(uid, body["status"])
+    if "extend_days" in body:
+        accounts.set_expiry(uid, extend_days=body["extend_days"])
+    elif "expires_at" in body:
+        accounts.set_expiry(uid, expires_at=body["expires_at"])
     return {"user": accounts.get_user(uid)}
 
 
