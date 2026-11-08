@@ -39,7 +39,8 @@ _lock = threading.RLock()
 PUBLIC_API = ("/api/ping", "/api/auth/login", "/api/auth/logout")
 MUST_CHANGE_OK = ("/api/auth/me", "/api/auth/password", "/api/auth/logout", "/api/ping")
 ADMIN_ONLY = ("/api/accounts", "/api/settings", "/api/notify", "/api/upgrade", "/api/datasources", "/api/data/health", "/api/storage", "/api/backups", "/api/restart")
-USER_WRITE = ("/api/watchlist", "/api/kline/list", "/api/account", "/api/positions", "/api/trades", "/api/alerts", "/api/auth", "/api/me")
+USER_WRITE = ("/api/watchlist", "/api/kline/list", "/api/account", "/api/positions", "/api/trades", "/api/alerts", "/api/auth", "/api/me",
+              "/api/analysis")         # 最后这条是只读的「筛选」查询（用 POST 只是因为条件多），不改任何数据
 
 MESSAGES = {
     "none": "请先登录", "expired": "登录已过期，请重新登录", "kicked": "这个账号已在另一台设备登录，你已被下线",
@@ -129,16 +130,22 @@ def _path() -> Path:
     return settings.data_dir() / "accounts.db"
 
 
+SCHEMA_VERSION = 2
+
+
 def _conn():
+    """打开账号库。建表 / 迁移 / 建管理员只在库里的 user_version 低于 SCHEMA_VERSION 时做一次（旧版本建的库 user_version 是 0，会被补齐；
+    账号库被删掉重建也是 0，会重新建）。这里每个 API 请求都会走一遍，所以平时只读一个数字。"""
     conn = db._connect(_path())
-    conn.executescript(SCHEMA)
-    if "expires_at" not in {r[1] for r in conn.execute("PRAGMA table_info(users)")}:       # 旧版本建的账号库：补上「有效期」列
-        conn.execute("ALTER TABLE users ADD COLUMN expires_at TEXT")
-        conn.commit()
-    if not conn.execute("SELECT 1 FROM users LIMIT 1").fetchone():        # 第一次：建管理员（id 固定为 1：它的个人库就是原来的 data/portfolio.db）
-        now = datetime.now().isoformat(timespec="seconds")
-        conn.execute("INSERT INTO users(id,username,ukey,pw_hash,role,status,must_change,pw_default,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                     (settings.ADMIN_ID, DEFAULT_ADMIN[0], DEFAULT_ADMIN[0], hash_password(DEFAULT_ADMIN[1]), "admin", "active", 0, 1, now))
+    if conn.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:
+        conn.executescript(SCHEMA)
+        if "expires_at" not in {r[1] for r in conn.execute("PRAGMA table_info(users)")}:       # 旧版本建的账号库：补上「有效期」列
+            conn.execute("ALTER TABLE users ADD COLUMN expires_at TEXT")
+        if not conn.execute("SELECT 1 FROM users LIMIT 1").fetchone():        # 第一次：建管理员（id 固定为 1：它的个人库就是原来的 data/portfolio.db）
+            now = datetime.now().isoformat(timespec="seconds")
+            conn.execute("INSERT INTO users(id,username,ukey,pw_hash,role,status,must_change,pw_default,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                         (settings.ADMIN_ID, DEFAULT_ADMIN[0], DEFAULT_ADMIN[0], hash_password(DEFAULT_ADMIN[1]), "admin", "active", 0, 1, now))
+        conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         conn.commit()
     return conn
 
@@ -209,25 +216,37 @@ def _lock_left(conn, key: str, limit: int, now: float) -> int:
 # ---- 登录 / 会话 --------------------------------------------------------------
 
 def login(username: str, password: str, ip: str, ua: str = "") -> dict:
-    """成功返回 {token, user, kicked}；失败抛 AuthError。"""
+    """成功返回 {token, user, kicked}；失败抛 AuthError。
+    分三段：① 锁内：查有没有被锁定、取出这个用户；② 锁外：算密码哈希（scrypt 要几十毫秒，而每个 API 请求的 authenticate 也要这把锁，
+    放在锁里的话，一个刷登录的脚本就能让所有人的请求排队）；③ 锁内：记失败 / 建会话。两段之间密码被改了就按「密码错」处理。"""
     uname = (username or "").strip() if isinstance(username, str) else ""
     password = password if isinstance(password, str) else ""
     ukey = uname.lower()
     now = time.time()
+    ku, ki = f"u:{ukey}|{ip}", f"ip:{ip}"
     with _lock:
         conn = _conn()
         try:
             conn.execute("DELETE FROM login_fail WHERE ts<?", (now - 86400,))
-            ku, ki = f"u:{ukey}|{ip}", f"ip:{ip}"
             left = max(_lock_left(conn, ku, MAX_FAILS, now), _lock_left(conn, ki, IP_MAX_FAILS, now))
             if left:
                 _log(conn, uname, ip, False, "被锁定")
                 conn.commit()
                 raise AuthError(429, "locked", f"输错次数太多，请 {max(1, (left + 59) // 60)} 分钟后再试")
+            conn.commit()
             row = conn.execute("SELECT * FROM users WHERE ukey=?", (ukey,)).fetchone() if ukey else None
-            ok = bool(row) and verify_password(password, row["pw_hash"])
-            if not row:
-                _dummy_verify(password)
+            stored = row["pw_hash"] if row else None
+        finally:
+            conn.close()
+    ok = bool(row) and verify_password(password, stored)                      # 不在锁里
+    if not row:
+        _dummy_verify(password)
+    with _lock:
+        conn = _conn()
+        try:
+            if row:
+                row = conn.execute("SELECT * FROM users WHERE id=?", (row["id"],)).fetchone()
+                ok = ok and bool(row) and row["pw_hash"] == stored            # 这几十毫秒里密码被改了 / 账号被删了：不放行
             if not ok:
                 conn.execute("INSERT INTO login_fail(k,ts) VALUES(?,?)", (ku, now))
                 conn.execute("INSERT INTO login_fail(k,ts) VALUES(?,?)", (ki, now))
@@ -283,10 +302,12 @@ def authenticate(token: str | None) -> tuple[dict | None, str]:
                 return None, "paused"
             if _expiry(u)[1]:
                 return None, "account_expired"
+            pub = _pub(u)
             if now - (s["last_seen"] or 0) > 120:
                 conn.execute("UPDATE sessions SET last_seen=? WHERE token_hash=?", (now, s["token_hash"]))
                 conn.commit()
-            return _pub(u), "ok"
+                pub["_touched"] = True                                   # 中间件据此重发 Cookie：浏览器里的 30 天从「最近一次用」算起，而不是从登录那天算起
+            return pub, "ok"
         finally:
             conn.close()
 
@@ -421,12 +442,12 @@ def create_user(username: str, password: str, notify_to: str = "", expires_at: s
     return get_user(uid)
 
 
-def _target(conn, user_id: int, allow_admin: bool = False):
+def _target(conn, user_id: int, allow_admin: bool = False, what: str = "暂停或删除"):
     r = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
     if not r:
         raise AuthError(404, "no_user", "没有这个账号")
     if r["role"] == "admin" and not allow_admin:
-        raise AuthError(400, "is_admin", "管理员账号不能暂停或删除")
+        raise AuthError(400, "is_admin", f"管理员账号不能{what}")
     return r
 
 
@@ -436,7 +457,7 @@ def set_password(user_id: int, password: str) -> None:
     with _lock:
         conn = _conn()
         try:
-            r = _target(conn, user_id)
+            r = _target(conn, user_id, what="用这里重置密码（自己的密码用「修改密码」）")
             conn.execute("UPDATE users SET pw_hash=?, must_change=1, pw_default=0 WHERE id=?", (hash_password(password), r["id"]))
             _revoke(conn, r["id"], "reset")
             conn.commit()
@@ -449,7 +470,7 @@ def set_expiry(user_id: int, expires_at: str | None = None, extend_days: int | N
     with _lock:
         conn = _conn()
         try:
-            r = _target(conn, user_id)
+            r = _target(conn, user_id, what="设置有效期（管理员没有有效期）")
             if extend_days is not None:
                 n = int(extend_days)
                 if not 1 <= n <= 3660:

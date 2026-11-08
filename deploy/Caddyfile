@@ -1,0 +1,8 @@
+# Caddy：自动申请并续期 HTTPS 证书，把请求转给只监听本机的软件（127.0.0.1:8000）。
+# 把 你的域名 换成真实域名（域名要先解析到这台服务器的公网 IP；香港机房不需要备案）。
+# 放到 /etc/caddy/Caddyfile，然后 sudo systemctl reload caddy。
+你的域名 {
+	encode gzip
+	reverse_proxy 127.0.0.1:8000
+	# Caddy 会自动带上 X-Forwarded-For / X-Forwarded-Proto，软件靠它们认出「这是从公网来的请求」（默认密码必须先改、登录防猜密码按真实 IP 算、Cookie 加 Secure）。
+}

@@ -113,6 +113,11 @@ def _wrap(market: str, **kw):
 
 # ---- 账号与登录（server/accounts.py）---------------------------------------------
 
+def _set_session_cookie(resp, token: str, request: Request) -> None:
+    https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+    resp.set_cookie(accounts.COOKIE, token, max_age=accounts.SESSION_DAYS * 86400, httponly=True, samesite="lax", secure=https, path="/")
+
+
 def _auth_fail(status: int, code: str) -> JSONResponse:
     return JSONResponse({"detail": accounts.MESSAGES.get(code, "请先登录"), "code": code}, status_code=status)
 
@@ -126,11 +131,12 @@ async def _auth_error(request: Request, exc: accounts.AuthError):
 async def auth(request: Request, call_next):
     settings.set_market((request.query_params.get("market") or "CN").upper() if (request.query_params.get("market") or "CN").upper() in ("CN", "US") else "CN")
     p = request.url.path
-    utok = None
+    utok, touched, session_token = None, False, request.cookies.get(accounts.COOKIE)
     if p.startswith("/api/") and accounts.auth_required() and p not in accounts.PUBLIC_API:
-        user, why = accounts.authenticate(request.cookies.get(accounts.COOKIE))
+        user, why = accounts.authenticate(session_token)
         if not user:
             return _auth_fail(401, why)
+        touched = bool(user.pop("_touched", False))
         if accounts.needs_change(user, request) and p not in accounts.MUST_CHANGE_OK:
             return JSONResponse({"detail": "请先修改密码", "code": "must_change"}, status_code=403)
         err = accounts.access_error(user, request.method, p)
@@ -143,6 +149,8 @@ async def auth(request: Request, call_next):
     finally:
         if utok is not None:
             settings.reset_user(utok)
+    if touched and session_token:
+        _set_session_cookie(resp, session_token, request)               # 会话在服务端是「30 天没用才过期」，浏览器里的 Cookie 也跟着往后推
     p = request.url.path
     if p in ("/sw.js", "/", "/index.html", "/manifest.json") or p.startswith(("/js/", "/css/")):
         resp.headers["Cache-Control"] = "no-cache"          # 每次向本机后端校验（ETag），更新代码后不会用到过期的前端文件
@@ -165,9 +173,8 @@ def auth_login(request: Request, body: dict = Body(...)):
     if not accounts.auth_required():
         return {"ok": True, "auth": False}
     r = accounts.login(body.get("username"), body.get("password"), accounts.client_ip(request), request.headers.get("user-agent", ""))
-    https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
     resp = JSONResponse({"ok": True, "user": r["user"], "kicked": r["kicked"], "must_change": accounts.needs_change(r["user"], request)})
-    resp.set_cookie(accounts.COOKIE, r["token"], max_age=accounts.SESSION_DAYS * 86400, httponly=True, samesite="lax", secure=https, path="/")
+    _set_session_cookie(resp, r["token"], request)
     return resp
 
 
@@ -250,10 +257,12 @@ def accounts_delete(uid: int):
 
 
 @app.get("/api/ping")
-def ping():
-    return {"ok": True, "version": app.version, "build": BUILD_ID, "disk_build": _build_id(), "pid": os.getpid(), "started": STARTED_AT,
-            "auth_required": accounts.auth_required(),
-            "datasource": settings.cfg()["datasource"], "demo": {"CN": markets.is_demo("CN"), "US": markets.is_demo("US")}}
+def ping(request: Request):
+    """探活。没登录的人只给「在不在、什么版本、要不要登录」；数据源配置、进程号、启动时间等登录后才给。"""
+    pub = {"ok": True, "version": app.version, "build": BUILD_ID, "disk_build": _build_id(), "auth_required": accounts.auth_required()}
+    if accounts.auth_required() and accounts.authenticate(request.cookies.get(accounts.COOKIE))[0] is None:
+        return pub
+    return {**pub, "pid": os.getpid(), "started": STARTED_AT, "datasource": settings.cfg()["datasource"], "demo": {"CN": markets.is_demo("CN"), "US": markets.is_demo("US")}}
 
 
 @app.post("/api/restart")

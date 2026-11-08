@@ -88,6 +88,7 @@ export async function ensureLogin(message = '') {
     if (me.data.must_change) { await forcePasswordScreen(!!me.data.default_password); return ensureLogin(); }
     return state.user;
   }
+  if (me.status !== 401) return null;           // 502 / 503 / 404 …：后端还没起来（重启中、反向代理连不上）——不是「没登录」，别让人白输一遍密码；交给 api.js 的离线提示，后端好了刷新即可
   await loginScreen(message || (me.data.code && me.data.code !== 'none' ? me.data.detail : ''));
   return ensureLogin();
 }

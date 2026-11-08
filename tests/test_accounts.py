@@ -423,10 +423,105 @@ def test_create_with_an_expiry_and_ordinary_users_cannot_change_it(main, admin):
 def test_an_old_accounts_db_without_the_expiry_column_is_upgraded(main, admin):
     new_user(admin)
     con = sqlite3.connect(accounts._path())
-    con.execute("ALTER TABLE users DROP COLUMN expires_at")                                              # 模拟旧版本建的库
+    con.execute("ALTER TABLE users DROP COLUMN expires_at")                                              # 模拟旧版本建的库（没有有效期这一列，也没有 user_version）
+    con.execute("PRAGMA user_version=0")
     con.commit()
     con.close()
     users = accounts.list_users()
     assert {u["username"] for u in users} == {"root", "alice"} and all(u["expires_at"] is None for u in users)
     uid = [u["id"] for u in users if u["username"] == "alice"][0]
     assert accounts.set_expiry(uid, expires_at=_day(5))["expires_at"] == _day(5)
+
+
+# ---------------------------------------------------------------- 上线前复查补的测试
+def test_analysis_screener_post_is_allowed_for_ordinary_accounts(main, admin):
+    """「筛选」标签用 POST /api/analysis 做只读查询：普通账号也要能用（以前被当成「写接口」拒了）。"""
+    alice = new_user(admin)
+    r = alice.post("/api/analysis", json={"conditions": {"min_rps20": 70}})
+    assert r.status_code == 200 and "total" in r.json()
+
+
+def test_a_slow_login_hash_does_not_block_other_requests(main, admin, monkeypatch):
+    """登录里算密码哈希（几十毫秒）不能占着全局锁：否则刷登录的脚本能让所有人的每个请求排队。"""
+    import threading
+    import time
+    real = accounts.verify_password
+    started = threading.Event()
+
+    def slow(pw, stored):
+        started.set()
+        time.sleep(1.2)
+        return real(pw, stored)
+    monkeypatch.setattr(accounts, "verify_password", slow)
+    t = threading.Thread(target=lambda: login(device(main, ("9.9.9.9", 1)), "root", "wrong"))
+    t.start()
+    assert started.wait(5)
+    t0 = time.time()
+    assert admin.get("/api/auth/me").status_code == 200                      # 已登录的人的请求不用等那个 1.2 秒
+    assert time.time() - t0 < 0.8
+    t.join()
+
+
+def test_password_changed_during_the_hash_does_not_let_the_old_password_in(main, admin, monkeypatch):
+    new_user(admin)
+    uid = _uid(admin)
+    real = accounts.verify_password
+
+    def racing(pw, stored):
+        ok = real(pw, stored)
+        accounts.set_password(uid, "reset-123")                              # 校验通过的这一刻，管理员把密码重置了
+        return ok
+    monkeypatch.setattr(accounts, "verify_password", racing)
+    r = login(device(main), "alice", "alice-pass")
+    assert r.status_code == 401 and r.json()["code"] == "bad_login"
+
+
+def test_session_cookie_is_reissued_while_the_user_keeps_using_the_app(main):
+    """服务端的会话是「30 天没用才过期」，浏览器里的 Cookie 也要跟着往后推，不能从登录那天起固定 30 天。"""
+    c = device(main, LOCAL)
+    assert login(c).status_code == 200
+    assert "set-cookie" not in c.get("/api/auth/me").headers                  # 刚登录：不用重发
+    con = sqlite3.connect(accounts._path())
+    con.execute("UPDATE sessions SET last_seen = last_seen - 300")           # 5 分钟没动
+    con.commit()
+    con.close()
+    r = c.get("/api/auth/me")
+    assert r.status_code == 200 and "sa_session=" in r.headers["set-cookie"] and "httponly" in r.headers["set-cookie"].lower()
+    assert "set-cookie" not in c.get("/api/auth/me").headers                  # 刚刷新过，下一次又不用
+
+
+def test_ping_gives_strangers_only_the_minimum(main, admin):
+    stranger = device(main).get("/api/ping").json()
+    assert stranger["ok"] is True and stranger["auth_required"] is True and "build" in stranger and "version" in stranger
+    assert not {"pid", "started", "datasource", "demo"} & set(stranger)
+    me = admin.get("/api/ping").json()
+    assert {"pid", "started", "datasource", "demo"} <= set(me)
+
+
+def test_schema_work_runs_once_per_database_not_on_every_request(main, admin, monkeypatch):
+    con = sqlite3.connect(accounts._path())
+    assert con.execute("PRAGMA user_version").fetchone()[0] == accounts.SCHEMA_VERSION
+    con.close()
+    calls = []
+    real_connect = accounts.db._connect
+
+    def spy(path):
+        conn = real_connect(path)
+
+        class Spy:
+            def __getattr__(self, name):
+                return getattr(conn, name)
+
+            def executescript(self, sql):
+                calls.append(sql)
+                return conn.executescript(sql)
+        return Spy()
+    monkeypatch.setattr(accounts.db, "_connect", spy)
+    for _ in range(5):
+        assert admin.get("/api/auth/me").status_code == 200
+    assert calls == []                                                        # 已经初始化过：五个请求一次建表语句都没跑
+
+
+def test_error_for_the_admin_names_what_was_refused(main, admin):
+    assert "有效期" in admin.put("/api/accounts/1", json={"expires_at": _day(5)}).json()["detail"]
+    assert "暂停或删除" in admin.delete("/api/accounts/1").json()["detail"]

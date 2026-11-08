@@ -10,6 +10,13 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from server import upgrade  # noqa: E402
 
+
+def test_friendly_errors_for_a_fresh_cloud_server():
+    """新服务器第一次用 SSH 连 GitHub：Host key verification failed（没法弹确认）→ 给出 ssh-keyscan 的办法；找不到 git 的提示不再只说 Windows。"""
+    msg = upgrade._friendly_git_error("Host key verification failed.\nfatal: Could not read from remote repository.")
+    assert "ssh-keyscan github.com" in msg and "known_hosts" in msg
+    assert "没有权限" in upgrade._friendly_git_error("git@github.com: Permission denied (publickey).")
+
 GIT = upgrade.find_git()
 pytestmark = pytest.mark.skipif(GIT is None, reason="没有安装 git")
 

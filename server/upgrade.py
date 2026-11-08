@@ -100,6 +100,9 @@ def _git(git: str, args: list[str], root: Path, **kw) -> tuple[int, str]:
 
 def _friendly_git_error(text: str) -> str:
     t = text.lower()
+    if "host key verification failed" in t:
+        return ("连不上远程仓库：这台电脑还没信任 GitHub 的主机密钥（第一次用 SSH 连 GitHub 都要先确认一次，而这里没法弹出确认）。"
+                "在服务器上用运行软件的那个用户执行一次：ssh-keyscan github.com >> ~/.ssh/known_hosts ，再回来升级。\n原始信息：" + text[-300:])
     if "permission denied" in t or "publickey" in t or "authentication failed" in t or "could not read username" in t:
         return "连不上远程仓库：没有权限（这台电脑没有配置好 GitHub 的登录 / SSH 密钥）。先在命令行里 git fetch 一次确认能连上，再回来升级。\n原始信息：" + text[-300:]
     if "could not resolve host" in t or "connection timed out" in t or "unable to access" in t or "network is unreachable" in t or "超时" in text:
@@ -112,7 +115,7 @@ def _preflight(root: Path) -> tuple[str, str]:
     """返回 (git 路径, 当前分支)；有问题抛 UpgradeError。"""
     git = find_git()
     if not git:
-        raise UpgradeError("找不到 git：这台电脑没有安装 Git，或者软件找不到它。请先安装 Git for Windows（git-scm.com），再试。")
+        raise UpgradeError("找不到 git：这台电脑没有安装 Git，或者软件找不到它。请先安装 Git（Windows：git-scm.com 下载 Git for Windows；Ubuntu：sudo apt install git），再试。")
     if not (root / ".git").exists():
         raise UpgradeError("这份软件不是用 git 下载的（目录里没有 .git），没法自动升级。请用 git clone 重新下载一份，或手动覆盖新文件。")
     code, out = _git(git, ["rev-parse", "--abbrev-ref", "HEAD"], root)

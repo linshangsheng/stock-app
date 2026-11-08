@@ -16,6 +16,12 @@ from . import settings, source_stats
 
 ROOT = Path(__file__).resolve().parent.parent
 ENV_FLAG = "STOCKAPP_RESTART_FROM"
+SUPERVISED_ENV = "STOCKAPP_SUPERVISED"            # 由 systemd 等守护程序启动时设成 1（见 deploy/stock-app.service）：重启 = 自己退出，让守护程序拉起新进程
+SUPERVISED_EXIT_CODE = 3                          # 非 0：Restart=on-failure 和 Restart=always 两种配置都会重启它
+
+
+def supervised() -> bool:
+    return os.environ.get(SUPERVISED_ENV, "").strip().lower() in ("1", "true", "yes")
 
 
 def command() -> list[str]:
@@ -56,6 +62,7 @@ def _spawn_kwargs() -> dict:
 def schedule(delay: float = 0.8, spawn=subprocess.Popen, exit_fn=os._exit) -> dict:
     """安排重启：delay 秒后拉起新进程、再退出自己（让当前这个 HTTP 请求先返回）。spawn / exit_fn 可替换，便于测试。"""
     cmd, kw = command(), _spawn_kwargs()
+    managed = supervised()
 
     def go():
         time.sleep(delay)
@@ -63,12 +70,15 @@ def schedule(delay: float = 0.8, spawn=subprocess.Popen, exit_fn=os._exit) -> di
             source_stats.flush()                                          # 数据源统计落盘，重启后不丢
         except Exception:  # noqa: BLE001
             pass
+        if managed:                                                       # 守护程序会重启我；自己再拉一个会和它拉起的那个抢端口，还会被一起杀掉
+            exit_fn(SUPERVISED_EXIT_CODE)
+            return
         spawn(cmd, **kw)
         time.sleep(0.3)
         exit_fn(0)
 
     threading.Thread(target=go, daemon=True, name="restart").start()
-    return {"command": cmd, "pid": os.getpid()}
+    return {"command": cmd, "pid": os.getpid(), "supervised": managed}
 
 
 def wait_previous_instance(ports: list[int], is_ours, timeout: float = 40.0, sleep=time.sleep, clock=time.monotonic) -> bool:

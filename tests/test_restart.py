@@ -44,6 +44,23 @@ def test_schedule_spawns_replacement_then_exits(fresh_env):
         assert calls["kw"]["start_new_session"] is True
 
 
+def test_schedule_when_supervised_only_exits_and_lets_the_supervisor_restart(fresh_env, monkeypatch):
+    """由 systemd 等守护程序启动时（STOCKAPP_SUPERVISED=1）：重启 = 自己退出（非 0，Restart=on-failure 也会重启），不再自己拉接班进程——
+    否则 Restart=on-failure 下退出码 0 不会被重启（网站直接下线），Restart=always 下接班进程又会被一起杀掉。"""
+    monkeypatch.setenv(restart.SUPERVISED_ENV, "1")
+    spawned, done = [], []
+    info = restart.schedule(delay=0, spawn=lambda *a, **k: spawned.append(1), exit_fn=lambda code: done.append(code))
+    for _ in range(100):
+        if done:
+            break
+        time.sleep(0.05)
+    assert done == [restart.SUPERVISED_EXIT_CODE] and restart.SUPERVISED_EXIT_CODE != 0 and spawned == [] and info["supervised"] is True
+    monkeypatch.delenv(restart.SUPERVISED_ENV)
+    assert restart.supervised() is False
+    monkeypatch.setenv(restart.SUPERVISED_ENV, "no")
+    assert restart.supervised() is False
+
+
 def test_schedule_flushes_source_stats_before_exit(fresh_env):
     from server import source_stats
     source_stats._path_loaded = None
@@ -172,3 +189,14 @@ def test_real_restart_new_process_takes_over_same_port(demo_env):
         for pid in (new_pid, proc.pid):
             if pid:
                 _kill(pid)
+
+
+def test_deploy_unit_matches_the_supervised_restart_contract():
+    """deploy/stock-app.service 必须和「守护程序重启」约定一致：带 STOCKAPP_SUPERVISED=1、Restart=always、用 python -m server.main 启动；
+    Caddyfile 反代到本机 8000（软件只监听 127.0.0.1）。"""
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent / "deploy"
+    unit = (root / "stock-app.service").read_text(encoding="utf-8")
+    assert f"Environment={restart.SUPERVISED_ENV}=1" in unit and "Restart=always" in unit and "-m server.main" in unit
+    assert "reverse_proxy 127.0.0.1:8000" in (root / "Caddyfile").read_text(encoding="utf-8")
+    assert "127.0.0.1" in __import__("server.settings", fromlist=["x"]).load_config()["server"]["host"]

@@ -1,0 +1,21 @@
+# systemd 服务：开机自启、崩溃自动重启、页面上点「升级 / 重启」时由 systemd 拉起新进程。
+# 用法见 deploy/README.md。User 和路径按你自己的改（下面假设用户 deploy、软件在 /home/deploy/stock-app、虚拟环境在 .venv）。
+[Unit]
+Description=顺势（股票 App）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=deploy
+WorkingDirectory=/home/deploy/stock-app
+ExecStart=/home/deploy/stock-app/.venv/bin/python -m server.main
+# 页面上点「升级 / 重启」= 软件自己退出（退出码 3），由 systemd 重新拉起；所以必须有这个环境变量，并且 Restart=always。
+Environment=STOCKAPP_SUPERVISED=1
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=3
+# 内存吃紧时（2G 的机器）内存不足由系统自己处理，不在这里限制；想限制再加 MemoryMax=
+# 只监听本机（config.yaml 里 host 保持 127.0.0.1），对外由 Caddy 提供 HTTPS，不要把 8000 端口开给公网。
+
+[Install]
+WantedBy=multi-user.target
