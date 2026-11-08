@@ -20,6 +20,17 @@ def _no_login(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_hk_fallback_network(monkeypatch):
+    """港股指数的腾讯备用源（server/hk.py）在测试里不联网：默认当作连不上（想测它的测试自己换成假的）。"""
+    from server import hk
+
+    def offline(*a, **k):
+        raise RuntimeError("测试环境不联网")
+    offline.real = hk.fetch_bars_tencent                  # 想测真正的解析代码的测试用 hk.fetch_bars_tencent.real（自己再把 requests.get 换成假的）
+    monkeypatch.setattr(hk, "fetch_bars_tencent", offline)
+
+
+@pytest.fixture(autouse=True)
 def _no_bond_network(monkeypatch):
     """国债收益率（server/bonds.py）在后台线程里联网取：测试里一律不联网（想测它的测试自己再换成假的 _page）。"""
     from server import bonds

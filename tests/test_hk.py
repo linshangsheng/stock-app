@@ -204,3 +204,99 @@ def test_scheduler_tick_updates_hk_only_when_switched_on_and_due(demo_env, monke
     monkeypatch.setattr(hk, "auto_due", lambda c, now=None: False)
     mgr.tick()
     assert called == ["auto"]                                                                      # 还没到时间 / 今天做过了：不再触发
+
+
+# ---------------------------------------------------------------- 腾讯备用源（东财被限流时）
+def tx_payload(code, n=60, start="2026-01-01", amount=2.0e11, flat_head=0):
+    """腾讯格式的假日线：每行 = 日期, 开, 收, 高, 低, 成交额, {}, …。前 flat_head 行是没有真实成交的回溯日（开高低收相同、成交额 0）。"""
+    rows = []
+    for i in range(n):
+        d = (datetime.fromisoformat(start) + timedelta(days=i)).date().isoformat()
+        c = 20000 + i
+        if i < flat_head:
+            rows.append([d, str(c), str(c), str(c), str(c), "0.00", {}])
+        else:
+            rows.append([d, str(c - 5), str(c), str(c + 10), str(c - 10), f"{amount:.2f}", {}])
+    return {"code": 0, "msg": "", "data": {code: {"day": rows}}}
+
+
+def fake_requests_get(payload, seen=None, status=200):
+    class Resp:
+        def raise_for_status(self):
+            if status != 200:
+                import requests
+                raise requests.HTTPError(str(status))
+
+        def json(self):
+            return payload
+
+    def get(url, params=None, headers=None, timeout=None):
+        if seen is not None:
+            seen.append((url, params))
+        return Resp()
+    return get
+
+
+def bars_df(n=40, start="2026-01-01"):
+    d0 = datetime.fromisoformat(start)
+    rows = [((d0 + timedelta(days=i)).date().isoformat(), 100.0 + i, 101.0 + i, 99.0 + i, 100.5 + i, 0.0, 1e11) for i in range(n)]
+    return pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "volume", "amount"])
+
+
+def test_tencent_fetch_parses_rows_drops_flat_days_and_asks_for_recent_n(monkeypatch):
+    """腾讯每行 = 日期, 开, 收, 高, 低, 成交额, …：解析成统一的 DataFrame（成交量记 0、成交额取第 6 列），没有真实成交的回溯日丢掉，请求「最近 N 个交易日」。"""
+    import requests
+    seen = []
+    monkeypatch.setattr(requests, "get", fake_requests_get(tx_payload("hkHSTECH", n=50, flat_head=10), seen))
+    df = hk.fetch_bars_tencent.real("hkHSTECH", "20260101")
+    assert len(df) == 40 and df["date"].is_monotonic_increasing
+    r = df.iloc[0]
+    assert (r.close, r.open, r.high, r.low) == (20010.0, 20005.0, 20020.0, 20000.0) and r.volume == 0.0 and r.amount == 2.0e11
+    url, params = seen[0]
+    parts = params["param"].split(",")
+    assert "gtimg.cn" in url and parts[0] == "hkHSTECH" and parts[1] == "day" and parts[-1] == "qfq" and 30 <= int(parts[4]) <= hk.TX_MAX
+
+
+def test_tencent_fetch_failures_raise(monkeypatch):
+    """备用源取不到也不能悄悄返回空表：空数据、HTTP 错误都要抛出，让上层知道「两个源都不行」。"""
+    import requests
+    monkeypatch.setattr(requests, "get", fake_requests_get({"code": 0, "data": {}}))
+    with pytest.raises(RuntimeError, match="腾讯没有返回"):
+        hk.fetch_bars_tencent.real("hkHSI", "20260101")
+    monkeypatch.setattr(requests, "get", fake_requests_get({"code": 0, "data": []}))               # 腾讯出错时 data 是个空列表
+    with pytest.raises(RuntimeError):
+        hk.fetch_bars_tencent.real("hkHSI", "20260101")
+    monkeypatch.setattr(requests, "get", fake_requests_get({}, status=500))
+    with pytest.raises(requests.HTTPError):
+        hk.fetch_bars_tencent.real("hkHSI", "20260101")
+
+
+def test_when_eastmoney_is_blocked_every_index_falls_back_to_tencent(demo_env, monkeypatch):
+    em, tx = [], []
+    monkeypatch.setattr(hk, "fetch_bars", lambda secid, beg: em.append(secid) or (_ for _ in ()).throw(ConnectionError("Remote end closed connection without response")))
+    monkeypatch.setattr(hk, "fetch_bars_tencent", lambda code, beg: tx.append(code) or bars_df(40))
+    with db.market_db("HK") as c:
+        r = hk.refresh_indices(c)
+        assert not r["errors"] and r["rows"] == {s: 40 for s in hk.SECIDS}
+        assert set(r["sources"].values()) == {"腾讯（备用）"} and tx == ["hkHSI", "hkHSCEI", "hkHSTECH"]
+        assert len(em) == 3                                                                  # 每个指数都先试东财（偶然一次抖动只影响那一个指数）
+        assert c.execute("SELECT COUNT(*) FROM index_bar WHERE symbol='HK.HSTECH'").fetchone()[0] == 40
+
+
+def test_eastmoney_working_never_touches_tencent(demo_env, monkeypatch):
+    tx = []
+    monkeypatch.setattr(hk, "_get", fake_get({s: kline(100) for s in hk.SECIDS.values()}))
+    monkeypatch.setattr(hk, "fetch_bars_tencent", lambda code, beg: tx.append(code) or bars_df(5))
+    with db.market_db("HK") as c:
+        r = hk.refresh_indices(c)
+    assert tx == [] and not r["errors"] and set(r["sources"].values()) == {"东方财富"}
+
+
+def test_both_sources_failing_is_reported_with_both_reasons(demo_env, monkeypatch):
+    monkeypatch.setattr(hk, "fetch_bars", lambda secid, beg: (_ for _ in ()).throw(ConnectionError("RemoteDisconnected")))
+    monkeypatch.setattr(hk, "fetch_bars_tencent", lambda code, beg: (_ for _ in ()).throw(RuntimeError("腾讯没有返回 " + code)) if code == "hkHSCEI" else bars_df(40))
+    with db.market_db("HK") as c:
+        r = hk.refresh_indices(c)
+    assert set(r["rows"]) == {"HK.HSI", "HK.HSTECH"} and len(r["errors"]) == 1
+    e = r["errors"][0]
+    assert e.startswith("HK.HSCEI") and "东方财富 ConnectionError" in e and "RemoteDisconnected" in e and "腾讯" in e   # 两个源各自的原因都写出来

@@ -103,3 +103,19 @@ def test_zone_evidence_includes_extra_index(demo_env):
         if m == "CN":
             assert ev["extra_index"] == extra
         assert all("x2_mean" in r and "x2_win" in r for r in ev["horizons"]["60"])
+
+
+def test_thermometer_does_not_crash_when_the_current_zone_has_no_history_sample():
+    """现在所处的温度区间在历史上没有出现过 20 天后的样本时，idx_mean / idx_win 是 None（键存在、值为空）。
+    以前写成 f"{zr.get('idx_mean', 0):+.1%}"，get 的默认值只管「键不存在」，对 None 格式化直接 TypeError，/api/market/view 返回 500
+    （部署到服务器、数据初始化到一半时真的出过：unsupported format string passed to NoneType.__format__）。现在写「—」。"""
+    n = 30
+    idx = pd.Index([f"2026-01-{i + 1:02d}" for i in range(n)])
+    br = pd.DataFrame({"b20": [0.5] * n, "b60": [0.5] * n, "b200": [0.5] * n, "up": 100, "down": 100, "n": 200, "nh": 5, "nl": 5, "ew_ret": 0.001, "amount": 1e9}, index=idx)
+    empty = lambda: [{"zone": i, "name": nm, "days": 0, "idx_mean": None, "idx_win": None, "ew_mean": None, "ew_win": None, "x2_mean": None, "x2_win": None} for i, (nm, _) in enumerate(mv.ZONES)]   # noqa: E731
+    t = mv.thermometer(br, {"index": "sh.000300", "horizons": {"20": empty(), "60": empty()}}, "CN")
+    assert "—" in t["evidence_line"] and "+nan" not in t["evidence_line"] and t["b20"] == 0.5
+    full = [{**r, "days": 40, "idx_mean": 0.012, "idx_win": 0.55} for r in empty()]
+    t2 = mv.thermometer(br, {"index": "sh.000300", "horizons": {"20": full, "60": full}}, "CN")
+    assert "+1.2%" in t2["evidence_line"] and "55%" in t2["evidence_line"] and "40 个交易日样本" in t2["evidence_line"]      # 正常情况的写法没变
+    assert mv._fmt(None, "+.1%") == "—" and mv._fmt(float("nan"), ".0%") == "—" and mv._fmt(0.5, ".0%") == "50%"

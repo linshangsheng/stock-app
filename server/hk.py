@@ -4,6 +4,9 @@
   * 指数日线：东方财富的指数 K 线接口（push2his，secid 100.HSI / 100.HSCEI / 124.HSTECH，日线、不复权，2015 年起）。
     雅虎对恒生科技（HSTECH.HK）只给 1 条数据，所以三个指数都用东财，保持一致。恒生科技 2020-07 之前是指数公司回溯的数据，
     部分日子开高低收相同且成交量为 0（没有真实成交），入库时丢掉「最高 = 最低且成交量为 0」的日子。
+  * 备用：腾讯的港股指数日线（web.ifzq.gtimg.cn，hkHSI / hkHSCEI / hkHSTECH）。东财会按 IP 限流——部署到云服务器、大量初始化数据之后，
+    这台服务器的所有东财 push2 / push2his 请求被直接断开（RemoteDisconnected），港股指数一行都取不到。每个指数都先试东财，失败就自动换腾讯（东财被限流时是立刻被断开，每个只多花一两秒；偶然一次网络抖动只影响那一个指数）。
+    腾讯一次最多给最近 2000 个交易日（恒指约回到 2018 年、恒生科技是全部），足够算 250 日均线和画图；它给的是成交额、没有成交量，成交量记 0。
   * 估值：蛋卷基金（server/valuation.py，market=HK）。
 存储：hk.db 的 index_bar（symbol = HK.HSI / HK.HSCEI / HK.HSTECH）与 meta。
 这里只做「指数」：港股个股的行情库、选股、持仓、回测还没做（要单独校准每手股数 / T+0 / 无涨跌停 / 印花税）。
@@ -25,6 +28,9 @@ HKT = ZoneInfo("Asia/Hong_Kong")
 HOSTS = ("push2his.eastmoney.com", "82.push2his.eastmoney.com")
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36", "Referer": "https://quote.eastmoney.com/"}
 SECIDS = {"HK.HSI": "100.HSI", "HK.HSCEI": "100.HSCEI", "HK.HSTECH": "124.HSTECH"}
+TX_URL = "https://web.ifzq.gtimg.cn/appstock/app/hkfqkline/get"
+TX_CODES = {"HK.HSI": "hkHSI", "HK.HSCEI": "hkHSCEI", "HK.HSTECH": "hkHSTECH"}
+TX_MAX = 2000                          # 腾讯一次最多给最近 2000 个交易日
 MAS = (20, 60, 120, 200, 250)
 MA_NAMES = {20: "月线", 60: "季线", 120: "半年线", 200: "200 日线", 250: "年线"}
 META = "hk_refreshed"
@@ -62,6 +68,28 @@ def fetch_bars(secid: str, beg: str) -> pd.DataFrame:
     return df[~flat & (df["close"] > 0)].drop_duplicates("date", keep="last").reset_index(drop=True)
 
 
+def fetch_bars_tencent(code: str, beg: str) -> pd.DataFrame:
+    """腾讯日线（备用源）-> 和 fetch_bars 一样的 DataFrame。腾讯每行 = 日期, 开, 收, 高, 低, 成交额, …（没有成交量，记 0）。beg = 'YYYYMMDD'。
+    按「最近 N 个交易日」取：N = 距 beg 的天数（日历天 >= 交易日，够用），最多 2000。没有数据当作失败抛出（备用源取不到就该让人知道）。"""
+    import requests
+    need = min(TX_MAX, max(30, (date.today() - datetime.strptime(beg, "%Y%m%d").date()).days + 5))
+    r = requests.get(TX_URL, params={"param": f"{code},day,,,{need},qfq"}, headers={"User-Agent": UA["User-Agent"]}, timeout=25)
+    r.raise_for_status()
+    data = r.json().get("data")
+    x = data.get(code) if isinstance(data, dict) else None
+    ks = (x.get("day") or x.get("qfqday") or []) if isinstance(x, dict) else []
+    rows = []
+    for k in ks:
+        if len(k) < 6:
+            continue
+        rows.append((k[0], float(k[1]), float(k[3]), float(k[4]), float(k[2]), 0.0, float(k[5])))
+    if not rows:
+        raise RuntimeError(f"腾讯没有返回 {code} 的日线")
+    df = pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "volume", "amount"])
+    flat = (df["high"] == df["low"]) & (df["amount"] == 0)               # 没有真实成交的回溯日
+    return df[~flat & (df["close"] > 0)].drop_duplicates("date", keep="last").reset_index(drop=True)
+
+
 def store(conn, symbol: str, df: pd.DataFrame) -> int:
     conn.executemany("INSERT OR REPLACE INTO index_bar(symbol,date,open,high,low,close,volume,amount) VALUES(?,?,?,?,?,?,?,?)",
                      [(symbol, r.date, r.open, r.high, r.low, r.close, r.volume, r.amount) for r in df.itertuples()])
@@ -69,17 +97,27 @@ def store(conn, symbol: str, df: pd.DataFrame) -> int:
 
 
 def refresh_indices(conn) -> dict:
-    """三个指数的日线：库里没有就取 2015 年起的全量，有就从最后一天往前 15 天补起（顺带修正被改过的几天）。失败不抛出。"""
-    out, errors = {}, []
+    """三个指数的日线：库里没有就取 2015 年起的全量，有就从最后一天往前 15 天补起（顺带修正被改过的几天）。失败不抛出。
+    每个指数先用东财；东财出错（被限流 / 连不上）就换腾讯（空数据不算出错，不换）。返回里的 sources 说明每个指数这次用的哪个源。"""
+    out, errors, sources = {}, [], {}
     for sym, secid in SECIDS.items():
         last = conn.execute("SELECT MAX(date) FROM index_bar WHERE symbol=?", (sym,)).fetchone()[0]
         beg = (date.fromisoformat(last) - timedelta(days=15)).strftime("%Y%m%d") if last else "20150101"
+        df, em_err = None, None
         try:
-            out[sym] = store(conn, sym, fetch_bars(secid, beg))
+            df, sources[sym] = fetch_bars(secid, beg), "东方财富"
         except Exception as e:  # noqa: BLE001
-            errors.append(f"{sym}：{str(e)[:120]}")
+            em_err = f"{type(e).__name__}: {str(e)[:90]}"
+            log.warning("hk index %s: eastmoney failed (%s), trying tencent", sym, em_err)
+        if df is None:
+            try:
+                df, sources[sym] = fetch_bars_tencent(TX_CODES[sym], beg), "腾讯（备用）"
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"{sym}：东方财富 {em_err}；腾讯 {type(e).__name__}: {str(e)[:90]}")
+                continue
+        out[sym] = store(conn, sym, df)
     conn.commit()
-    return {"rows": out, "errors": errors}
+    return {"rows": out, "errors": errors, "sources": sources}
 
 
 def today_hkt() -> str:
@@ -104,7 +142,7 @@ def refresh_all(conn, source: str = "manual") -> dict:
                     errors.append(f"个股日线：{type(e).__name__}: {str(e)[:100]}")
         ok = not errors and val["ok"]
         info = {"at": datetime.now().isoformat(timespec="seconds"), "day": today_hkt(), "ok": ok, "source": source,
-                "errors": errors, "rows": idx["rows"], "stocks": ({k: v for k, v in stocks.items() if k != "failed"} if stocks else None)}
+                "errors": errors, "rows": idx["rows"], "index_sources": idx["sources"], "stocks": ({k: v for k, v in stocks.items() if k != "failed"} if stocks else None)}
         db.set_meta(conn, META, json.dumps(info, ensure_ascii=False))
         conn.commit()
         return info

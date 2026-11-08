@@ -15,6 +15,15 @@
 sudo apt update && sudo apt install -y git python3-venv python3-pip build-essential
 ```
 
+**Python 必须是 3.11 以上（建议 3.12，我开发和测试用的就是 3.12）**：Ubuntu 22.04 自带的 3.10 装不了依赖里的 `pandas==3.0.5`（实测报 `No matching distribution found`）。用 deadsnakes 源装 3.12：
+
+```bash
+sudo apt install -y software-properties-common
+sudo add-apt-repository -y ppa:deadsnakes/ppa
+sudo apt update && sudo apt install -y python3.12 python3.12-venv python3.12-dev
+python3.12 --version
+```
+
 ## 二、拿代码并装依赖
 
 仓库是私有的话，要先给服务器配一把只读的「部署密钥」：`ssh-keygen -t ed25519`，把 `~/.ssh/id_ed25519.pub` 加到 GitHub 仓库的 Settings → Deploy keys（只读就够）。然后：
@@ -23,11 +32,11 @@ sudo apt update && sudo apt install -y git python3-venv python3-pip build-essent
 ssh-keyscan github.com >> ~/.ssh/known_hosts      # 让服务器信任 GitHub（升级时没法弹确认，不做这步会报 Host key verification failed）
 git clone git@github.com:linshangsheng/stock-app.git ~/stock-app
 cd ~/stock-app
-python3 -m venv .venv
+python3.12 -m venv .venv
 .venv/bin/pip install -r server/requirements.txt
 ```
 
-> Python：我在 3.12 上开发和测试，Ubuntu 22.04 自带 3.10，**3.10 我没跑过**。装完先 `.venv/bin/python -m server.main` 启动一次，看有没有报错；有报错就装 3.12（deadsnakes 源）再重建 `.venv`。
+> 虚拟环境一定要用上面装的 `python3.12` 建（不是 `python3`）。装完依赖后先 `.venv/bin/python -m server.main` 启动一次，看有没有报错。
 
 ## 三、数据
 
@@ -47,6 +56,16 @@ journalctl -u stock-app -n 50         # 看日志
 ```
 
 **为什么要 `STOCKAPP_SUPERVISED=1` 和 `Restart=always`**：页面上点「升级 / 重启」时，软件会自己退出（退出码 3），由 systemd 重新拉起。没有这两个设置的话，软件会尝试自己拉一个新进程再退出，在 systemd 下要么服务直接停掉（网站下线），要么新进程被一起杀掉。
+
+## 四点五、先改掉默认密码（一定要在对公网开放 80 / 443 之前）
+
+软件第一次启动会建管理员 `root`，密码是 `123456`。对公网开放之前先改掉，否则网站一上线，扫描程序试一次默认密码就能进去：
+
+```bash
+bash deploy/set-admin-password.sh
+```
+
+脚本会让你**手敲**两遍新密码（不要粘贴：网页终端粘贴会夹带看不见的控制符号，脚本会检查并拒绝），改好后自己验证「旧密码登录不了、新密码能登录」。密码只经过本机的 127.0.0.1，不写进任何文件。
 
 ## 五、HTTPS（Caddy）
 

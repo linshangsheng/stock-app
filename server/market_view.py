@@ -459,6 +459,11 @@ def _r(v, d=4):
     return None if v is None or v != v else round(float(v), d)
 
 
+def _fmt(v, spec: str) -> str:
+    """按格式输出数字；没有值（样本不足 / NaN → None）写「—」。以前写成 f"{x.get(k, 0):+.1%}"：键存在但值是 None 时 get 的默认值不起作用，对 None 做格式化直接崩（/api/market/view 返回 500）。"""
+    return "—" if v is None or v != v else format(v, spec)
+
+
 # ---- 汇总 -------------------------------------------------------------------------------------
 
 def thermometer(br: pd.DataFrame, ev: dict, market: str = "CN") -> dict:
@@ -492,8 +497,8 @@ def thermometer(br: pd.DataFrame, ev: dict, market: str = "CN") -> dict:
         "ew_dd_250d": _r(ew.iloc[-1] / ew.tail(250).max() - 1),
         "amount_ratio": _r(br["amount"].tail(5).mean() / br["amount"].tail(60).mean()) if len(br) > 60 else None,
         "hint": hint,
-        "evidence_line": (f"历史上处在「{ZONES[z][0]}」之后：20 天{_idx_name(ev['index'])}平均 {zr.get('idx_mean', 0):+.1%}、上涨概率 {zr.get('idx_win', 0):.0%}；"
-                          f"60 天平均 {zr60.get('idx_mean', 0):+.1%}、上涨概率 {zr60.get('idx_win', 0):.0%}（{zr.get('days', 0)} 个交易日样本）") if zr else "",
+        "evidence_line": (f"历史上处在「{ZONES[z][0]}」之后：20 天{_idx_name(ev['index'])}平均 {_fmt(zr.get('idx_mean'), '+.1%')}、上涨概率 {_fmt(zr.get('idx_win'), '.0%')}；"
+                          f"60 天平均 {_fmt(zr60.get('idx_mean'), '+.1%')}、上涨概率 {_fmt(zr60.get('idx_win'), '.0%')}（{zr.get('days', 0)} 个交易日样本）") if zr else "",
         "history": [{"date": d, "b20": _r(v, 3)} for d, v in br["b20"].tail(250).items()],
     }
 

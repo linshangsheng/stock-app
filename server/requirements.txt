@@ -9,6 +9,7 @@ PyYAML==6.0.3
 baostock==0.9.4
 tzdata
 yfinance==1.7.0                 # US market data
+html5lib==1.1                   # pandas.read_html fallback parser (S&P 500 member list from Wikipedia); missing on a fresh server -> 'Import html5lib failed'
 exchange_calendars==4.13.2      # US trading calendar (holidays / DST / early closes)
 requests
 pypinyin==0.55.0               # search stocks by pinyin initials (optional: without it search falls back to code and name)
