@@ -200,3 +200,63 @@ def test_deploy_unit_matches_the_supervised_restart_contract():
     assert f"Environment={restart.SUPERVISED_ENV}=1" in unit and "Restart=always" in unit and "-m server.main" in unit
     assert "reverse_proxy 127.0.0.1:8000" in (root / "Caddyfile").read_text(encoding="utf-8")
     assert "127.0.0.1" in __import__("server.settings", fromlist=["x"]).load_config()["server"]["host"]
+
+
+# ---------------------------------------------------------------- 端口选择（部署到 Linux 后发现的问题）
+def test_port_probe_sets_reuseaddr_only_where_it_is_safe(monkeypatch):
+    """Linux 上旧进程刚退出时端口上有几十秒 TIME_WAIT：探测套接字不设 SO_REUSEADDR 会误判「被占用」，软件悄悄改用 18000，
+    而反向代理只认 8000，网站打不开（升级后页面卡在 99%）。Windows 上不能设（它允许和正在监听的程序重复绑定，探测不出「被占用」）。"""
+    import socket
+    from server import main as m
+    assert m._reuse_addr_for_probe() == (os.name != "nt")                                  # 真实函数：Linux / macOS 要设，Windows 不设
+    made = []
+
+    class FakeSock:
+        def __init__(self, *a):
+            self.opts = []
+            made.append(self)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def setsockopt(self, *a):
+            self.opts.append(a)
+
+        def bind(self, addr):
+            pass
+    monkeypatch.setattr(m, "_is_ours", lambda p: False)
+    monkeypatch.setattr(socket, "socket", FakeSock)
+    monkeypatch.setattr(m, "_reuse_addr_for_probe", lambda: True)
+    assert m.pick_port("127.0.0.1", 8000, []) == 8000
+    assert (socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) in made[-1].opts
+    monkeypatch.setattr(m, "_reuse_addr_for_probe", lambda: False)
+    assert m.pick_port("127.0.0.1", 8000, []) == 8000
+    assert made[-1].opts == []
+
+
+def test_under_a_supervisor_a_busy_port_is_an_error_not_a_silent_switch(monkeypatch):
+    """被 systemd 管着（STOCKAPP_SUPERVISED=1）时，8000 暂时用不了就报错退出让守护程序再拉起，不能悄悄换成 18000（Caddy 只认 8000）；
+    平时（桌面）照旧会换到备用端口。"""
+    import socket
+    from server import main as m
+    busy = socket.socket()
+    busy.bind(("127.0.0.1", 0))
+    busy.listen(1)
+    free = socket.socket()
+    free.bind(("127.0.0.1", 0))
+    fp = free.getsockname()[1]
+    free.close()
+    bp = busy.getsockname()[1]
+    try:
+        monkeypatch.setattr(m, "_is_ours", lambda p: False)
+        monkeypatch.delenv(restart.SUPERVISED_ENV, raising=False)
+        assert m.pick_port("127.0.0.1", bp, [fp]) == fp                                  # 桌面：换备用端口
+        monkeypatch.setenv(restart.SUPERVISED_ENV, "1")
+        with pytest.raises(SystemExit):
+            m.pick_port("127.0.0.1", bp, [fp])                                           # 守护模式：不换，报错
+        assert m.pick_port("127.0.0.1", fp, [bp]) == fp                                  # 首选端口空着就正常用它
+    finally:
+        busy.close()

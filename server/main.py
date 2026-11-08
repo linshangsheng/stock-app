@@ -1776,16 +1776,29 @@ def _is_ours(port: int) -> bool:
         return False
 
 
+def _reuse_addr_for_probe() -> bool:
+    """探测端口时要不要设 SO_REUSEADDR：Linux 上要（否则旧进程刚退出、端口上还有几十秒的 TIME_WAIT 时，探测会误判「被占用」）；
+    Windows 上不能设（它的 SO_REUSEADDR 允许和正在监听的程序重复绑定，探测就测不出「被占用」了）。"""
+    return os.name != "nt"
+
+
 def pick_port(host: str, preferred: int, fallbacks: list[int]) -> int:
     """选一个能用的端口：先 preferred（8000），不行再依次试 fallbacks。
-    8000 用不了的常见原因：Windows 的 Hyper-V / WSL 把它划进了「保留端口范围」（WinError 10013），或被别的程序占用。"""
+    8000 用不了的常见原因：Windows 的 Hyper-V / WSL 把它划进了「保留端口范围」（WinError 10013），或被别的程序占用。
+    由 systemd 等守护程序管着时（STOCKAPP_SUPERVISED=1）不换端口：反向代理（Caddy）只认 preferred，悄悄换成别的端口等于网站打不开；
+    端口暂时用不了就报错退出，由守护程序过几秒再拉起一次。"""
     import socket
+    from . import restart
+    if restart.supervised():
+        fallbacks = []
     bind_host = "0.0.0.0" if host in ("0.0.0.0", "::") else host
     family = socket.AF_INET6 if ":" in bind_host else socket.AF_INET
     for p in [preferred, *fallbacks]:
         if _is_ours(p):
             raise SystemExit(f"本软件已经在运行：直接打开 http://127.0.0.1:{p}/ 即可（不再启动第二个）")
         with socket.socket(family, socket.SOCK_STREAM) as so:
+            if _reuse_addr_for_probe():
+                so.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 so.bind((bind_host, p))
             except OSError as e:
