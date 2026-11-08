@@ -2,7 +2,6 @@
 // 升级时盖一层「进度环」：圆环一圈就是进度、中间是百分比，下面是 5 个步骤的状态；做完后端自己重启，页面等它回来自动刷新。
 // 做法（后端 server/upgrade.py）：git fetch → 依赖变了先装依赖 → git merge --ff-only（只快进，不覆盖你的改动）→ 重启。
 import { get, post } from './api.js';
-import { prefs } from './db.js';
 import { h, clear, toast, confirmBox } from './util.js';
 import { restartBackend } from './restart.js';
 
@@ -24,8 +23,7 @@ export function progressRing(size = 140) {
 
 async function rawStatus() {                                   // 重启期间连不上是正常的：不走 api.js（它会弹「离线」提示）
   try {
-    const t = prefs.get('token', '');
-    const r = await fetch('/api/upgrade/status?t=' + Date.now(), { cache: 'no-store', headers: t ? { 'X-Token': t } : {} });
+    const r = await fetch('/api/upgrade/status?t=' + Date.now(), { cache: 'no-store' });
     return r.ok ? await r.json() : null;
   } catch { return null; }
 }

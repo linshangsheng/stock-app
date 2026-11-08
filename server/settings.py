@@ -92,6 +92,41 @@ def set_market(market: str):
     return _market_var.set((market or "CN").upper())
 
 
+# ---- 当前登录的账号（server/accounts.py）：HTTP 请求由中间件设置，后台线程 / 任务没有登录态，按管理员（id=1）处理 ----
+# 个人库（自选 / 持仓 / 交易 / 账户 / 提醒）按账号分开：管理员沿用 data/portfolio.db，其他账号在 data/users/<id>/portfolio.db（db.portfolio_conn）。
+ADMIN_ID = 1
+_user_var: contextvars.ContextVar[dict] = contextvars.ContextVar("user", default={"id": ADMIN_ID, "role": "admin", "name": ""})
+
+
+def current_user() -> dict:
+    return _user_var.get()
+
+
+def current_user_id() -> int:
+    return int(_user_var.get().get("id") or ADMIN_ID)
+
+
+def is_admin() -> bool:
+    return _user_var.get().get("role") == "admin"
+
+
+def set_user(user: dict):
+    return _user_var.set({"id": int(user["id"]), "role": user.get("role", "user"), "name": user.get("username") or user.get("name") or ""})
+
+
+def reset_user(token) -> None:
+    _user_var.reset(token)
+
+
+@contextlib.contextmanager
+def user_ctx(user: dict):
+    tok = set_user(user)
+    try:
+        yield
+    finally:
+        _user_var.reset(tok)
+
+
 def cfg() -> dict:
     base = load_config()
     m = _market_var.get()

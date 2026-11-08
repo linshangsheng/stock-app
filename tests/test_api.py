@@ -35,16 +35,12 @@ def test_us_market_without_data_is_empty_not_error(client):
     assert r.status_code == 200 and r.json()["run"] is None and r.json()["candidates"] == []
 
 
-def test_token_required_when_configured(client):
-    from server import settings
-    settings.cfg()["server"]["token"] = "s3cret"
-    try:
-        assert client.get("/api/watchlist").status_code == 401
-        assert client.get("/api/watchlist", headers={"X-Token": "wrong"}).status_code == 401
-        assert client.get("/api/watchlist", headers={"X-Token": "s3cret"}).status_code == 200
-        assert client.get("/api/ping").status_code == 200                      # ping 用于探测是否需要口令
-    finally:
-        settings.cfg()["server"]["token"] = ""
+def test_login_required_when_auth_is_on(client, monkeypatch):
+    """开着登录（没有 STOCK_AUTH=off）时，没登录的请求一律 401；ping 不需要登录（页面用它探测）。完整的账号测试见 test_accounts.py。"""
+    monkeypatch.delenv("STOCK_AUTH")
+    assert client.get("/api/watchlist").status_code == 401
+    assert client.get("/api/watchlist", headers={"X-Token": "s3cret"}).status_code == 401           # 旧的访问口令不再起作用
+    assert client.get("/api/ping").status_code == 200 and client.get("/api/ping").json()["auth_required"] is True
 
 
 def test_watchlist_account_and_trades_roundtrip(client):

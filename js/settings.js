@@ -1,35 +1,72 @@
 // 设置（4.2）：左右两栏，左边是分类、右边是选中的那一类。
-//   通用设置：各市场（A 股 / 港股 / 美股）的自动更新开关、外观与访问（涨跌配色 / 主题 / 全屏 / 口令）、邮件提醒
+//   通用设置：各市场（A 股 / 港股 / 美股）的自动更新开关、外观（涨跌配色 / 主题 / 全屏）、邮件提醒
 //   交易参数：资金方案（A 股）、费用 / 滑点 / 组合与止损参数
 //   数据更新：数据健康、数据与更新状态（初始化 / 盘后任务链 / 补跑）、股票池；港股：三个指数的日线与估值状态 + 立即更新
 //   备份与存储：备份与恢复、存储空间
 //   软件升级：从 git 仓库检查 / 一键升级（进度环），升级后自动重启
+//   我的账号：改密码、退出登录（普通账号还有提醒邮箱、外观）；账号管理（只有管理员）：新建 / 暂停 / 重置密码 / 删除账号
 //   关于：版本、作者、数据来源、第三方组件与许可
+//   普通账号只看得到「我的账号」和「关于」，其余设置由管理员统一管理（limitedMount）
 import { get, post, put, state } from './api.js';
 import { h, clear, fmtPct, fmtNum, fmtMoney, toast, confirmBox, modal, dirClass, switchEl, mountIcons } from './util.js';
 import { prefs } from './db.js';
 import { loadAbout, aboutBlock } from './about.js';
 import { healthPanel } from './health.js';
 import { upgradePanel } from './upgrade.js';
+import { accountPanel, usersPanel } from './account.js';
+import { isAdmin } from './auth.js';
 
 let pollTimer = null;
 const stopPoll = () => { clearInterval(pollTimer); pollTimer = null; };
-let healthView = null, upgradeView = null;
+let healthView = null, upgradeView = null, usersView = null;
 
-const SECTIONS = [
+const ABOUT = ['about', '关于', '版本、作者、数据来源与许可', 'info'];
+const ACCOUNT = ['account', '我的账号', '密码、退出登录、提醒邮箱、外观', 'user'];
+const ADMIN_SECTIONS = [                     // 管理员：全部设置 + 账号管理
   ['general', '通用设置', '自动更新开关、外观、邮件提醒', 'gear'],
   ['trade', '交易参数', '资金方案、费用与风控参数', 'sliders'],
   ['data', '数据更新', '数据健康、更新与补全、股票池', 'refresh'],
   ['backup', '备份与存储', '备份与恢复、占用空间', 'archive'],
   ['upgrade', '软件升级', '检查并一键升级到新版本', 'upload'],
-  ['about', '关于', '版本、作者、数据来源与许可', 'info'],
+  ACCOUNT,
+  ['users', '账号管理', '新建、暂停、重置密码、删除账号', 'users'],
+  ABOUT,
 ];
+const USER_SECTIONS = [ACCOUNT, ABOUT];      // 普通账号：只有「我的账号」和「关于」，其余设置都由管理员统一管理
+
+/** 普通账号的设置页：只有「我的账号」（改密码、提醒邮箱、外观）和「关于」。 */
+function limitedMount(ctx) {
+  const list = ctx.listEl, pane = ctx.detailEl;
+  const acct = accountPanel(ctx), secAbout = h('div', { class: 'card soft' });
+  secAbout.id = 'about';
+  const PAGES = { account: acct.els, about: [secAbout] };
+  function open(key, byUser) {
+    const sec = USER_SECTIONS.find(x => x[0] === key) || USER_SECTIONS[0];
+    if (byUser) ctx.setMobileDetail(true);
+    list.querySelectorAll('.list-item').forEach(x => x.classList.toggle('sel', x.dataset.symbol === sec[0]));
+    pane.replaceChildren(h('div', { class: 'mobile-top' }, h('button', { class: 'btn sm', onclick: () => ctx.setMobileDetail(false) }, '← 返回')),
+      h('div', { class: 'pane-body page' }, h('div', { class: 'row between mb' }, h('h1', {}, sec[1]), h('span', { class: 'hint' }, sec[2])), ...PAGES[sec[0]]));
+    pane.scrollTop = 0;
+  }
+  const nav = h('div', { class: 'set-nav' }, USER_SECTIONS.map(([k, t, d, ico]) => h('button', { class: 'list-item set-item', dataset: { symbol: k }, onclick: () => open(k, true) },
+    h('span', { class: 'set-ico' }, h('i', { 'data-ico': ico })), h('span', { class: 'set-txt' }, h('span', { class: 'name' }, t), h('span', { class: 'set-desc' }, d)))));
+  list.append(h('div', { class: 'pane-head' }, h('div', { class: 'row between' }, h('h1', {}, '设置'))), nav);
+  mountIcons(nav);
+  const narrow = window.innerWidth <= 860;
+  open(USER_SECTIONS.some(x => x[0] === ctx.deep) ? ctx.deep : 'account', !!ctx.deep && narrow);
+  if (narrow && !ctx.deep) ctx.setMobileDetail(false);
+  loadAbout().then(a => secAbout.prepend(aboutBlock(a), h('hr', { class: 'about-hr' }))).catch(e => secAbout.prepend(h('div', { class: 'hint' }, '关于：' + e.message)));
+}
 
 export const settingsView = {
   layout: 'split',
   ownDeepLink: true,                       // #/settings/data：直接打开「数据更新」
   async mount(ctx) {
     stopPoll();
+    if (!isAdmin()) return limitedMount(ctx);
+    const SECTIONS = ADMIN_SECTIONS;
+    const acct = accountPanel(ctx);
+    usersView?.destroy(); const users = usersView = usersPanel();
     const list = ctx.listEl, pane = ctx.detailEl, wrap = pane;
     const gen = ctx.gen, alive = () => ctx.gen === gen;
     healthView?.destroy(); const health = healthView = healthPanel();
@@ -39,7 +76,7 @@ export const settingsView = {
     // ---------- 左栏：分类；右栏：选中那一类的内容 ----------
     const HK = state.market === 'HK';                // 港股：「数据更新」「交易参数」两页换成港股自己的内容（A 股 / 美股的数据健康、股票池、费用对它没有意义）
     const secHk = h('div', { class: 'card' }), secHkTrade = h('div', { class: 'card' });
-    const PAGES = { general: [secAuto, secLook, secNotify], trade: HK ? [secHkTrade] : [secAlloc, secCost], data: HK ? [secHk] : [health.el, secData, secPool], backup: [secBackup, secStorage], upgrade: [upgrade.el], about: [secAbout] };
+    const PAGES = { general: [secAuto, secLook, secNotify], trade: HK ? [secHkTrade] : [secAlloc, secCost], data: HK ? [secHk] : [health.el, secData, secPool], backup: [secBackup, secStorage], upgrade: [upgrade.el], account: acct.els, users: users.els, about: [secAbout] };
     let cur = null, upgradeLoaded = false;
     function open(key, byUser) {
       const sec = SECTIONS.find(x => x[0] === key) || SECTIONS[0];
@@ -339,14 +376,12 @@ export const settingsView = {
       clear(secLook);
       const mode = prefs.get('colorMode', 'auto'), theme = prefs.get('theme', 'auto');
       const seg = (items, cur, on) => { const w = h('div', { class: 'seg' }); items.forEach(([v, l]) => { const b = h('button', { class: v === cur ? 'on' : '', onclick: () => { [...w.children].forEach(c => c.classList.remove('on')); b.classList.add('on'); on(v); } }, l); w.append(b); }); return w; };
-      secLook.append(h('h2', { class: 'mb' }, '外观与访问'),
+      secLook.append(h('h2', { class: 'mb' }, '外观'),
         h('div', { class: 'row between wrap mb' }, h('div', {}, h('div', {}, '涨跌配色'), h('div', { class: 'hint' }, '默认随市场自适应：A股、港股 红涨绿跌，美股 绿涨红跌。只改颜色映射，不影响数据与符号。')),
           seg([['auto', '随市场自适应'], ['red', '全局红涨绿跌'], ['green', '全局绿涨红跌']], mode, v => { prefs.set('colorMode', v); ctx.applyColors(); })),
         h('div', { class: 'row between wrap mb' }, h('div', {}, '主题'), seg([['auto', '跟随系统'], ['light', '浅色'], ['dark', '深色']], theme, v => { prefs.set('theme', v); ctx.applyTheme(); })),
         h('div', { class: 'row between mb', style: 'gap:16px' }, h('div', { style: 'min-width:0' }, h('div', {}, '启动后自动全屏'), h('div', { class: 'hint' }, '桌面快捷方式打开的窗口本身就是全屏（按 F11 退出），但鼠标移到屏幕最上沿时 Edge 会滑出一条标题栏。打开后第一次点击 / 按键，这里会把它升级成「网页全屏」——不再有那条标题栏，按 Esc 退出（本次不再自动进入）；左下角 ⛶ 随时切换。关掉这个开关就不升级。')),
-          switchEl(prefs.get('autoFullscreen', true), v => { prefs.set('autoFullscreen', v); }, '启动后自动全屏')),
-        h('div', { class: 'row between wrap' }, h('div', {}, h('div', {}, '访问口令'), h('div', { class: 'hint' }, `后端 ${cfg.server.host}:${cfg.server.port}${cfg.server.token_set ? ' · 已设置口令' : ' · 仅本机访问，未设口令'}。开放局域网（host=0.0.0.0）时必须在 config.yaml 设置 server.token（系统含持仓数据）。`)),
-          h('button', { class: 'btn sm', onclick: () => { const f = { t: prefs.get('token', '') }; modal('访问口令', h('label', { class: 'f' }, '与后端 server.token 一致', h('input', { type: 'password', value: f.t, oninput: e => { f.t = e.target.value; } })), [{ label: '取消' }, { label: '保存', primary: true, onclick: () => { prefs.set('token', f.t); toast('已保存', 'ok'); } }]); } }, '设置本机口令')));
+          switchEl(prefs.get('autoFullscreen', true), v => { prefs.set('autoFullscreen', v); }, '启动后自动全屏')));
     }
 
     // ---------- 存储空间：每部分多大、有没有用；可清理的项由用户点按钮确认后才执行 ----------
@@ -457,7 +492,7 @@ export const settingsView = {
     if (HK) { renderAuto(); renderHkData(); renderHkTrade(); renderLook(); renderNotify(); renderBackup(); renderStorage(); }
     else { renderAuto(); renderData(); renderAlloc(); renderPool().then(renderBias); renderCost(); renderLook(); renderNotify(); renderBackup(); renderStorage(); }
   },
-  cleanup() { stopPoll(); healthView?.destroy(); upgradeView?.destroy(); },
+  cleanup() { stopPoll(); healthView?.destroy(); upgradeView?.destroy(); usersView?.destroy(); },
 };
 
 function kv(k, v, cls = '') { return h('div', { class: 'kv' }, h('span', { class: 'k' }, k), h('span', { class: 'v num ' + cls }, v)); }

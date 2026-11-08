@@ -55,7 +55,7 @@ export function backtestPanel(sub = 'hist') {
         S.kind === 'param_grid' ? h('div', { class: 'row wrap mt-s' }, h('label', { class: 'f' }, '形态', h('select', { onchange: e => { S.grid_setup = e.target.value; S.grid_idx = 0; renderForm(); } }, Object.entries(SETUP_LABEL).map(([v, l]) => h('option', { value: v, selected: S.grid_setup === v ? true : null }, l)))),
           h('label', { class: 'f' }, '参数', h('select', { onchange: e => { S.grid_idx = +e.target.value; } }, GRID_PRESETS[S.grid_setup].map(([p, vs], i) => h('option', { value: i, selected: S.grid_idx === i ? true : null }, `${p}：${vs.join(' / ')}`)))),
           h('span', { class: 'hint' }, '每个形态最多 3 个自由参数参与网格搜索（5.4.1）；每个网格点都计入试验次数。')) : null,
-        h('div', { class: 'row mt' }, h('button', { class: 'btn primary', id: 'bt-run', onclick: run }, '运行'),
+        h('div', { class: 'row mt' }, h('button', { class: 'btn primary admin-only', id: 'bt-run', onclick: run }, '运行'),
           h('span', { class: 'hint' }, '结果不是收益预测，是对历史规律的统计检验；参数请只用样本外结果确认。')));
     }
 
@@ -71,7 +71,7 @@ export function backtestPanel(sub = 'hist') {
           h('label', { class: 'f' }, '综合分', h('select', { onchange: e => { S.fp_score = e.target.value; } },
             [['lowrisk', '低换手 + 低波动（默认）'], ['lowrisk_rev', '再加短期反转（已否决，对照用）']].map(([v, l]) => h('option', { value: v, selected: S.fp_score === v ? true : null }, l))))),
         h('p', { class: 'hint mt-s' }, '调仓日与实盘日历对齐（从 2018-01-02 起每 N 个交易日）；T 日收盘出名单、T+1 开盘成交，涨停开盘买不进、跌停开盘卖不出；佣金（最低 5 元）、印花税、过户费、滑点都计入。全市场 8 年约 1~2 分钟。'),
-        h('div', { class: 'row mt' }, h('button', { class: 'btn primary', id: 'bt-run', onclick: run }, '运行'),
+        h('div', { class: 'row mt' }, h('button', { class: 'btn primary admin-only', id: 'bt-run', onclick: run }, '运行'),
           h('span', { class: 'hint' }, '默认参数是按样本内选出来的；改参数后只看样本外，试验次数会被记录。')));
     }
 

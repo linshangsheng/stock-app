@@ -606,3 +606,19 @@ div.f { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color:
 .up-log { margin: 6px 0 0; max-height: 140px; overflow: auto; padding: 8px; border-radius: var(--radius-xs); background: var(--field); font: 11px/1.5 var(--mono); white-space: pre-wrap; word-break: break-all; }
 .up-commits { margin-top: 10px; max-height: 260px; overflow: auto; border-radius: var(--radius-sm); background: var(--panel); padding: 6px 12px; }
 .up-commit { display: flex; gap: 10px; padding: 5px 0; font-size: 13px; line-height: 1.5; } .up-commit + .up-commit { border-top: var(--hair) solid var(--line); } .up-commit .num { flex: none; }
+
+/* ---- 登录页 / 账号 ---- */
+html[data-role="user"] .admin-only { display: none !important; }       /* 普通账号看不到只有管理员能用的按钮（后端也会拒绝，这里只是不让人点了报错） */
+.login-wrap { position: fixed; inset: 0; z-index: 9000; display: flex; align-items: center; justify-content: center; padding: 20px; padding-top: calc(20px + env(safe-area-inset-top)); background: var(--canvas); overflow: auto; }
+.login-card { width: min(360px, 100%); display: flex; flex-direction: column; gap: 12px; background: var(--bg); border-radius: 22px; box-shadow: var(--shadow); padding: 28px 26px 22px; animation: pop .38s var(--spring); }
+.login-card input { width: 100%; min-height: 42px; font-size: 16px; }      /* 16px：iPhone 点输入框不会自动放大页面 */
+.login-card .btn { min-height: 42px; font-size: 15px; }
+.login-brand { display: flex; flex-direction: column; align-items: center; gap: 6px; margin-bottom: 6px; }
+.login-brand img { border-radius: 13px; box-shadow: 0 6px 18px rgba(0,0,0,.18); }
+.login-brand b { font-size: 22px; font-weight: 600; letter-spacing: .3em; padding-left: .3em; } .login-brand small { font-size: 10px; letter-spacing: .45em; padding-left: .45em; color: var(--faint); }
+.login-title { font-size: 17px; text-align: center; margin: 0; } .login-hint { text-align: center; margin: 2px 0 0; }
+.login-err[hidden] { display: none; }
+#pw-bar { position: fixed; left: 0; right: 0; margin-inline: auto; width: fit-content; bottom: 20px; z-index: 70; display: flex; gap: 10px; align-items: center; max-width: min(92vw, 640px);
+  background: var(--bg-glass); -webkit-backdrop-filter: blur(20px) saturate(1.6); backdrop-filter: blur(20px) saturate(1.6); box-shadow: var(--shadow); border-radius: 16px; padding: 10px 14px; }
+#pw-bar[hidden] { display: none; }
+@media (max-width: 860px) { #pw-bar { bottom: calc(76px + env(safe-area-inset-bottom)); } }

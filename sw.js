@@ -5,7 +5,7 @@ const VERSION = 'v1.1.0';
 const SHELL = `stock-shell-${VERSION}`;
 const DATA = `stock-data-${VERSION}`;
 const SHELL_FILES = ['/', '/index.html', '/css/style.css', '/js/app.js', '/js/api.js', '/js/db.js', '/js/util.js', '/js/chart.js', '/js/detail.js',
-  '/js/screener.js', '/js/watchlist.js', '/js/portfolio.js', '/js/backtest.js', '/js/settings.js', '/js/parse.js', '/js/app-shared.js', '/js/market.js', '/js/marketpanel.js', '/js/plan.js', '/js/news.js', '/js/factor.js', '/js/keyma.js', '/js/vix.js', '/js/qvix.js', '/js/combo.js', '/js/about.js', '/js/keystats.js', '/js/kline.js', '/js/draw.js', '/js/flow.js', '/js/scoreboard.js', '/js/dayview.js', '/js/riskview.js', '/js/health.js', '/js/restart.js', '/js/upgrade.js', '/js/hk.js',
+  '/js/screener.js', '/js/watchlist.js', '/js/portfolio.js', '/js/backtest.js', '/js/settings.js', '/js/parse.js', '/js/app-shared.js', '/js/market.js', '/js/marketpanel.js', '/js/plan.js', '/js/news.js', '/js/factor.js', '/js/keyma.js', '/js/vix.js', '/js/qvix.js', '/js/combo.js', '/js/about.js', '/js/keystats.js', '/js/kline.js', '/js/draw.js', '/js/flow.js', '/js/scoreboard.js', '/js/dayview.js', '/js/riskview.js', '/js/health.js', '/js/restart.js', '/js/upgrade.js', '/js/hk.js', '/js/auth.js', '/js/account.js',
   '/vendor/lightweight-charts.standalone.production.js', '/manifest.json', '/icon.svg', '/favicon.svg', '/icons/icon-192.png'];
 
 self.addEventListener('install', e => {
@@ -22,7 +22,7 @@ self.addEventListener('fetch', e => {
   if (req.method !== 'GET' || url.origin !== location.origin) return;
   if (url.pathname.startsWith('/api/')) {
     // 任务轮询 / 回测 / 探活不缓存
-    if (url.pathname.startsWith('/api/jobs') || url.pathname.startsWith('/api/backtest') || url.pathname.startsWith('/api/upgrade') || url.pathname === '/api/ping') return;
+    if (url.pathname.startsWith('/api/jobs') || url.pathname.startsWith('/api/backtest') || url.pathname.startsWith('/api/upgrade') || url.pathname === '/api/ping' || url.pathname.startsWith('/api/auth') || url.pathname.startsWith('/api/accounts') || url.pathname.startsWith('/api/me')) return;   // 登录态 / 账号相关绝不缓存（缓存里是上一个人的数据）
     const offlineResp = () => new Response(JSON.stringify({ detail: '离线且无缓存' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
     // 纯行情类（K 线 / 指标 / 报价 / 搜索）：缓存优先、后台更新（1.3.3）——历史行情变化慢，秒开更重要
     if (/^\/api\/(kline(?!\/list)|indicators|quote|search)/.test(url.pathname)) {      // /api/kline/list 是用户自己的名单：写入后要立刻读到新的，走下面的网络优先

@@ -53,7 +53,7 @@ export function newsTab({ onPick, onFilter }) {
   const narrow = !matchMedia('(min-width: 900px)').matches;
   const sel = (k, opts, label) => h('label', { class: 'f' }, label, h('select', { onchange: e => { S[k] = e.target.value; prefs.set('news.filter', S); load(); onFilter?.(); } },
     opts.map(([v, l]) => h('option', { value: v, selected: String(S[k]) === String(v) ? true : null }, l))));
-  const refreshBtn = h('button', { class: 'btn sm primary', title: '到上游拉取这个范围里股票的最新公告 / 新闻', onclick: refresh }, '刷新事件');
+  const refreshBtn = h('button', { class: 'btn sm primary admin-only', title: '到上游拉取这个范围里股票的最新公告 / 新闻', onclick: refresh }, '刷新事件');
   const statsBox = narrow ? newsStats(S) : null;
   const head = h('div', { style: 'padding:10px 14px 4px' },
     h('div', { class: 'row wrap', style: 'gap:8px' },

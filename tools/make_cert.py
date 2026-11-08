@@ -4,7 +4,6 @@
 输出：  data/certs/cert.pem、data/certs/key.pem；然后在 data/user_config.yaml 里写：
         server:
           host: 0.0.0.0
-          token: "你的访问口令"
           ssl_certfile: data/certs/cert.pem
           ssl_keyfile: data/certs/key.pem
 注意：自签名证书需要在手机上手动信任（iOS：把 cert.pem 通过 AirDrop / 邮件发到手机 → 安装描述文件 → 设置 > 通用 > 关于本机 > 证书信任设置 里打开完全信任）。

@@ -1,8 +1,8 @@
 // 本地后端接口封装：Fetch + AbortController 超时；GET 成功后写展示缓存，断网时回退到最近快照并标注「数据延迟」。
 // 前端不直接对接任何第三方行情源（1.1 核心原则 1）。
-import { cacheGet, cacheSet, prefs } from './db.js';
+import { cacheGet, cacheSet } from './db.js';
 
-export const state = { market: 'CN', offline: false, lastError: null };
+export const state = { market: 'CN', offline: false, lastError: null, user: null, auth: true };      // user = 当前登录的账号（js/auth.js 登录后填）
 const listeners = new Set();
 export const onStatus = fn => listeners.add(fn);
 const emit = () => listeners.forEach(f => f(state));
@@ -22,8 +22,6 @@ export async function api(path, { method = 'GET', body, params = {}, timeout = 6
   const p = { ...(market ? { market: state.market === 'HK' ? 'CN' : state.market } : {}), ...params };      // 港股的个股库还没做：其余接口先按 A 股参数请求（设置页等），港股自己的接口显式传 market=HK
   const url = '/api' + path + qs(p);
   const headers = { 'Content-Type': 'application/json' };
-  const token = prefs.get('token', '');
-  if (token) headers['X-Token'] = token;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeout);
   let res;
@@ -44,7 +42,8 @@ export async function api(path, { method = 'GET', body, params = {}, timeout = 6
   try { data = await res.json(); } catch { /* 非 JSON */ }
   if (!res.ok) {
     const msg = (data && (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail))) || res.statusText;
-    if (res.status === 401) window.dispatchEvent(new CustomEvent('need-token'));
+    if (res.status === 401) window.dispatchEvent(new CustomEvent('need-login', { detail: { code: data?.code, message: msg } }));      // 没登录 / 被顶下线 / 账号被暂停：回登录页（登录凭证是 HttpOnly Cookie，不在这里处理）
+    if (res.status === 403 && data?.code === 'must_change') window.dispatchEvent(new CustomEvent('must-change'));
     throw new ApiError(msg, res.status, data);
   }
   if (method === 'GET' && cache && data && typeof data === 'object') cacheSet(url, data);

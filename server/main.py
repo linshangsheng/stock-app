@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import APP_NAME, AUTHOR, COPYRIGHT, EMAIL, LICENSE, __version__
-from . import upgrade, backup, backtest, daily_view, data_health, memtrim, pinyin_search, restart, risk_view, datasource_events as ev_mod, db, ingest, markets, features as feats, market_calendar as mc, portfolio, quality, scanner, settings, \
+from . import accounts, upgrade, backup, backtest, daily_view, data_health, memtrim, pinyin_search, restart, risk_view, datasource_events as ev_mod, db, ingest, markets, features as feats, market_calendar as mc, portfolio, quality, scanner, settings, \
     selection, setups, throttle, universe
 from .datasource_cn import get_source
 from .jobs import manager
@@ -111,17 +111,38 @@ def _wrap(market: str, **kw):
     return {"market": market, "data_asof": _asof(market), **kw}
 
 
-# ---- 访问口令 -----------------------------------------------------------------
+# ---- 账号与登录（server/accounts.py）---------------------------------------------
+
+def _auth_fail(status: int, code: str) -> JSONResponse:
+    return JSONResponse({"detail": accounts.MESSAGES.get(code, "请先登录"), "code": code}, status_code=status)
+
+
+@app.exception_handler(accounts.AuthError)
+async def _auth_error(request: Request, exc: accounts.AuthError):
+    return JSONResponse({"detail": exc.message, "code": exc.code}, status_code=exc.status)
+
 
 @app.middleware("http")
 async def auth(request: Request, call_next):
     settings.set_market((request.query_params.get("market") or "CN").upper() if (request.query_params.get("market") or "CN").upper() in ("CN", "US") else "CN")
-    token = settings.cfg()["server"].get("token") or ""
-    if token and request.url.path.startswith("/api/") and request.url.path != "/api/ping":
-        got = request.headers.get("x-token") or request.query_params.get("token") or ""
-        if not hmac.compare_digest(got, token):
-            return JSONResponse({"detail": "需要访问口令"}, status_code=401)
-    resp = await call_next(request)
+    p = request.url.path
+    utok = None
+    if p.startswith("/api/") and accounts.auth_required() and p not in accounts.PUBLIC_API:
+        user, why = accounts.authenticate(request.cookies.get(accounts.COOKIE))
+        if not user:
+            return _auth_fail(401, why)
+        if accounts.needs_change(user, request) and p not in accounts.MUST_CHANGE_OK:
+            return JSONResponse({"detail": "请先修改密码", "code": "must_change"}, status_code=403)
+        err = accounts.access_error(user, request.method, p)
+        if err:
+            return JSONResponse({"detail": err, "code": "forbidden"}, status_code=403)
+        request.state.user = user
+        utok = settings.set_user(user)                 # 个人库 / 个人数据从这一刻起按这个账号读写
+    try:
+        resp = await call_next(request)
+    finally:
+        if utok is not None:
+            settings.reset_user(utok)
     p = request.url.path
     if p in ("/sw.js", "/", "/index.html", "/manifest.json") or p.startswith(("/js/", "/css/")):
         resp.headers["Cache-Control"] = "no-cache"          # 每次向本机后端校验（ETag），更新代码后不会用到过期的前端文件
@@ -138,21 +159,106 @@ BUILD_ID = _build_id()
 STARTED_AT = datetime.now().isoformat(timespec="seconds")
 
 
+@app.post("/api/auth/login")
+def auth_login(request: Request, body: dict = Body(...)):
+    """用户名 + 密码登录。成功后设一个 HttpOnly 的会话 Cookie；同一账号在别处的登录被顶下线（kicked=true 时告诉你）。"""
+    if not accounts.auth_required():
+        return {"ok": True, "auth": False}
+    r = accounts.login(body.get("username"), body.get("password"), accounts.client_ip(request), request.headers.get("user-agent", ""))
+    https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+    resp = JSONResponse({"ok": True, "user": r["user"], "kicked": r["kicked"], "must_change": accounts.needs_change(r["user"], request)})
+    resp.set_cookie(accounts.COOKIE, r["token"], max_age=accounts.SESSION_DAYS * 86400, httponly=True, samesite="lax", secure=https, path="/")
+    return resp
+
+
+@app.post("/api/auth/logout")
+def auth_logout(request: Request):
+    accounts.logout(request.cookies.get(accounts.COOKIE))
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(accounts.COOKIE, path="/")
+    return resp
+
+
+@app.get("/api/auth/me")
+def auth_me(request: Request):
+    """当前登录的账号（没登录由中间件返回 401）。没开登录（本机预览 / 测试）时按管理员处理。"""
+    u = getattr(request.state, "user", None)
+    if u is None:
+        return {"auth": False, "user": {"id": settings.ADMIN_ID, "username": "root", "role": "admin", "status": "active", "must_change": False, "default_password": False, "notify_to": ""}}
+    return {"auth": True, "user": u, "must_change": accounts.needs_change(u, request), "default_password": bool(u.get("default_password"))}
+
+
+@app.post("/api/auth/password")
+def auth_password(request: Request, body: dict = Body(...)):
+    """改自己的密码（要输入旧密码）。管理员看不到任何人的密码，只能给别人设「临时密码」，对方登录后必须改掉。"""
+    u = getattr(request.state, "user", None)
+    if u is None:
+        raise HTTPException(400, "当前没有开启登录")
+    accounts.change_password(u["id"], body.get("old"), body.get("new"))
+    return {"ok": True}
+
+
+@app.get("/api/me/notify")
+def me_notify_get(request: Request):
+    u = getattr(request.state, "user", None) or {"id": settings.ADMIN_ID, "role": "admin", "notify_to": ""}
+    return {"notify_to": u.get("notify_to") or "", "admin": u["role"] == "admin"}
+
+
+@app.put("/api/me/notify")
+def me_notify_put(request: Request, body: dict = Body(...)):
+    """普通账号设自己的提醒收件邮箱（发件服务器用管理员在「设置 → 邮件提醒」里配的）。管理员的收件邮箱在那一页设。"""
+    u = getattr(request.state, "user", None)
+    if u is None or u["role"] == "admin":
+        raise HTTPException(400, "管理员的提醒邮箱在「设置 → 邮件提醒」里设置")
+    return {"notify_to": accounts.set_notify_to(u["id"], body.get("notify_to"))}
+
+
+@app.get("/api/accounts")
+def accounts_list():
+    return {"users": accounts.list_users(), "log": accounts.login_log(100)}
+
+
+@app.post("/api/accounts")
+def accounts_create(body: dict = Body(...)):
+    return {"user": accounts.create_user(body.get("username"), body.get("password"), body.get("notify_to") or "")}
+
+
+@app.put("/api/accounts/{uid}")
+def accounts_update(uid: int, body: dict = Body(...)):
+    """改用户名（含管理员自己）或 暂停 / 恢复。"""
+    if "username" in body:
+        accounts.rename_user(uid, body["username"])
+    if "status" in body:
+        accounts.set_status(uid, body["status"])
+    return {"user": accounts.get_user(uid)}
+
+
+@app.put("/api/accounts/{uid}/password")
+def accounts_set_password(uid: int, body: dict = Body(...)):
+    accounts.set_password(uid, body.get("password"))
+    return {"ok": True}
+
+
+@app.delete("/api/accounts/{uid}")
+def accounts_delete(uid: int):
+    """删除账号并删除它的全部数据（不可恢复）。只想让对方暂时登录不了，用「暂停」。"""
+    return {"ok": True, **accounts.delete_user(uid)}
+
+
 @app.get("/api/ping")
 def ping():
     return {"ok": True, "version": app.version, "build": BUILD_ID, "disk_build": _build_id(), "pid": os.getpid(), "started": STARTED_AT,
-            "auth_required": bool(settings.cfg()["server"].get("token")),
+            "auth_required": accounts.auth_required(),
             "datasource": settings.cfg()["datasource"], "demo": {"CN": markets.is_demo("CN"), "US": markets.is_demo("US")}}
 
 
 @app.post("/api/restart")
 def restart_backend(request: Request, body: dict = Body(default={})):
     """后端自己重启（代码 / 配置更新后不用再去任务管理器结束 Python）。有任务在跑时默认拒绝（409 + 清单），带 force 才强行重启。
-    没设访问口令时只允许本机调用。重启靠新进程接班：见 server/restart.py。"""
-    token = settings.cfg()["server"].get("token") or ""
+    只有管理员能调用（中间件检查）；没开登录（本机预览 / 测试）时只允许本机调用。重启靠新进程接班：见 server/restart.py。"""
     host = request.client.host if request.client else ""
-    if not token and host not in ("127.0.0.1", "::1", "localhost", "testclient"):
-        raise HTTPException(403, "没有设置访问口令时，只允许在本机重启后端")
+    if not accounts.auth_required() and host not in ("127.0.0.1", "::1", "localhost", "testclient"):
+        raise HTTPException(403, "没有开启登录时，只允许在本机重启后端")
     b = restart.blockers(manager.state, _bt_jobs)
     if b and not body.get("force"):
         return JSONResponse({"ok": False, "blocked": b, "message": "有任务正在运行：" + "；".join(b) + "。重启会中断它们。"}, status_code=409)
@@ -161,11 +267,10 @@ def restart_backend(request: Request, body: dict = Body(default={})):
 
 
 def _local_only(request: Request) -> None:
-    """会改本机文件 / 重启软件的接口：没设访问口令时只允许本机调用。"""
-    token = settings.cfg()["server"].get("token") or ""
+    """会改本机文件 / 重启软件的接口：只有管理员能调用（中间件检查）；没开登录（本机预览 / 测试）时只允许本机调用。"""
     host = request.client.host if request.client else ""
-    if not token and host not in ("127.0.0.1", "::1", "localhost", "testclient"):
-        raise HTTPException(403, "没有设置访问口令时，只允许在本机升级")
+    if not accounts.auth_required() and host not in ("127.0.0.1", "::1", "localhost", "testclient"):
+        raise HTTPException(403, "没有开启登录时，只允许在本机升级")
 
 
 @app.get("/api/upgrade/check")
@@ -651,8 +756,12 @@ def jobs_get(market: str = "CN"):
     if market == "US":
         from . import us_index
         info["index_members"] = us_index.status()
-    return _wrap(market, job=manager.snapshot(), gate=gate, last_run=dict(last_run) if last_run else None,
-                 logs=logs, backup=backup.backup_status(), throttle=throttle.all_status(), **info)
+    res = _wrap(market, job=manager.snapshot(), gate=gate, last_run=dict(last_run) if last_run else None,
+                logs=logs, backup=backup.backup_status(), throttle=throttle.all_status(), **info)
+    if not settings.is_admin():                        # 普通账号只需要「有没有数据 / 数据到哪天」：备份目录、任务日志、限流状态是管理员的事
+        for k in ("logs", "backup", "throttle"):
+            res.pop(k, None)
+    return res
 
 
 @app.get("/api/datasources/probe")
@@ -1504,7 +1613,7 @@ def settings_get():
     c = settings.cfg()
     return {k: c.get(k) for k in ("universe", "gate", "features", "regime", "funnel", "setups", "execution", "exits", "portfolio",
                                   "costs", "limit_rules", "backup", "jobs", "history_years", "datasource", "throttle", "validation", "allocation", "factor_portfolio")} | \
-           {"server": {"host": c["server"]["host"], "port": c["server"]["port"], "token_set": bool(c["server"].get("token"))},
+           {"server": {"host": c["server"]["host"], "port": c["server"]["port"]},
             "editable": list(settings.USER_EDITABLE)}
 
 
@@ -1681,8 +1790,10 @@ def main():
 
     s = settings.cfg()["server"]
     host = s["host"]
-    if host not in ("127.0.0.1", "localhost", "::1") and not s.get("token"):
-        raise SystemExit("开放局域网访问（host 非 127.0.0.1）时必须设置 server.token 访问口令（系统内含持仓数据，1.6）。")
+    if os.environ.get("STOCK_AUTH") == "off" and host not in accounts.LOCAL_HOSTS:
+        print("注意：STOCK_AUTH=off 只在后端监听本机（127.0.0.1）时有效；现在监听的是 " + host + "，登录照常要求。", flush=True)
+    if accounts.auth_required():
+        accounts.list_users()                          # 第一次启动时在这里建好管理员账号（root，默认密码 123456，见 README「账号与登录」）
     kw = {}
     cert, key = s.get("ssl_certfile"), s.get("ssl_keyfile")
     if cert and key:                       # 本地 HTTPS：手机经局域网访问时才能安装 PWA / 注册 Service Worker（1.6）

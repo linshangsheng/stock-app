@@ -95,19 +95,17 @@ def test_restart_endpoint(client, monkeypatch):
     assert client.post("/api/restart", json={"force": True}).json()["ok"] is True and called == [1, 1]
 
 
-def test_restart_refuses_remote_callers_without_token(demo_env):
+def test_restart_refuses_remote_callers_when_login_is_off(demo_env):
     from fastapi.testclient import TestClient
     from server import main
     remote = TestClient(main.app, client=("8.8.8.8", 50000))
     assert remote.post("/api/restart").status_code == 403
 
 
-def test_restart_needs_token_when_one_is_set(client, monkeypatch):
-    from server import settings
+def test_restart_needs_login_when_auth_is_on(client, monkeypatch):
     monkeypatch.setattr(restart, "schedule", lambda *a, **k: {"pid": 1, "command": []})
-    settings.cfg()["server"]["token"] = "s3cret"
-    assert client.post("/api/restart").status_code == 401                         # 中间件：没带口令一律拒绝
-    assert client.post("/api/restart", headers={"x-token": "s3cret"}).json()["ok"] is True
+    monkeypatch.delenv("STOCK_AUTH")
+    assert client.post("/api/restart").status_code == 401                         # 中间件：没登录一律拒绝（只有管理员能重启：见 test_accounts.py）
 
 
 def _free_port():

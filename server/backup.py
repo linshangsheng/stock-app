@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import gzip
+import re
 import shutil
 import sqlite3
 from datetime import date, datetime, timedelta
@@ -87,6 +88,13 @@ def run_backup(full: bool | None = None, day: str | None = None) -> dict:
     if pf.exists():
         _online_backup(pf, root / "portfolio.db")
         info["files"]["portfolio.db"] = _count_portfolio(root / "portfolio.db")
+    if (dd / "accounts.db").exists():                                   # 账号（密码只是哈希）+ 登录记录；删了账号就全丢，一起备份
+        _online_backup(dd / "accounts.db", root / "accounts.db")
+        info["files"]["accounts.db"] = "ok"
+    for up in sorted((dd / "users").glob("*/portfolio.db")) if (dd / "users").exists() else []:        # 其他账号各自的个人库
+        name = f"users_{up.parent.name}_portfolio.db"
+        _online_backup(up, root / name)
+        info["files"][name] = _count_portfolio(root / name)
     for m, name in db.MARKET_DB.items():
         src = dd / name
         if not src.exists():
@@ -177,6 +185,8 @@ def storage_report() -> dict:
     add("ashare", dd / "ashare.db", "A 股行情库", "10 年日线、指数、扫描与回测记录。核心数据，删了要重新初始化（6~9 小时）")
     add("us", dd / "us.db", "美股行情库", "不用美股可以不管它；删了要重新初始化")
     add("portfolio", dd / "portfolio.db", "个人数据", "自选、持仓、交易日志、账户。最重要，每天自动备份")
+    add("accounts", dd / "accounts.db", "账号库", "账号、会话和登录记录（密码只存哈希）。删了所有账号都没了（管理员回到 root / 123456），每天自动备份")
+    add("users", dd / "users", "其他账号的个人数据", "每个账号一份自选、持仓、交易日志、账户（在管理员的「账号管理」里删除账号时才会删）。每天自动备份")
     fd = full_dir()
     fulls = sorted((p for p in fd.iterdir() if p.is_dir()), reverse=True) if fd.exists() else []
     for i, p in enumerate(fulls):
@@ -239,19 +249,24 @@ def restore(day: str, what: str = "portfolio") -> dict:
     dd = settings.data_dir()
     done = {}
     targets = {"portfolio": ["portfolio.db"], "ashare": ["ashare.db"], "us": ["us.db"]}[what]
+    if what == "portfolio":                                              # 账号库和其他账号的个人库：备份里有就一起恢复
+        targets += [n for n in ("accounts.db",) if (root / n).exists()]
+        targets += sorted(f.name for f in root.glob("users_*_portfolio.db"))
     for name in targets:
         src = root / name
         gz = root / (name + ".gz")
         if not src.exists() and not gz.exists():
             raise FileNotFoundError(f"备份中没有 {name}（{src}）")
-        dst = dd / name
+        m = re.fullmatch(r"users_(\d+)_portfolio\.db", name)
+        dst = dd / "users" / m.group(1) / "portfolio.db" if m else dd / name
+        dst.parent.mkdir(parents=True, exist_ok=True)
         if dst.exists():
-            shutil.copy2(dst, dd / (name + ".before_restore"))
+            shutil.copy2(dst, dst.with_name(dst.name + ".before_restore") if m else dd / (name + ".before_restore"))
         for ext in ("-wal", "-shm"):
-            (dd / (name + ext)).unlink(missing_ok=True)
+            (dst.with_name(dst.name + ext) if m else dd / (name + ext)).unlink(missing_ok=True)
         if src.exists():
             shutil.copy2(src, dst)
         else:
             _gunzip_to(gz, dst)
-        done[name] = _count_portfolio(dst) if name == "portfolio.db" else "restored"
+        done[name] = _count_portfolio(dst) if name == "portfolio.db" or m else "restored"
     return done

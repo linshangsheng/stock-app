@@ -158,8 +158,18 @@ def market_conn(market: str = "CN") -> sqlite3.Connection:
     return conn
 
 
+def portfolio_path(user_id: int | None = None) -> Path:
+    """个人库的位置：管理员（id=1）沿用原来的 data/portfolio.db，其他账号各用 data/users/<id>/portfolio.db（只用数字 id 拼路径）。"""
+    uid = int(settings.current_user_id() if user_id is None else user_id)
+    if uid == settings.ADMIN_ID:
+        return db_path("portfolio.db")
+    p = db_path(f"users/{uid}/portfolio.db")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 def portfolio_conn() -> sqlite3.Connection:
-    conn = _connect(db_path("portfolio.db"))
+    conn = _connect(portfolio_path())
     conn.executescript(PORTFOLIO_SCHEMA)
     return conn
 

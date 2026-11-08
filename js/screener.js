@@ -216,7 +216,7 @@ export const screener = {
             h('ul', { style: 'margin:6px 0 0 18px;padding:0' }, (run.gate.reasons || []).map(r => h('li', {}, r)))),
           h('div', { class: 'row mt' },
             h('button', { class: 'btn', onclick: () => load(true) }, '仅供参考：查看即时计算结果'),
-            h('button', { class: 'btn', onclick: () => runJob('daily') }, '重新运行盘后任务（补拉数据）')),
+            h('button', { class: 'btn admin-only', onclick: () => runJob('daily') }, '重新运行盘后任务（补拉数据）')),
           h('p', { class: 'hint mt' }, '宁可不出结果：上游数据缺失会让市场宽度与 RPS 排名悄悄失真（需求书 3.25.1）。「仅供参考」的结果不写入正式存档。')));
         return;
       }
@@ -512,7 +512,7 @@ function emptyNoRun(d, ctx, reload, jobs) {
   }
   return h('div', { class: 'empty' }, h('div', { class: 'big' }, '还没有观察清单'), h('div', {}, d.message || ''),
     h('div', { class: 'row', style: 'justify-content:center;margin-top:12px' },
-      h('button', { class: 'btn primary', onclick: async () => {
+      h('button', { class: 'btn primary admin-only', onclick: async () => {
         toast('正在扫描…');
         try { await post('/scan/run', {}, { timeout: 300000 }); toast('扫描完成', 'ok'); reload(); } catch (e) { toast(e.message, 'bad'); }
       } }, '立即扫描'), h('a', { class: 'btn', href: '#/settings/data' }, '去设置页初始化数据')));
@@ -548,5 +548,5 @@ function statusBar(d, jobs, ctx, recompute) {
       run?.regime?.reason ? h('span', { class: 'small muted', title: '正常：基准指数在 50 日线上方且宽度（站上 50 日线的股票比例）≥ 45%；防守：基准跌破 200 日线且宽度 < 25%；其余为谨慎' }, run.regime.reason)
         : run?.regime?.detail?.breadth_ma50 != null ? h('span', { class: 'small muted num', title: '站上 MA50 的股票占比（交易池）' }, '宽度 ' + fmtPct(run.regime.detail.breadth_ma50, 0, false)) : null),
     cell('今天的清单', h('span', { class: 'small', title: run ? `扫描编号 ${run.run_id}\n参数指纹 ${run.config_hash}` : '' }, run ? `${shortDate(run.scan_date)} 收盘 → 有效至 ${run.valid_until ? shortDate(run.valid_until) : '—'}` : '—'),
-      recompute ? h('button', { class: 'btn sm', title: '按当前参数和账户资金，重新计算今天的观察清单与市场温度（约 30~60 秒）', onclick: recompute }, '↻ 重新计算') : null));
+      recompute ? h('button', { class: 'btn sm admin-only', title: '按当前参数和账户资金，重新计算今天的观察清单与市场温度（约 30~60 秒）', onclick: recompute }, '↻ 重新计算') : null));
 }

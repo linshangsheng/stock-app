@@ -14,6 +14,12 @@ os.environ.setdefault("STOCKAPP_NO_TRIM", "1")       # 测试里每个用例都�
 
 
 @pytest.fixture(autouse=True)
+def _no_login(monkeypatch):
+    """绝大多数测试不关心登录：关掉（STOCK_AUTH=off 只在后端监听本机时有效）。想测登录的测试（tests/test_accounts.py）自己再打开。"""
+    monkeypatch.setenv("STOCK_AUTH", "off")
+
+
+@pytest.fixture(autouse=True)
 def _no_bond_network(monkeypatch):
     """国债收益率（server/bonds.py）在后台线程里联网取：测试里一律不联网（想测它的测试自己再换成假的 _page）。"""
     from server import bonds

@@ -40,10 +40,9 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-@pytest.fixture(scope="module")
-def base():
+def _serve(extra_env):
     port = _free_port()
-    env = {**os.environ, "PORT": str(port)}
+    env = {**os.environ, "PORT": str(port), **extra_env}
     proc = subprocess.Popen([sys.executable, "-m", "server.cli", "serve", "--demo"], cwd=ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     url = f"http://127.0.0.1:{port}"
     try:
@@ -64,6 +63,18 @@ def base():
             proc.wait(timeout=15)
         except subprocess.TimeoutExpired:
             proc.kill()
+
+
+@pytest.fixture(scope="module")
+def base():
+    """页面测试用：关掉登录（STOCK_AUTH=off，只在监听本机时有效），直接把每个页面打开一遍。"""
+    yield from _serve({"STOCK_AUTH": "off"})
+
+
+@pytest.fixture(scope="module")
+def base_login():
+    """开着登录的服务：没登录时页面应该停在登录页。"""
+    yield from _serve({"STOCK_AUTH": ""})
 
 
 def _visit(url: str, tmp: Path, wait_ms: int = 9000) -> tuple[str, list[str]]:
@@ -123,3 +134,12 @@ def test_old_backtest_link_opens_the_backtest_tab_in_market(base, tmp_path, old,
     dom, errs = _visit(f"{base}/#/{old}", tmp_path / "p")
     assert 'data-view="market"' in dom and not errs, errs[:3]
     assert new_has in dom and 'data-nav="backtest"' not in dom
+
+
+def test_without_login_the_page_stops_at_the_login_form(base_login, tmp_path):
+    """开着登录、没有 Cookie：整个界面被登录页盖住（用户名 / 密码框 + 登录按钮），不会露出任何数据，也不会有 JS 报错。"""
+    dom, errs = _visit(f"{base_login}/#/portfolio", tmp_path / "p")
+    assert 'id="login-root"' in dom and 'name="username"' in dom and 'name="password"' in dom and "登录" in dom, "没有显示登录页"
+    assert 'data-view="portfolio"' not in dom or "login-card" in dom
+    assert "页面加载失败" not in dom
+    assert not [e for e in errs if "401" not in e], errs[:3]                # 没登录时 /api/auth/me 返回 401 是预期的，浏览器会把它记成一行网络错误

@@ -212,11 +212,28 @@ def positions_message(market: str, health: dict | None) -> tuple[str, str] | Non
 
 
 def after_scan(market: str, day: str, scan: dict, health: dict | None = None) -> dict:
-    """盘后任务链扫描完成后调用。返回 {事件: 结果}；没设置 / 没打开时返回 {}。同一事件同一个交易日只发一次。"""
+    """盘后任务链扫描完成后调用。返回 {事件: 结果}；没设置 / 没打开时返回 {}。同一事件同一个交易日只发一次。
+    管理员按「设置 → 邮件提醒」发；其他账号如果填了自己的提醒收件邮箱，用管理员配的发件服务器、按各自的持仓再发一份（持仓体检各算各的）。"""
+    from . import accounts, portfolio
     c = _cfg()
     ready, _ = is_ready(c)
     if not ready:
         return {}
+    out = _send_events(market, day, scan, health, c, "")
+    for u in accounts.notify_users():
+        uc = {**c, "recipients": u["notify_to"]}
+        if not is_ready(uc)[0]:
+            continue
+        try:
+            with settings.user_ctx(u):
+                out[f"账号 {u['username']}"] = _send_events(market, day, scan, portfolio.health(market, day, save=False), uc, f":u{u['id']}")
+        except Exception as e:  # noqa: BLE001 - 一个账号出错不影响其他账号
+            out[f"账号 {u['username']}"] = f"出错：{type(e).__name__}"
+            log.warning("notify for user %s failed: %s", u["id"], e)
+    return out
+
+
+def _send_events(market: str, day: str, scan: dict, health: dict | None, c: dict, suffix: str) -> dict:
     ev = {"panic": True, "etf": True, "positions": True, **(c.get("events") or {})}
     out: dict = {}
     with db.market_db(market) as conn:
@@ -231,7 +248,7 @@ def after_scan(market: str, day: str, scan: dict, health: dict | None = None) ->
         for kind, build in builders.items():
             if not ev.get(kind):
                 continue
-            key = f"notify:{kind}:{day}"
+            key = f"notify:{kind}:{day}{suffix}"
             if db.get_meta(conn, key):
                 out[kind] = "已发过"
                 continue

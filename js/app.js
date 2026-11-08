@@ -14,6 +14,7 @@ import { marketView } from './market.js';
 import { klineView } from './kline.js';
 import { hkView, hkMarketView, hkKlineView, hkPlaceholder } from './hk.js';
 import { showDetail } from './detail.js';
+import { ensureLogin, loginScreen, forcePasswordScreen, loginShowing } from './auth.js';
 
 const VIEWS = { screener, watchlist, portfolio, settings: settingsView, market: marketView, kline: klineView };
 const appEl = $('#app');
@@ -125,12 +126,15 @@ const offBar = h('div', { class: 'alert warn', id: 'offline-bar', hidden: true, 
 document.body.append(offBar);
 onStatus(s => { offBar.hidden = !s.offline; offBar.textContent = s.offline ? `${s.lastError || '离线'}：显示最近一次缓存快照（数据延迟）` : ''; });
 
-window.addEventListener('need-token', () => {
-  if (document.getElementById('token-modal')) return;
-  const f = { t: '' };
-  const m = modal('需要访问口令', h('div', { id: 'token-modal' }, h('p', { class: 'hint' }, '后端设置了访问口令（server.token）。'), h('input', { type: 'password', style: 'width:100%', oninput: e => { f.t = e.target.value; } })),
-    [{ label: '确定', primary: true, onclick: () => { prefs.set('token', f.t); location.reload(); } }]);
+// ---------- 登录（js/auth.js）：会话过期 / 在别处登录被顶下线 / 账号被暂停 / 要先改密码 ----------
+window.addEventListener('need-login', e => {
+  if (loginShowing()) return;
+  loginScreen(e.detail?.code && e.detail.code !== 'none' ? e.detail.message : '').then(() => location.reload());
 });
+window.addEventListener('must-change', () => { if (!loginShowing()) forcePasswordScreen().then(() => location.reload()); });
+const pwBar = h('div', { class: 'alert warn', id: 'pw-bar', hidden: true }, h('span', {}, '你还在用默认密码（root / 123456），别人也能猜到。'),
+  h('button', { class: 'btn sm primary', onclick: () => { location.hash = '#/settings/account'; pwBar.hidden = true; } }, '去修改'), h('button', { class: 'btn sm', onclick: () => { pwBar.hidden = true; } }, '知道了'));
+document.body.append(pwBar);
 
 // ---------- 预警（4.6）：页面内提醒，仅在页面打开时生效 ----------
 const alerted = new Set(prefs.get('alerted', []));
@@ -163,8 +167,8 @@ setInterval(checkAlerts, 60000);
 let _build = null;
 const updMsg = h('span', {}, '软件已更新');
 const updBtn = h('button', { class: 'btn sm primary', onclick: () => location.reload() }, '点这里刷新');
-const rstBtn = h('button', { class: 'btn sm primary', hidden: true, onclick: () => restartBackend() }, '立即重启');       // 后端自己退出再启动，不用再去任务管理器结束 Python
-const howBtn = h('button', { class: 'btn sm primary', hidden: true, onclick: () => manualRestartHelp() }, '怎么重启');       // 旧版后端没有重启接口：给出手动步骤
+const rstBtn = h('button', { class: 'btn sm primary admin-only', hidden: true, onclick: () => restartBackend() }, '立即重启');       // 后端自己退出再启动，不用再去任务管理器结束 Python
+const howBtn = h('button', { class: 'btn sm primary admin-only', hidden: true, onclick: () => manualRestartHelp() }, '怎么重启');       // 旧版后端没有重启接口：给出手动步骤
 const updBar = h('div', { class: 'alert info', id: 'update-bar', hidden: true }, updMsg, updBtn, rstBtn, howBtn);        // 样式见 style.css #update-bar（底部居中的提示条，不再盖住页面标题）
 document.body.append(updBar);
 async function checkUpdate() {
@@ -226,6 +230,8 @@ if (fsSupported) {
     const cur = document.documentElement.dataset.theme;
     prefs.set('theme', cur === 'dark' ? 'light' : 'dark'); applyTheme();
   });
+  await ensureLogin();                                  // 没登录就停在登录页，登录成功才往下走（后端没启动时返回，下面 api.js 会提示离线）
+  pwBar.hidden = !(state.user?.default_password && state.auth);
   try {
     const p = await api('/ping', { market: false, cache: false });
     _build = p.build || null;
