@@ -19,7 +19,7 @@ def operation_plan(ref: float, stop: float, board: str | None, equity: float, ri
     lot = execution.min_lot(board)
     scen = []
     for g in gaps:
-        op = round(ref * (1 + g), 2)
+        op = execution.snap(board, ref * (1 + g))
         sh = min(planned, execution.lot_round(board, risk / (op - stop))) if op > stop else 0
         if sh < lot:
             sh = 0
@@ -38,7 +38,8 @@ def open_plan(ref: float, stop: float, board: str | None, op: dict | None = None
     每行：case / open（价格区间文字）/ open_px / action / shares / cost / max_loss；op 为空（未填资金）时 shares 等为 None。"""
     if not (ref and stop) or ref <= stop:
         return []
-    tick = execution.TICK
+    tick = execution.tick(board, stop)
+    dec = 3 if execution.hk_lot(board) is not None and ref < 10 else 2          # 港股 10 港元以下最小价位是 0.005，要显示 3 位小数
     if op and not op.get("planned_shares"):
         return [{"case": "任何开盘价", "open": "—", "open_px": None, "action": f"不买：按你的资金，「最多亏」连一手的风险都不够（{op.get('note') or '止损距离太大'}）",
                  "shares": 0, "cost": 0, "max_loss": 0}]
@@ -62,19 +63,19 @@ def open_plan(ref: float, stop: float, board: str | None, op: dict | None = None
         n = min(planned, execution.lot_round(board, risk / (px - stop))) if px > stop else 0
         return n if n >= execution.min_lot(board) else 0
 
-    rows = [row("低开到止损价以下", f"≤ {stop:.2f}", stop, "不买：一开盘就在止损价下方，买了马上就该卖", 0 if op else None),
-            row("低开", f"{stop + tick:.2f} ~ {ref - tick:.2f}", None, "照计划买，股数不加；离止损更近，风险比计划还小", planned),
-            row("平开", f"≈ {ref:.2f}", ref, "照计划买", planned)]
+    rows = [row("低开到止损价以下", f"≤ {stop:.{dec}f}", stop, "不买：一开盘就在止损价下方，买了马上就该卖", 0 if op else None),
+            row("低开", f"{stop + tick:.{dec}f} ~ {ref - tick:.{dec}f}", None, "照计划买，股数不加；离止损更近，风险比计划还小", planned),
+            row("平开", f"≈ {ref:.{dec}f}", ref, "照计划买", planned)]
     for g in (0.005, 0.01, 0.02, 0.03, 0.05):
-        px = round(ref * (1 + g), 2)
+        px = execution.snap(board, ref * (1 + g))
         if up_px and px >= up_px:
             break
         n = at(px)
         act = ("少买" if op and n and n < planned else "照计划买" if op and n else "不买：止损太远，一手风险超过「最多亏」" if op
                else "少买：股数 = 最多亏 ÷（开盘价 − 止损价），按整手向下取整")
-        rows.append(row(f"高开 {g * 100:g}%", f"≈ {px:.2f}", px, act, n))
+        rows.append(row(f"高开 {g * 100:g}%", f"≈ {px:.{dec}f}", px, act, n))
     if up_px:
-        rows.append(row("涨停开盘", f"= {up_px:.2f}", up_px, "不买：涨停开盘基本买不到，也不追（回测按买不到处理）", 0 if op else None))
+        rows.append(row("涨停开盘", f"= {up_px:.{dec}f}", up_px, "不买：涨停开盘基本买不到，也不追（回测按买不到处理）", 0 if op else None))
     return rows
 
 
@@ -86,12 +87,21 @@ def rank_candidates(cands: list[dict]) -> list[dict]:
     return sorted(cands, key=key)
 
 
+def k_atr_dist(ref: float, atr: float, k: float | None, hard_pct: float | None) -> float:
+    """初始止损离入场价的距离（= 入场价 - execution.initial_stop，不取整），港股要先算距离再落到价位格子上。"""
+    return ref - execution.initial_stop(ref, atr, k, hard_pct)
+
+
 def plan_entry(c: dict, entry_mode: str, stop_mode: str | None = None, exits: dict | None = None) -> tuple[float, float, float]:
     """返回 (触发价, 入场参考价, 止损价)。stop_entry：触发价 = 信号日最高价 + 1 个最小价位；next_open：以信号日收盘作参考。
     止损：atr = 入场价 - k×ATR（默认）；structure = 形态低点下方一个价位（结构化止损，5.4.1 对照），低点不在入场价之下时回退到 ATR；
     两种都受硬止损（相对入场价最大亏损）约束。"""
+    board = c.get("board")
     trigger = round(c["high"] + execution.TICK, 2)
     ref = trigger if entry_mode == "stop_entry" else round(c["close"], 2)
+    if execution.hk_lot(board) is not None:                      # 港股：触发价向上、止损价向下落到价位格子上（400 港元的股票没有 400.01 这个价）
+        trigger = execution.snap(board, c["high"] + execution.tick(board, c["high"]), "up")
+        ref = trigger if entry_mode == "stop_entry" else execution.snap(board, c["close"])
     ex = exits or settings.cfg()["exits"]                         # 回测传入策略自己的 exits，否则用配置
     stop_mode = stop_mode or ex.get("stop_mode", "atr")
     k, hard_pct = ex.get("stop_atr_k"), ex.get("hard_stop_pct")
@@ -99,9 +109,14 @@ def plan_entry(c: dict, entry_mode: str, stop_mode: str | None = None, exits: di
     if stop_mode == "structure" and sl is not None and sl == sl and sl < ref:
         hard = hard_pct or 0
         stop = round(max(sl - execution.TICK, ref * (1 - hard) if hard else 0.0), 2)
+        if execution.hk_lot(board) is not None:
+            stop = execution.snap(board, max(sl - execution.tick(board, sl), ref * (1 - hard) if hard else 0.0), "down")
         if stop < ref:
             return trigger, ref, stop
-    return trigger, ref, execution.initial_stop(ref, c["atr14"], k, hard_pct)
+    stop = execution.initial_stop(ref, c["atr14"], k, hard_pct)
+    if execution.hk_lot(board) is not None:
+        stop = execution.snap(board, ref - k_atr_dist(ref, c["atr14"], k, hard_pct), "down")
+    return trigger, ref, stop
 
 
 def size_position(sizing: str, *, equity, risk_pct, ref, stop, board, adv, max_adv_pct, max_positions, atr_pct, fixed_pct=0.10, vol_ref=0.03) -> dict:

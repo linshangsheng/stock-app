@@ -1,5 +1,5 @@
 // 港股（独立的第三个市场）。已有：三个指数（恒生指数、国企指数、恒生科技）的估值与分批建仓（选股页）、价格走势与均线位置（行情页）。
-// 个股行情库、K 线、自选股、选股、持仓、回测还在做：这些页面先显示「还在建设中」，不报错、不留空白。
+// 个股行情库、K 线、个股观察清单（选股页最上面）已经有；自选股、持仓、回测还在做：这些页面先显示「还在建设中」，不报错、不留空白。
 import { get } from './api.js';
 import { h, clear, fmtPct, fmtNum, dirClass, debounce } from './util.js';
 import { valuationBlock, valuationActs } from './marketpanel.js';
@@ -23,9 +23,9 @@ function asMarketView(v) {
 }
 
 const TODO = [
-  ['已经有', '三个指数的估值与分批建仓建议（选股页）、价格走势与均线位置（行情页）、港股个股行情库（成交额前 800 只的 10 年日线，设置 → 数据更新里初始化）和 K 线页（搜索代码 / 名称 / 拼音，看前复权 K 线和均线）、设置里的港股自动更新开关与数据状态。'],
-  ['下一步', '自选股，然后是选股扫描。港股的参数（T+0、无涨跌停、每手股数因股票而异、双边印花税）要单独校准，不会照搬 A 股 / 美股。'],
-  ['还没有', '自选股、选股扫描、持仓与止损止盈、回测。后面分几步做。'],
+  ['已经有', '三个指数的估值与分批建仓建议、价格走势与均线位置（行情页）、港股个股行情库（成交额前 800 只的 10 年日线，设置 → 数据更新里初始化）和 K 线页（搜索代码 / 名称 / 拼音）、个股观察清单（选股页最上面）、设置里的港股自动更新开关与数据状态。'],
+  ['下一步', '自选股，然后是持仓与止损止盈、回测。港股的参数（T+0、无涨跌停、每手股数因股票而异、双边印花税）要单独校准，不会照搬 A 股 / 美股。'],
+  ['还没有', '自选股、持仓与止损止盈、回测（所以观察清单现在没有历史证据，见清单上方的提示）。后面分几步做。'],
 ];
 
 function roadmap() {
@@ -47,39 +47,29 @@ function trendCard(o) {
     h('div', { class: 'tiny faint mt-s' }, `截至 ${o.asof}。均线位置只是描述现状，不是买卖信号（A 股 / 美股的均线结论没有在港股上验证过）。`));
 }
 
-export const hkView = {
-  layout: 'page',
-  async mount(ctx) {
-    const el = ctx.pageEl; clear(el);
-    const gen = ctx.gen, alive = () => ctx.gen === gen;
-    const box = h('div', {}, h('div', { class: 'card' }, h('div', { class: 'empty' }, h('span', { class: 'spinner' }), ' 加载港股指数估值（第一次要联网取历史，几秒钟）…')));
-    el.append(h('div', { class: 'pane-body page' },
-      h('div', { class: 'row between mb' }, h('h1', {}, '港股 · 市场概览'), h('span', { class: 'hint' }, '恒生指数 · 国企指数 · 恒生科技')),
-      box, roadmap()));
-    for (let k = 0; k < 12 && alive(); k++) {                          // 第一次在后台取数：每 3 秒再问一次，最多 36 秒
-      let v, o = null;
-      try {
-        [v, o] = await Promise.all([get('/market/valuation', { market: 'HK' }, { cache: false, timeout: 60000 }),
-          get('/hk/overview', { market: 'HK' }, { cache: false, timeout: 60000 }).catch(() => null)]);
-      } catch (e) { if (alive()) clear(box).append(h('div', { class: 'alert bad' }, '加载失败：' + e.message)); return; }
-      if (!alive()) return;
-      if (v.status === 'ok' && o?.status === 'loading' && k < 8) { await new Promise(r => setTimeout(r, 3000)); continue; }       // 指数日线还在后台取：再等一会儿，一起显示
-      if (v.status === 'ok') {
-        const d = asMarketView(v), acts = valuationActs(d);
-        clear(box).append(
-          h('div', { class: 'card' }, h('div', { class: 'card-title' }, h('h3', {}, '今天要做什么')),
-            acts.length ? h('div', { class: 'act-b' }, h('b', {}, '进入分批建仓区：'), acts.join('；'), '。每批之间隔两周以上，不要一次买完。')
-              : h('div', { class: 'small muted' }, '三个指数都没有进入分批建仓区（市盈率要降到离最低 10% 以内），不用做任何事。')),
-          o?.status === 'ok' ? trendCard(o) : null,
-          valuationBlock(d, { standalone: true }));
-        return;
-      }
-      if (v.status !== 'loading') { clear(box).append(h('div', { class: 'alert warn' }, v.message || '暂时取不到港股指数估值')); return; }
-      await new Promise(r => setTimeout(r, 3000));
-    }
-    if (alive()) clear(box).append(h('div', { class: 'alert warn' }, '还没取到港股指数估值（网络慢或数据源暂时不可用），稍后再点一下「港股」重试。'));
-  },
-};
+/** 港股在选股页（和 A 股同一个页面，js/screener.js）里用的「市场概览」：指数走势一览 + 指数估值与分批建仓。loadHkOverview 第一次要联网取，轮询到取完（最多约 30 秒）。 */
+export async function loadHkOverview(alive = () => true) {
+  let v = null, o = null;
+  for (let k = 0; k < 10 && alive(); k++) {
+    [v, o] = await Promise.all([get('/market/valuation', { market: 'HK' }, { cache: false, timeout: 60000 }),
+      get('/hk/overview', { market: 'HK' }, { cache: false, timeout: 60000 }).catch(() => null)]);
+    if (v.status !== 'loading' && o?.status !== 'loading') break;
+    await new Promise(r => setTimeout(r, 3000));
+  }
+  return { v, o };
+}
+
+/** 「已经进入分批建仓区」的指数（给「明天要做什么」卡用）。 */
+export const hkActs = x => (x?.v?.status === 'ok' ? valuationActs(asMarketView(x.v)) : []);
+
+export function hkBrief(x) {
+  if (!x) return h('div', { class: 'mkt-brief hint' }, h('span', { class: 'spinner' }), ' 加载港股指数…（第一次要联网取历史，几秒钟）');
+  const { v, o } = x;
+  return h('div', {},
+    o?.status === 'ok' ? trendCard(o) : null,
+    v?.status === 'ok' ? valuationBlock(asMarketView(v), { compact: true }) : h('div', { class: 'alert warn small mt-s' }, v?.message || '指数估值暂时取不到（网络慢或数据源不可用），稍后点一下「港股」重试。'),
+    roadmap());
+}
 
 /** 港股还没做的页面（K线 / 自选股 / 持仓 / 行情）：说明一下，给一个回到「选股（港股概览）」的按钮。 */
 export function hkPlaceholder(name) {
@@ -89,8 +79,8 @@ export function hkPlaceholder(name) {
       const el = ctx.pageEl; clear(el);
       el.append(h('div', { class: 'pane-body page' }, h('div', { class: 'card' }, h('div', { class: 'empty' },
         h('div', { class: 'big' }, `港股的「${NAMES[name] || name}」还在建设中`),
-        h('div', {}, '现在港股只有指数估值与分批建仓参考（在「选股」页）。个股行情库、K 线、持仓、回测要后面分几步做。'),
-        h('div', { class: 'mt' }, h('button', { class: 'btn primary', onclick: () => { location.hash = '#/screener'; } }, '去看港股指数估值'),
+        h('div', {}, '港股现在有选股（个股观察清单 + 指数估值）、K 线、行情；自选股、持仓、回测要后面分几步做。'),
+        h('div', { class: 'mt' }, h('button', { class: 'btn primary', onclick: () => { location.hash = '#/screener'; } }, '去看港股选股'),
           ' ', h('button', { class: 'btn', onclick: () => document.querySelector('[data-market="CN"]').click() }, '切回 A 股')))),
         roadmap()));
     },

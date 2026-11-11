@@ -106,8 +106,8 @@ def test_market_switch_has_three_markets_and_hk_routes_are_wired():
     html = (ROOT / "index.html").read_text(encoding="utf-8")
     assert re.findall(r'data-market="(\w+)"', html) == ["CN", "HK", "US"]
     app = (ROOT / "js" / "app.js").read_text(encoding="utf-8")
-    assert "saved === 'HK'" in app and "hkView" in app and "hkPlaceholder" in app and "state.market === 'US' ? 'green' : 'red'" in app
-    assert "state.market === 'HK' ? 'CN' : state.market" in (ROOT / "js" / "api.js").read_text(encoding="utf-8")
+    assert "saved === 'HK'" in app and "hkKlineView" in app and "hkPlaceholder" in app and "? screener : name === 'market'" in app and "state.market === 'US' ? 'green' : 'red'" in app
+    assert "state.market === 'HK' && !hkOk ? 'CN' : state.market" in (ROOT / "js" / "api.js").read_text(encoding="utf-8")      # 选股页用到的接口（清单 / K 线 / 账户）港股带 HK，其余仍按 A 股参数
     hk = (ROOT / "js" / "hk.js").read_text(encoding="utf-8")
     assert "market: 'HK'" in hk                                     # 港股自己的接口显式传 market=HK
 

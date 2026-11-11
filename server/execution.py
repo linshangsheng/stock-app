@@ -8,9 +8,21 @@ from . import settings
 TICK = 0.01
 
 
+def hk_lot(board: str | None) -> int | None:
+    """港股的「板块」写成 hk<每手股数>（如 hk400）：每手股数因股票而异（腾讯 100、汇丰 400、小米 200），查到了就带上；没查到写 hk（当 1 股算，
+    股数不取整，界面上标「每手股数没查到」）。不是港股返回 None。"""
+    if isinstance(board, str) and board.startswith("hk"):
+        n = board[2:]
+        return int(n) if n.isdigit() and int(n) > 0 else 1
+    return None
+
+
 def lot_round(board: str | None, shares: float) -> int:
-    """最小交易单位向下取整：A 股整手（100 股）；科创板 200 股起、之后按 1 股递增；美股整股（5.5.1）。"""
+    """最小交易单位向下取整：A 股整手（100 股）；科创板 200 股起、之后按 1 股递增；美股整股；港股按每手股数（5.5.1）。"""
     shares = int(math.floor(max(shares, 0)))
+    hl = hk_lot(board)
+    if hl is not None:
+        return (shares // hl) * hl
     if board == "us":
         return shares
     if board == "star":
@@ -19,12 +31,44 @@ def lot_round(board: str | None, shares: float) -> int:
 
 
 def min_lot(board: str | None) -> int:
-    return 1 if board == "us" else 200 if board == "star" else 100
+    hl = hk_lot(board)
+    return hl if hl is not None else 1 if board == "us" else 200 if board == "star" else 100
 
 
 def lot_step(board: str | None) -> int:
-    """降仓时一次减少的股数（A 股一手 / 科创板 1 股 / 美股 1 股）。"""
-    return 100 if board not in ("star", "us") else 1
+    """降仓时一次减少的股数（A 股一手 / 科创板 1 股 / 美股 1 股 / 港股一手）。"""
+    hl = hk_lot(board)
+    return hl if hl is not None else 100 if board not in ("star", "us") else 1
+
+
+# 港交所价位最小变动（按价格分档；价格 < 上限用这一档）。报价必须落在这个格子上（400 港元的股票没有 400.01 这个价）。
+# 现行（2026-08-03 起，港交所「缩减最小价位」第二阶段）：< 0.25 → 0.001；< 10 → 0.005；< 20 → 0.01；< 50 → 0.02；< 100 → 0.05；< 200 → 0.1；
+# < 500 → 0.2；< 1000 → 0.5；< 2000 → 1；< 5000 → 2；其余 5。适用于股票（ETF、债券、牛熊证等不适用）。
+# 用 2026-09 起全部股票的开高低收做过对照：1~10 港元 0.005、10~20 0.01、20~50 0.02、50~100 0.05、100~200 0.1、200~500 0.2、500~1000 0.5，和这张表一致。
+# 这张表是「现在」的：2025-08 之前 0.5~10 是 0.01、10~20 是 0.02、20~100 是 0.05，之后分两个阶段降低。只用于给「明天」的价格取整；以后做港股回测要按日期取当时的价位表。
+HK_TICKS = ((0.25, 0.001), (10.0, 0.005), (20.0, 0.01), (50.0, 0.02), (100.0, 0.05), (200.0, 0.1), (500.0, 0.2), (1000.0, 0.5), (2000.0, 1.0), (5000.0, 2.0))
+
+
+def hk_tick(price: float) -> float:
+    for upper, t in HK_TICKS:
+        if price < upper:
+            return t
+    return 5.0
+
+
+def tick(board: str | None, price: float) -> float:
+    """最小变动价位：港股看价格分档，A 股 / 美股固定 0.01。"""
+    return hk_tick(price) if hk_lot(board) is not None else TICK
+
+
+def snap(board: str | None, price: float, direction: str = "nearest") -> float:
+    """把价格落到合法价位上（direction = up / down / nearest）。A 股 / 美股就是保留 2 位小数，和以前一样。"""
+    if hk_lot(board) is None:
+        return round(price, 2)
+    t = hk_tick(price)
+    n = price / t
+    k = math.ceil(n - 1e-9) if direction == "up" else math.floor(n + 1e-9) if direction == "down" else round(n)
+    return round(k * t, 4)
 
 
 def trade_fees(side: str, price: float, qty: int, costs: dict | None = None, market: str = "CN") -> float:
@@ -33,6 +77,11 @@ def trade_fees(side: str, price: float, qty: int, costs: dict | None = None, mar
     美股：佣金（按股，默认零佣金）+ 卖出的 SEC 规费（按成交额）与 FINRA TAF（按股数、单笔封顶）。"""
     sell = side.lower() in ("sell", "s")
     notional = price * qty
+    if market == "HK":
+        c = costs or settings.cfg()["costs"]["hk"]
+        fee = max(notional * c["commission_rate"], c["commission_min"]) + notional * c["stamp_duty"]                      # 佣金（含最低）+ 印花税（买卖双向）
+        fee += notional * (c["trading_fee"] + c["sfc_levy"] + c["frc_levy"])                                                  # 交易费 + 证监会征费 + 财汇局征费
+        return fee + min(max(notional * c["settlement_rate"], c["settlement_min"]), c["settlement_max"])                      # 结算费（有最低和封顶）
     if market == "US":
         c = costs or settings.cfg()["costs"]["us"]
         fee = c.get("commission_per_share", 0.0) * qty

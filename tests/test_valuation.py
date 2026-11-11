@@ -284,8 +284,9 @@ def test_hk_api_and_unfinished_pages_still_reject_hk(demo_env, monkeypatch):
     d = cl.get("/api/market/valuation", params={"market": "HK"}).json()
     assert d["market"] == "HK" and d["status"] == "ok" and [i["symbol"] for i in d["items"]] == ["HK.HSI", "HK.HSCEI", "HK.HSTECH"]
     assert d["items"][2]["window_text"] != "近 10 年"                                           # 恒生科技只有约 6 年
-    assert cl.get("/api/market/view", params={"market": "HK"}).status_code == 400              # 港股的行情库 / 选股还没做：其余接口不接受 HK，不会 500
-    assert cl.get("/api/scan", params={"market": "HK"}).status_code == 400
+    assert cl.get("/api/market/view", params={"market": "HK"}).status_code == 400              # 其余接口不接受 HK，不会 500
+    assert cl.get("/api/watchlist", params={"market": "HK"}).status_code == 400               # 自选 / 持仓 / 回测还没做（清单、K 线、账户资金已经认港股，见 tests/test_hk_scan.py）
+    assert cl.get("/api/scan", params={"market": "HK"}).status_code == 200
 
 
 def test_missing_index_in_store_counts_as_stale_so_new_indices_get_fetched(demo_env, monkeypatch):

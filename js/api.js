@@ -18,8 +18,11 @@ function qs(params = {}) {
   return s ? '?' + s : '';
 }
 
+const HK_PATHS = /^\/(scan|kline|account)(\/|$)/;
+
 export async function api(path, { method = 'GET', body, params = {}, timeout = 60000, market = true, cache = true } = {}) {
-  const p = { ...(market ? { market: state.market === 'HK' ? 'CN' : state.market } : {}), ...params };      // 港股的个股库还没做：其余接口先按 A 股参数请求（设置页等），港股自己的接口显式传 market=HK
+  const hkOk = HK_PATHS.test(path);                                                      // 港股：选股页用到的接口（清单 / K 线 / 账户资金）认 HK；其余（设置页等）先按 A 股参数请求，港股自己的接口显式传 market=HK
+  const p = { ...(market ? { market: state.market === 'HK' && !hkOk ? 'CN' : state.market } : {}), ...params };
   const url = '/api' + path + qs(p);
   const headers = { 'Content-Type': 'application/json' };
   const ctrl = new AbortController();

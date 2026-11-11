@@ -7,7 +7,7 @@
   * 每手股数：东方财富个股详情的 f602（腾讯 100、汇丰 400、小米 200、中国平安 500，抽查 8 只与已知一致）。这个接口一次只能查一只，
     而且慢（实测每只约 6 秒），所以只在需要时（看某只股票时）查一次并缓存，不对整个名单批量查。
 存储：hk.db 的 securities / daily_bar / fetch_state / meta（与 A 股、美股库同一套表）。symbol = hk.00700（5 位代码）。
-这一步只有「行情库 + K 线」：选股扫描、持仓、回测还没做（港股 T+0、无涨跌停、每手股数因股票而异、双边印花税，参数要单独校准）。"""
+这个模块是「行情库 + K 线 + 每手股数」；选股在 server/hk_scan.py；持仓、回测还没做（港股 T+0、无涨跌停、每手股数因股票而异、双边印花税，参数要单独校准）。"""
 from __future__ import annotations
 
 import json
@@ -49,11 +49,11 @@ def yahoo_ticker(symbol: str) -> str:
 
 # ---- 名单 ----------------------------------------------------------------------------------------
 
-def _get_json(path: str, params: dict, timeout: float = 40) -> dict:
+def _get_json(path: str, params: dict, timeout: float = 40, tries: int = 2) -> dict:
     import requests
     last = None
     for host in HOSTS:
-        for _ in range(2):
+        for _ in range(tries):
             try:
                 r = requests.get(f"https://{host}{path}", params=params, headers=UA, timeout=timeout)
                 r.raise_for_status()
@@ -296,19 +296,20 @@ def _lots(conn) -> dict:
         return {}
 
 
-def _fetch_lot(code5: str) -> int | None:
-    d = _get_json("/api/qt/stock/get", {"secid": "116." + code5, "fields": "f57,f602"}, timeout=40)
+def _fetch_lot(code5: str, timeout: float = 40, tries: int = 2) -> int | None:
+    d = _get_json("/api/qt/stock/get", {"secid": "116." + code5, "fields": "f57,f602"}, timeout=timeout, tries=tries)
     v = d.get("f602")
     return int(v) if isinstance(v, (int, float, str)) and str(v).isdigit() and int(v) > 0 else None
 
 
-def lot_size(conn, symbol: str) -> dict:
-    """每手股数：先看缓存，没有就联网查一次（慢，约几秒）并存下来。查不到返回 lot=None（不猜）。"""
+def lot_size(conn, symbol: str, fast: bool = False) -> dict:
+    """每手股数：先看缓存，没有就联网查一次（慢，约几秒）并存下来。查不到返回 lot=None（不猜）。
+    fast = 扫描时用：超时 8 秒、每个节点只试一次，数据源被限流时快速放弃。"""
     cache = _lots(conn)
     if symbol in cache:
         return {"symbol": symbol, "lot": cache[symbol], "cached": True}
     try:
-        lot = _fetch_lot(code_of(symbol))
+        lot = _fetch_lot(code_of(symbol), timeout=8, tries=1) if fast else _fetch_lot(code_of(symbol))
     except Exception as e:  # noqa: BLE001
         return {"symbol": symbol, "lot": None, "error": str(e)[:120]}
     if lot:

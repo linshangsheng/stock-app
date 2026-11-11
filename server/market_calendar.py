@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 MARKETS = {
     "CN": {"tz": "Asia/Shanghai", "close": time(15, 0)},
     "US": {"tz": "America/New_York", "close": time(16, 0), "half_close": time(13, 0)},
+    "HK": {"tz": "Asia/Hong_Kong", "close": time(16, 10), "half_close": time(12, 10)},       # 港股 16:00 收盘、之后到 16:10 是收市竞价；半日市（农历新年前 / 平安夜）12:00 收盘
 }
 
 
@@ -67,7 +68,7 @@ def market_closed_at(conn, market: str, d: str, now: datetime | None = None) -> 
     """交易日 d 在 now 时刻（按市场时区）是否已收盘。"""
     n = now_in_market(market, now)
     cfg = MARKETS[market]
-    close_t = cfg.get("half_close", cfg["close"]) if (market == "US" and is_half_day(conn, d)) else cfg["close"]
+    close_t = cfg.get("half_close", cfg["close"]) if (market in ("US", "HK") and is_half_day(conn, d)) else cfg["close"]
     close_dt = datetime.combine(date.fromisoformat(d), close_t, tzinfo=n.tzinfo)
     return n >= close_dt
 

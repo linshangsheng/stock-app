@@ -54,6 +54,14 @@ def _hk_ok(m: str) -> str:
     return _market(m)
 
 
+def _scan_ok(m: str) -> str:
+    """选股页用到的接口（观察清单 / K 线 / 账户资金）：A 股、美股、港股都认，并把它设为本次请求的配置上下文。其余接口仍然只认 CN / US（港股的自选、持仓、回测还在做）。"""
+    if (m or "").upper() == "HK":
+        settings.set_market("HK")
+        return "HK"
+    return _need_cn(m)
+
+
 def _need_cn(m: str) -> str:
     """校验 market 并把它设为本次请求的配置上下文（A股 / 美股参数各自独立，2.1）。名称沿用历史，现已支持 CN / US。"""
     m = _market(m)
@@ -397,7 +405,7 @@ def _single_features(conn, symbol: str, start: str | None = None):
 def kline(symbol: str, market: str = "CN", period: str = "D", adj: str = "qfq", limit: int = 750,
           overlays: str = "ma,macd,rsi"):
     """K 线 + 叠加物：均线、MACD / RSI、本次观察清单的触发价与止损位、持仓成本与止损线、信号与买卖点、财报日。"""
-    market = _need_cn(market)
+    market = _scan_ok(market)
     with db.market_db(market) as c:
         panel, feat = _single_features(c, symbol)
         if panel is None:
@@ -555,7 +563,7 @@ def analysis_get(market: str = "CN"):
 
 # ---- 选股 ---------------------------------------------------------------------
 
-BENCH_NAMES = {"sh.000300": "沪深300", "SPY": "标普500（SPY）"}
+BENCH_NAMES = {"sh.000300": "沪深300", "SPY": "标普500（SPY）", "HK.HSI": "恒生指数"}
 
 
 def regime_reason(reg: dict, market: str) -> dict:
@@ -564,7 +572,7 @@ def regime_reason(reg: dict, market: str) -> dict:
     rc = settings.cfg()["regime"]
     bench = BENCH_NAMES.get(rc["benchmark"], rc["benchmark"])
     d = (reg or {}).get("detail") or {}
-    out = {"market_name": "A股" if market == "CN" else "美股", "benchmark_name": bench}
+    out = {"market_name": {"CN": "A股", "HK": "港股"}.get(market, "美股"), "benchmark_name": bench}
     if d.get("bench_close") is None or d.get("bench_ma50") is None or d.get("breadth_ma50") is None:
         return {**out, "reason": f"{bench} 数据缺失，按谨慎处理"}
     c, m50, m200, br = d["bench_close"], d["bench_ma50"], d.get("bench_ma200"), d["breadth_ma50"]
@@ -624,13 +632,18 @@ def _attach_plan(cd: dict, market: str, acct: dict | None = None) -> dict:
     cd["take_profit_pct"], cd["take_profit"] = tp_pct, (round(ref * (1 + tp_pct), 2) if tp_pct and ref else None)
     cd["open_plan"] = selection.open_plan(ref, cd.get("stop_price"), cd.get("board"), cd["op"], market)
     cd["account"] = {k: acct.get(k) for k in ("equity", "risk_per_trade")}
+    if market == "HK":                                          # 港股每手股数因股票而异：查到的（板块 hk400）给出每手股数和一手约多少钱，没查到的是 None
+        from . import hk_scan
+        cd["lot"] = hk_scan.lot_of(cd.get("board"))
+        cd["lot_cost"] = round(cd["lot"] * ref, 2) if cd["lot"] and ref else None
+        cd["take_profit_pct"], cd["take_profit"] = 0, None         # 止盈比例是 A 股回测里的参考位；港股没有回测，不给
     return cd
 
 
 @app.get("/api/scan")
 def scan_get(market: str = "CN", date: str | None = None, run_id: str | None = None, preview: bool = False):
     """读取已存档的观察清单（不重算）。闸门 INCOMPLETE 时不展示清单，仅给原因；preview=1 时即时计算「仅供参考」版本。"""
-    market = _need_cn(market)
+    market = _scan_ok(market)
     with db.market_db(market) as c:
         if run_id:
             rid = run_id
@@ -667,11 +680,15 @@ def scan_get(market: str = "CN", date: str | None = None, run_id: str | None = N
 
 @app.post("/api/scan/run")
 def scan_run(market: str = "CN", date: str | None = None):
-    market = _need_cn(market)
-    res = scanner.run_scan(market, scan_date=date)
+    market = _scan_ok(market)
+    if market == "HK":                                        # 港股：先校准交易日历、选出最新数据日、给候选查每手股数（server/hk_scan.py）
+        from . import hk_scan
+        res = hk_scan.run(scan_date=date)
+    else:
+        res = scanner.run_scan(market, scan_date=date)
     if res.get("error"):
         raise HTTPException(409, res["message"])
-    if res.get("official"):
+    if res.get("official") and market != "HK":
         portfolio.health(market, res["scan_date"])
     return _wrap(market, run={k: v for k, v in res.items() if k != "candidates"}, candidates=res["candidates"])
 
@@ -679,7 +696,7 @@ def scan_run(market: str = "CN", date: str | None = None):
 @app.get("/api/scan/history")
 def scan_history(market: str = "CN", limit: int = 60):
     """历史扫描回看：按日期查看当时存档的清单（scan_results）及其后续收益（T+1/3/5/10/20），评估选股器命中率。"""
-    market = _need_cn(market)
+    market = _scan_ok(market)
     with db.market_db(market) as c:
         runs = db.rows(c.execute("SELECT run_id, scan_date, data_gate_status, regime, n_candidates, official FROM scan_runs "
                                  "WHERE market=? ORDER BY scan_date DESC, finished_at DESC, rowid DESC LIMIT ?", (market, limit)))
@@ -894,12 +911,13 @@ def kline_list_put(body: dict = Body(...), market: str = "CN"):
 
 @app.get("/api/account")
 def account_get(market: str = "CN"):
-    return _wrap(_need_cn(market), account=portfolio.get_account(market))
+    market = _scan_ok(market)
+    return _wrap(market, account=portfolio.get_account(market))
 
 
 @app.put("/api/account")
 def account_put(body: dict = Body(...), market: str = "CN"):
-    market = _need_cn(market)
+    market = _scan_ok(market)
     return _wrap(market, account=portfolio.set_account(market, body.get("equity"), body.get("cash"), body.get("risk_per_trade")))
 
 
@@ -1763,6 +1781,14 @@ def _prewarm():
                 key_ma.build(market="US")
         except Exception:  # noqa: BLE001 - 预热失败不影响服务，按需时再算
             log.exception("prewarm %s failed", m)
+    try:                                                   # 港股观察清单：参数变了（升级后）也按新参数重扫当天的那份
+        from . import hk_stocks
+        with settings.market_ctx("HK"), db.market_db("HK") as c:
+            ready = hk_stocks.library_ready(c)
+        if ready and scanner.rescan_if_config_changed("HK"):
+            log.info("rescanned HK with current config")
+    except Exception:  # noqa: BLE001
+        log.exception("prewarm HK failed")
 
 
 def _is_ours(port: int) -> bool:

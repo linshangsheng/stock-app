@@ -45,6 +45,7 @@ export async function showDetail(ctx, symbol, meta = {}) {
   const chg = prev ? last.close - prev.close : null, pct = prev ? last.close / prev.close - 1 : null;
   const watched = ctx.watchSet.has(symbol);
   const lv = k.levels || {};
+  const HK = state.market === 'HK';          // 港股：自选股、预警、持仓、财务、资金流还没做，对应的按钮和卡片不显示
 
   const head = h('div', { class: 'quote-head' },
     h('div', {},
@@ -57,7 +58,7 @@ export async function showDetail(ctx, symbol, meta = {}) {
       h('div', { class: 'small muted num mt-s' },
         `${k.asof_bar} 收盘　今开 ${fmtPrice(last.open)}　最高 ${fmtPrice(last.high)}　最低 ${fmtPrice(last.low)}　成交额 ${fmtAmount(last.amount)}`,
         k._stale ? h('span', { class: 'badge warn', style: 'margin-left:8px' }, '数据延迟（离线快照）') : null)),
-    h('div', { class: 'row wrap' },
+    HK ? null : h('div', { class: 'row wrap' },
       h('button', { class: 'btn', onclick: async () => {
         await put('/watchlist', watched ? { remove: [symbol] } : { add: [{ symbol }] });
         await ctx.reloadWatch(); toast(watched ? '已移出自选' : '已加入自选', 'ok'); showDetail(ctx, symbol, meta); ctx.refreshList?.();
@@ -112,8 +113,8 @@ export async function showDetail(ctx, symbol, meta = {}) {
     ksView?.destroy();
     ksView = keystatsCard(symbol);
     finBox.append(ksView.el);
-  } else renderFin(finBox, symbol);
-  renderFlow(flowBox, symbol);
+  } else if (!HK) renderFin(finBox, symbol);
+  if (!HK) renderFlow(flowBox, symbol);
   destroyDetail();
   chart = new StockChart(mainEl, subEl);
   chart.subKind = kind0;

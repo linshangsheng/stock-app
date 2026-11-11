@@ -24,7 +24,7 @@ def rows(n, start=700, amount0=9e9):
 
 
 def fake_json(total=250, lots=None, fail_page=None, calls=None):
-    def get(path, params, timeout=40):
+    def get(path, params, timeout=40, tries=2):
         if calls is not None:
             calls.append((path, dict(params)))
         if path.endswith("/clist/get"):
@@ -241,14 +241,16 @@ def test_auto_refresh_also_updates_stocks_only_when_library_is_ready(loaded, mon
     from server import valuation
     monkeypatch.setattr(hk, "_get", lambda params, timeout=25: {"klines": []})
     monkeypatch.setattr(valuation, "refresh", lambda conn, market="CN": {"ok": True, "errors": []})
-    seen = []
+    seen, scans = [], []
     monkeypatch.setattr(hk_stocks, "update_daily", lambda conn, **k: seen.append(1) or {"ok": 3, "empty": 0, "failed": []})
+    from server import hk_scan
+    monkeypatch.setattr(hk_scan, "run", lambda *a, **k: scans.append(1) or {"scan_date": "2026-11-06", "official": True, "candidates": []})
     with db.market_db("HK") as c:
         hk.refresh_all(c, "manual")
-        assert seen == []                                                                # 手动「立即更新」：只更新指数和估值
+        assert seen == [] and scans == []                                                # 手动「立即更新」：只更新指数和估值
         info = hk.refresh_all(c, "auto")
-        assert seen == [1] and info["stocks"] == {"ok": 3, "empty": 0}                    # 自动更新：个股日线一起增量
+        assert seen == [1] and info["stocks"] == {"ok": 3, "empty": 0} and scans == [1]  # 自动更新：个股日线一起增量，接着出今天的观察清单
         c.execute("DELETE FROM daily_bar")
         c.commit()
         hk.refresh_all(c, "auto")
-        assert seen == [1]                                                                # 行情库还没初始化：不会自己去下 10 年日线
+        assert seen == [1] and scans == [1]                                               # 行情库还没初始化：不会自己去下 10 年日线，也不扫描

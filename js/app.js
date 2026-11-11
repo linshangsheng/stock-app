@@ -12,7 +12,7 @@ import { portfolio } from './portfolio.js';
 import { settingsView } from './settings.js';
 import { marketView } from './market.js';
 import { klineView } from './kline.js';
-import { hkView, hkMarketView, hkKlineView, hkPlaceholder } from './hk.js';
+import { hkMarketView, hkKlineView, hkPlaceholder } from './hk.js';
 import { showDetail } from './detail.js';
 import { ensureLogin, loginScreen, forcePasswordScreen, loginShowing } from './auth.js';
 import './install.js';                                 // 越早 import 越好：要在浏览器发出「可以安装」事件之前就开始监听
@@ -66,7 +66,7 @@ async function route() {
   if (name === 'news') { ctx.openTab = 'news'; location.replace('#/screener'); return; }       // 资讯已并入「选股」页的一个标签：旧链接 / 书签跳过去
   if (name === 'backtest') { location.replace('#/market/backtest' + (parts[1] === 'score' ? '/score' : '')); return; }   // 回测已并入「行情」页的「回测与验证」标签：旧链接 / 书签跳过去
   const deepSymbol = parts[1] ? decodeURIComponent(parts[1]) : null;      // #/screener/sh.600519：从行情 / 资讯页点进个股详情
-  const view = state.market === 'HK' ? (name === 'settings' ? VIEWS.settings : (name === 'screener' || !VIEWS[name]) ? hkView : name === 'market' ? hkMarketView : name === 'kline' ? hkKlineView : hkPlaceholder(name)) : (VIEWS[name] || VIEWS.screener);   // 港股：设置通用；选股页 = 港股指数估值；其余页面还在建设中
+  const view = state.market === 'HK' ? (name === 'settings' ? VIEWS.settings : (name === 'screener' || !VIEWS[name]) ? screener : name === 'market' ? hkMarketView : name === 'kline' ? hkKlineView : hkPlaceholder(name)) : (VIEWS[name] || VIEWS.screener);   // 港股：设置通用；选股页和 A 股是同一个页面（js/screener.js 里按市场区分）；其余页面还在建设中
   ctx.gen = (ctx.gen || 0) + 1;              // 每次进入页面（含切换 A股 / 美股）加一：旧页面迟到的数据不能再画到新页面上
   current?.cleanup?.();
   ctx.cleanup?.(); ctx.cleanup = null;

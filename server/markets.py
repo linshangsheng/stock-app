@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from . import settings
 
-CN, US = "CN", "US"
+CN, US, HK = "CN", "US", "HK"
 
 
 def key(market: str) -> str:
@@ -25,11 +25,13 @@ def t_plus_1(market: str) -> bool:
 
 def gate_benchmarks(market: str) -> list[str]:
     g = settings.cfg()["gate"]
-    return g["benchmark_symbols_cn"] if market == CN else g["benchmark_symbols_us"]
+    return g["benchmark_symbols_cn"] if market == CN else g["benchmark_symbols_hk"] if market == HK else g["benchmark_symbols_us"]
 
 
 def aux_indices(market: str) -> list[str]:
     """辅助序列（不参与闸门）：美股行业 ETF；指数择时用到、但不在闸门基准里的宽基指数（如上证 50）。"""
+    if market == HK:
+        return []
     extra = settings.cfg()["gate"].get("sector_etfs_us", []) if market == US else []
     mv = settings.cfg().get("market_view", {}).get("indices_us" if market == US else "indices_cn", [])
     bench = set(gate_benchmarks(market))
@@ -50,7 +52,7 @@ def board_of(symbol: str, market: str) -> str | None:
     if market == CN:
         from .datasource_cn import board_of as cn_board
         return cn_board(symbol)
-    return "us"
+    return "hk" if market == HK else "us"
 
 
 def source_kind(market: str) -> str:

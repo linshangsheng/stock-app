@@ -326,7 +326,10 @@ def _run_scan(market: str, scan_date: str | None, persist: bool, include_preview
         gate = quality.check_gate(conn, market, day)
         latest = db.get_meta(conn, "data_asof") or mc.last_closed_trading_day(conn, market)
         with _shared_lock:                                    # 总是用最新数据、最新参数重新构建（行为不变）；最新交易日的这份顺手交给缓存，页面接口直接用，省一次 40 秒的构建
-            ctx = _build_and_store(conn, day, market, store=(day == latest))
+            if market == "HK":                                # 港股面板很小（约 800 只）：自己建、不动共用缓存槽（槽里是 A 股 / 美股页面在用的大面板，被顶掉要重建 40 秒）
+                ctx = build_context(conn, day, market)
+            else:
+                ctx = _build_and_store(conn, day, market, store=(day == latest))
         panel, feat, l2 = ctx["panel"], ctx["feat"], ctx["l2"]
         if day not in panel.dates:
             return {"error": "no_bar", "message": f"{day} 无行情数据"}
@@ -354,7 +357,9 @@ def _run_scan(market: str, scan_date: str | None, persist: bool, include_preview
         excl = {"held": 0, "earnings": 0, "limit_up": 0, "anomaly": 0}
         syms = [s for s in sig_today.index[sig_today.to_numpy()]]
         earn_info = {"checked": 0, "failed": 0}
-        if fun["risk_exclusion"]["hard"] and syms:                 # 财报日历只对「漏斗候选」按需拉取（3.17）
+        if market == "HK":                                         # 港股没有财报日历数据源：不做「财报前后回避」，界面上标明
+            pass
+        elif fun["risk_exclusion"]["hard"] and syms:               # 财报日历只对「漏斗候选」按需拉取（3.17）
             earn_info = _ensure_earnings_safe(conn, syms, market)
             earn = _earnings_blocked(conn, day, fun["risk_exclusion"]["earnings_window_days"],
                                      fun["risk_exclusion"].get("projection_margin_days", 0))
@@ -399,10 +404,13 @@ def _run_scan(market: str, scan_date: str | None, persist: bool, include_preview
                    "excluded": excl, "n_after_exclusion": len(keep), "regime": regime,
                    "l2_exclusions": universe.l2_exclusion_stats(ctx["cond"]),
                    "by_setup": {n: int(sigs[n].loc[last].sum()) for n in names_en},
-                   "earnings_data": earn_info["failed"] == 0 and (earn_info["checked"] > 0 or not syms),
+                   "earnings_data": market != "HK" and earn_info["failed"] == 0 and (earn_info["checked"] > 0 or not syms),
                    "earnings_failed": earn_info["failed"]}
+        if market == "HK":
+            summary["earnings_skipped"] = True                     # 港股没有财报日历：没有排除「马上要发财报」的股票
 
-        summary["panic"] = _panic_list(conn, market, last, ctx, held, unfill)
+        summary["panic"] = ({"active": False, "rows": [], "total": 0, "unsupported": True} if market == "HK"       # 港股的恐慌日规则没有研究过
+                            else _panic_list(conn, market, last, ctx, held, unfill))
 
         # ② 市场环境闸门（硬）
         port_factor, new_allowed = 1.0, True
@@ -414,6 +422,9 @@ def _run_scan(market: str, scan_date: str | None, persist: bool, include_preview
         if len(cand):
             cand = cand.sort_values(["score", "atr_pct", "adv20"], ascending=[False, True, False], na_position="last") \
                 .reset_index(drop=True)
+            if market == "HK":                                     # 每手股数因股票而异：把查到的写进「板块」（hk400），没查到的是 hk
+                from . import hk_scan
+                cand = hk_scan.attach_lots(conn, cand)
             if new_allowed:
                 results = select_and_size(cand, market, port_factor, regime, day, ctx["boards"])
             else:

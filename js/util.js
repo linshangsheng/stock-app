@@ -38,7 +38,7 @@ export const isNum = v => typeof v === 'number' && Number.isFinite(v);
 export function fmtNum(v, d = 2) {
   return isNum(v) ? v.toLocaleString('zh-CN', { minimumFractionDigits: d, maximumFractionDigits: d }) : '—';
 }
-export function fmtPrice(v) { return isNum(v) ? v.toFixed(2) : '—'; }
+export function fmtPrice(v) { return isNum(v) ? v.toFixed(_market === 'HK' && v < 10 ? 3 : 2) : '—'; }      // 港股 10 港元以下的最小价位是 0.005，要显示 3 位小数
 /** 涨跌幅 / 比例：强制带符号。v 为小数（0.0123 -> +1.23%） */
 export function fmtPct(v, d = 2, signed = true) {
   if (!isNum(v)) return '—';

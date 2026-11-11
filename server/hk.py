@@ -145,6 +145,19 @@ def refresh_all(conn, source: str = "manual") -> dict:
                 "errors": errors, "rows": idx["rows"], "index_sources": idx["sources"], "stocks": ({k: v for k, v in stocks.items() if k != "failed"} if stocks else None)}
         db.set_meta(conn, META, json.dumps(info, ensure_ascii=False))
         conn.commit()
+        if stocks is not None:                                         # 个股日线更新完，接着出今天的观察清单（放在提交之后：扫描自己另开连接写库）
+            from . import hk_scan
+            try:
+                scan = hk_scan.run()
+                scan_err = scan["message"] if scan.get("error") else None
+            except Exception as e:  # noqa: BLE001 - 扫描出错不能让更新记录丢掉
+                log.exception("hk scan failed")
+                scan_err = f"{type(e).__name__}: {str(e)[:100]}"
+            if scan_err:
+                info["errors"].append(f"港股选股：{scan_err}")
+                info["ok"] = False                                     # 没出清单：算今天还没做完，3 小时后自动重试
+                db.set_meta(conn, META, json.dumps(info, ensure_ascii=False))
+                conn.commit()
         return info
 
 

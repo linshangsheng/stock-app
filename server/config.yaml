@@ -71,6 +71,20 @@ universe:
       exclude_st: false
     index_members_only: true        # 美股观察清单只在标普500 ∪ 纳斯达克100 的成分股里选（约 520 只，两个指数重叠很多）；false = 全部约 1900 只。
                                     # 只影响扫描 / 观察清单：回测不用（只有当前成分、没有历史进出记录，回测里用会偏乐观）
+  hk:
+    # 港股（hk_stocks.py：成交额前 800 只）。阈值是按港股成交额 / 价位的量级设的初值，没有像 A 股那样回测校准过（港股还没有回测）。
+    l1:
+      min_list_days: 120
+      min_price: 0.5
+      min_float_mktcap: 0
+      min_avg_amount20: 0
+    l2:
+      min_list_days: 250
+      min_price: 1.0                # 港元，不复权收盘价；低于 1 港元的「仙股」最小变动价位占股价 1% 以上，一跳就是一大截，不选
+      min_avg_amount20: 20000000    # 2000 万港元（约 250 万美元），逐日；成交额前 800 名里靠后的达不到
+      max_suspend_60d: 3            # 近 60 日停牌天数上限
+      max_oneword_20d: 99           # 港股没有涨跌停：该项不起作用
+      exclude_st: false
 
 # 3.25.1 数据完整性闸门
 gate:
@@ -80,6 +94,7 @@ gate:
   snapshot_recon_tol: 0.005
   benchmark_symbols_cn: ["sh.000300", "sh.000001", "sz.399001", "sz.399006", "sh.000905", "sh.000852"]
   benchmark_symbols_us: ["SPY", "QQQ", "IWM", "DIA", "^GSPC", "^IXIC", "^VIX"]
+  benchmark_symbols_hk: ["HK.HSI", "HK.HSCEI"]     # 恒生指数 / 国企指数（恒生科技 2020-07 才有，不放进闸门）
   sector_etfs_us: ["XLK", "XLF", "XLV", "XLY", "XLP", "XLE", "XLI", "XLU", "XLB", "XLRE", "XLC"]   # 行业 ETF：辅助基准 / 校验（3.14），不参与完整性闸门
 
 # 市场温度与指数 / ETF 择时（market_view.py）。默认值按 A 股 2016~2026 日线校准：前 60% 样本内选参、后 40% 样本外检验
@@ -301,6 +316,16 @@ costs:
     sec_fee_sell: 0.0000278         # SEC 规费（卖出，按成交额；费率每年调整，以 SEC 公布为准）
     finra_taf_per_share: 0.000166   # FINRA TAF（卖出，按股数，单笔封顶 8.3 美元）
     finra_taf_cap: 8.30
+  hk:                               # 港股费用（还没有回测用到它，只在 execution.trade_fees 里备好）。按已知的港交所收费标准设置，没有联网核实，上线前请对一下
+    commission_rate: 0.0003         # 佣金 0.03%（各券商不同，很多有最低收费）
+    commission_min: 3.0             # 港元
+    stamp_duty: 0.001               # 印花税 0.1%，买卖双向（A 股只有卖出收）
+    trading_fee: 0.0000565          # 交易费 0.00565%
+    sfc_levy: 0.000027              # 证监会交易征费 0.0027%
+    frc_levy: 0.0000015             # 财汇局交易征费 0.00015%
+    settlement_rate: 0.00002        # 中央结算系统费 0.002%
+    settlement_min: 2.0
+    settlement_max: 100.0
 
 # A 股涨跌幅规则表（带生效日期；按现行规则核实后维护，5.5.1 / 6.4）
 limit_rules:
@@ -358,3 +383,9 @@ markets:
     portfolio: {initial_equity: 100000}
     jobs: {data_ready_after_close_minutes: 30}
     features: {rps_min_sample: 300}
+  HK:                                # 港股：T+0、没有涨跌停、每手股数因股票而异（参数没有像 A 股那样回测校准，沿用的是通用默认值，见 README）
+    regime: {benchmark: "HK.HSI"}
+    execution: {slippage: 0.001, lot_size: 1}
+    portfolio: {initial_equity: 1000000}
+    jobs: {data_ready_after_close_minutes: 45}
+    features: {rps_min_sample: 200}  # 池子比 A 股小（合格股票约 400~500 只）：RPS 要求的当日样本数降一点

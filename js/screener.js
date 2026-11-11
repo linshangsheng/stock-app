@@ -11,6 +11,7 @@ import { loadFactorPlan, factorTab, factorLine, factorEvidenceBlock } from './fa
 import { loadKeyMa, keyMaBrief } from './keyma.js';
 import { loadVix, vixBrief } from './vix.js';
 import { newsTab, newsRight } from './news.js';
+import { loadHkOverview, hkBrief, hkActs } from './hk.js';
 
 const REGIME = { NORMAL: ['正常', '正常开仓'], CAUTION: ['谨慎', '仓位上限减半，只做最强候选'], DEFENSIVE: ['防守', '不开新仓'], UNKNOWN: ['未知', '基准数据缺失，按谨慎处理'] };
 const SETUP_ORDER = ['oversold', 'vcp', 'breakout', 'pullback'];
@@ -19,6 +20,8 @@ const SETUP_LABEL = { breakout: '突破', pullback: '回踩', vcp: '波动收缩
 export const screener = {
   layout: 'split',
   async mount(ctx) {
+    const HK = state.market === 'HK';      // 港股和 A 股 / 美股是同一个页面（左边清单、右边概览 / 个股详情），只是港股没有的东西不显示、港股特有的东西加上
+    const cur = HK ? '港元' : state.market === 'US' ? '美元' : '元';
     const S = { tab: ctx.openTab || 'list', data: null, preview: false, sel: null };      // ctx.openTab：从别处（如旧的 #/news 链接）指定要打开的标签
     ctx.openTab = null;      // 默认先看「个股观察」（A 股美股一样）：这样右侧一直是「市场概览」，不会一打开就被低风险组合的回测证据顶掉
     const el = ctx.listEl;
@@ -34,9 +37,10 @@ export const screener = {
       try {
         [d, jobs, health] = await Promise.all([
           get('/scan', preview ? { preview: 1 } : {}),
-          get('/jobs').catch(() => null),
-          get('/portfolio/health').catch(() => null),
+          HK ? null : get('/jobs').catch(() => null),
+          HK ? null : get('/portfolio/health').catch(() => null),
         ]);
+        if (HK) S.hkst = await get('/hk/stocks/status', { market: 'HK' }, { cache: false }).catch(() => null);
       } catch (e) { if (!alive()) return; clear(el); el.append(h('div', { class: 'empty' }, h('div', { class: 'big' }, '无法加载'), e.message)); return; }
       if (!alive()) return;
       S.data = d; S.jobs = jobs; S.health = health;
@@ -64,6 +68,7 @@ export const screener = {
     // 长线趋势（关键均线）摘要：单独加载一次
     const kmSlot = h('div', {});
     (async () => {
+      if (HK) return;
       try { S.km = await loadKeyMa(); } catch { S.km = null; }
       if (!alive()) return;
       const b = keyMaBrief(S.km);
@@ -80,7 +85,7 @@ export const screener = {
       clear(ctx.detailEl);
       ctx.detailEl.append(h('div', { class: 'pane-body overview' },
         h('div', { class: 'row between mb' }, h('h2', {}, '市场概览'), h('a', { href: '#/market', class: 'small' }, '完整版（行情页）→')),
-        S.mv ? marketBrief(S.mv) : h('div', { class: 'empty' }, h('span', { class: 'spinner' }), ' 加载市场温度…'),
+        HK ? hkBrief(S.hk) : S.mv ? marketBrief(S.mv) : h('div', { class: 'empty' }, h('span', { class: 'spinner' }), ' 加载市场温度…'),
         S.mv?.portfolio?.health ? h('div', { class: 'alert small mt ' + ({ 警告: 'bad', 注意: 'warn' }[S.mv.portfolio.health.status] || 'ok') },
           h('b', {}, `ETF 规则健康度：${S.mv.portfolio.health.status}。`), S.mv.portfolio.health.text,
           `（当前回撤 ${fmtPct(S.mv.portfolio.health.current_dd, 1)}，10 年最大 ${fmtPct(S.mv.portfolio.health.max_dd, 1)}）`, ' ',
@@ -120,6 +125,14 @@ export const screener = {
     };
     ctx.showOverview = showRight;
     (async () => {
+      if (HK) {                                              // 港股：市场概览 = 指数走势一览 + 指数估值（没有「市场温度」「宽基 ETF 规则」）
+        try { S.hk = await loadHkOverview(alive); } catch (e) { S.hk = { v: { status: 'error', message: e.message }, o: null }; }
+        if (!alive()) return;
+        clear(brief); brief.append(hkBrief(S.hk));
+        if (S.data) render();
+        if (!ctx.currentSymbol) showRight();
+        return;
+      }
       try { S.mv = await loadMarketView(); } catch (e) { S.mv = { status: 'error', message: e.message }; }
       if (!alive()) return;
       clear(brief); brief.append(marketBrief(S.mv));
@@ -128,7 +141,26 @@ export const screener = {
     })();
 
     /** 「明天要做什么」：把宽基 ETF、个股、持仓三件事汇总成一张卡（数据都来自后端，前端只汇总展示）。 */
+    /** 港股版：没有宽基 ETF 规则 / 低风险组合 / 持仓；只有「指数估值分批建仓」和「个股观察」。 */
+    function actionCardHK(d) {
+      const run = d.run;
+      const day = run?.valid_until ? shortDate(run.valid_until) : '下一交易日';
+      const acts = hkActs(S.hk);
+      const buys = (d.candidates || []).filter(c => c.fit !== false && run?.official && !run?.is_stale);
+      const line = (icon, title, body, onclick) => h('div', { class: 'act-line' + (onclick ? ' link' : ''), onclick },
+        h('span', { class: 'act-ico' }, icon), h('div', {}, h('div', { class: 'act-t' }, title), h('div', { class: 'act-b' }, body)));
+      return h('div', { class: 'act-card' },
+        h('div', { class: 'row between' }, h('b', {}, `明天（${day}）要做什么`), run?.regime?.state ? h('span', { class: 'pill-state ' + run.regime.state }, '大盘 ' + (REGIME[run.regime.state]?.[0] || '')) : null),
+        S.hk ? line('🏷️', '指数估值：分批建仓', acts.length ? acts.join('；') + ' —— 每批之间隔两周以上，不要一次买完' : '三个指数都没有进入分批建仓区，不用做任何事') : null,
+        line('📈', '个股观察（港股没做过回测，只观察）', buys.length
+          ? buys.map(c => `${c.name}（止损 ${fmtPrice(c.stop_price)}${c.op?.planned_shares ? '，约 ' + c.op.planned_shares + ' 股' : ''}）`).join('；') + ' —— 点这里看明天怎么买'
+          : (run?.is_stale ? '这份清单已过期，等今天收盘后的新清单' : '今天没有符合条件的股票'),
+          buys.length ? () => { S.sel = buys[0].symbol; showDetail(ctx, buys[0].symbol); } : null),
+        d.account?.equity ? null : h('div', { class: 'tiny', style: 'margin-top:6px;color:var(--warn)' }, '还没填账户资金：在下方清单上方填一次，就能算出具体股数'));
+    }
+
     function actionCard(d) {
+      if (HK) return actionCardHK(d);
       const mv = S.mv, run = d.run;
       const day = run?.valid_until ? shortDate(run.valid_until) : '下一交易日';
       const etfActs = mv?.status === 'ok' ? mv.indices.filter(i => i.next_open?.actions?.length).map(i => `${i.name}：${i.next_open.actions.join('、')}`) : null;
@@ -160,7 +192,7 @@ export const screener = {
     function render() {
       clear(el);
       const d = S.data, run = d.run;
-      if (!brief.firstChild) brief.append(S.mv ? marketBrief(S.mv) : h('div', { class: 'mkt-brief hint' }, h('span', { class: 'spinner' }), ' 市场温度…'));
+      if (!brief.firstChild) brief.append(HK ? hkBrief(S.hk) : S.mv ? marketBrief(S.mv) : h('div', { class: 'mkt-brief hint' }, h('span', { class: 'spinner' }), ' 市场温度…'));
       el.append(actionCard(d), wide() ? null : brief, statusBar(d, S.jobs, ctx, recompute), tabsBar());
       if (d._stale) el.append(h('div', { class: 'alert warn', style: 'margin:10px 16px' }, '后端未连接：显示的是最近一次缓存快照（数据延迟）'));
       S.fpView?.destroy(); S.fpView = null;
@@ -193,7 +225,8 @@ export const screener = {
     function tabsBar() {
       // 左栏很窄：标签用短名（鼠标停留显示全名），均分宽度，放得下就不出现横向滚动
       // 「个股观察」放第一个（默认打开的标签）；后面按证据强弱：低风险组合 / 恐慌日（资金方案里真正用到的）在前
-      const tabs = [['list', '个股观察', '个股观察清单（只观察）'], ...(state.market === 'CN' ? [['factor', '低风险', '低风险组合']] : []), ['panic', '恐慌日', '恐慌日'], ['news', '资讯', '资讯 · 公告 / 新闻 / 财报日历'],
+      const tabs = HK ? [['list', '个股观察', '个股观察清单（只观察）'], ['exec', '次日', '次日执行'], ['hist', '历史', '历史回看']]
+        : [['list', '个股观察', '个股观察清单（只观察）'], ...(state.market === 'CN' ? [['factor', '低风险', '低风险组合']] : []), ['panic', '恐慌日', '恐慌日'], ['news', '资讯', '资讯 · 公告 / 新闻 / 财报日历'],
         ['exec', '次日', '次日执行'], ['filter', '筛选', '条件筛选'], ['hist', '历史', '历史回看']];
       return h('div', { class: 'tabs', style: 'padding:0 8px;margin:0;align-items:center' }, ...tabs.map(([k, l, full]) =>
         h('button', { class: S.tab === k ? 'on' : '', title: full, onclick: () => { const was = S.tab; if (was === 'news' && k !== 'news') { S.news?.destroy(); S.news = null; } S.tab = k; render(); if (!ctx.currentSymbol && rightKindOf(was) !== rightKindOf(k)) showRight(); } }, l)),
@@ -205,7 +238,7 @@ export const screener = {
       try {
         await post('/scan/run', {}, { timeout: 300000 });
         if (!alive()) return;
-        try { S.mv = await loadMarketView(); if (!alive()) return; clear(brief); brief.append(marketBrief(S.mv)); } catch { /* 市场温度失败不影响清单 */ }
+        if (!HK) { try { S.mv = await loadMarketView(); if (!alive()) return; clear(brief); brief.append(marketBrief(S.mv)); } catch { /* 市场温度失败不影响清单 */ } }
         toast('已重新计算', 'ok');
         await load();
       } catch (err) { toast(err.message, 'bad'); b.disabled = false; b.textContent = '↻ 重新计算'; }
@@ -213,7 +246,7 @@ export const screener = {
 
     function renderList(d) {
       const run = d.run;
-      if (!run) { el.append(emptyNoRun(d, ctx, load, S.jobs)); return; }
+      if (!run) { el.append(HK ? emptyNoRunHK(d, S.hkst, load) : emptyNoRun(d, ctx, load, S.jobs)); return; }
       if (!run.official && !S.preview) {
         el.append(h('div', { style: 'padding:16px' },
           h('div', { class: 'alert bad' }, h('b', {}, '数据完整性闸门未通过，不生成观察清单。'),
@@ -235,12 +268,12 @@ export const screener = {
       if (!cands.length) {
         el.append(h('div', { class: 'empty' }, h('div', { class: 'big' }, '今日没有符合条件的候选'),
           h('div', {}, `交易池 ${sum.universe_l2 ?? '—'} 只，形态信号 ${sum.signals_today ?? 0} 个，风险剔除后 ${sum.n_after_exclusion ?? 0} 个。`), funnelNote(sum)),
-          evidenceNote(sum, S.fp?.allocation));
+          HK ? evidenceNoteHK() : evidenceNote(sum, S.fp?.allocation));
         return;
       }
       el.append(accountBox(d), h('div', { class: 'small muted', style: 'padding:8px 16px' },
         `交易池 ${sum.universe_l2} 只 → 形态信号 ${sum.signals_today} → 风险剔除后 ${sum.n_after_exclusion} → 入选 ${cands.length}`));
-      el.append(evidenceNote(sum, S.fp?.allocation));
+      el.append(HK ? evidenceNoteHK() : evidenceNote(sum, S.fp?.allocation));
       const groups = {};
       for (const c of cands) (groups[c.setup] ||= []).push(c);
       for (const g of SETUP_ORDER.filter(k => groups[k])) {
@@ -266,9 +299,11 @@ export const screener = {
             : h('span', { title: '条件单：下一个交易日价格 ≥ 触发价才买入，当天没触发就作废' }, '触发 ', h('b', {}, fmtPrice(c.trigger_price))),
           h('span', {}, '止损 ', h('b', {}, fmtPrice(c.stop_price))),
           h('span', {}, '距止损 ', fmtPct(-(c.stop_dist_pct ?? NaN), 1)),
-          h('span', {}, c.shares != null ? `建议 ${c.shares} 股 · 风险 ${fmtMoney(c.risk_amount)}` : `每${lotName()}风险 ${fmtMoney(c.risk_per_lot)}（未录入账户）`)),
+          HK ? h('span', {}, c.lot ? `每手 ${c.lot} 股（约 ${fmtMoney(c.lot_cost)}）` : '每手股数没查到') : null,
+          h('span', {}, c.shares != null ? `建议 ${c.shares} 股 · 风险 ${fmtMoney(c.risk_amount)}` : HK && !c.lot ? `每股风险 ${(c.risk_per_lot ?? 0).toFixed(3)}（未录入账户）` : `每${lotName()}风险 ${fmtMoney(c.risk_per_lot)}（未录入账户）`)),
+        HK && !c.lot ? h('div', { class: 'small', style: 'color:var(--warn);margin-top:2px' }, '每手股数没查到：股数是理论值，没按整手取整，下单前请按券商里的每手向下取整') : null,
         c.open_plan?.length ? h('div', { class: 'small', style: 'margin-top:4px;color:var(--accent)' },
-          '▸ 点开看明天怎么操作：', c.op?.planned_shares ? `平开买 ${c.op.planned_shares} 股；` : '', '低开 / 平开 / 高开 0.5%~5% / 涨停 各买多少，止损 ', fmtPrice(c.stop_price),
+          '▸ 点开看明天怎么操作：', c.op?.planned_shares ? `平开买 ${c.op.planned_shares} 股；` : '', (HK ? '低开 / 平开 / 高开 0.5%~5% 各买多少，止损 ' : '低开 / 平开 / 高开 0.5%~5% / 涨停 各买多少，止损 '), fmtPrice(c.stop_price),
           c.take_profit ? `、止盈 ${fmtPrice(c.take_profit)}` : '') : null,
         c.fit === false ? h('div', { class: 'small', style: 'color:var(--warn);margin-top:2px' }, '未列入执行：' + c.skip_reason) : null,
         c.outcome && c.outcome.filled ? h('div', { class: 't2 num' }, h('span', {}, '后续：'),
@@ -278,18 +313,27 @@ export const screener = {
 
     /** 没录入账户资金时：清单顶部直接填，填完自动算每只股票的操作。 */
     function accountBox(d) {
+      if (d.account?.equity && HK) {
+        let v = '';
+        return h('div', { class: 'small muted', style: 'padding:6px 16px' }, `按账户资金 ${fmtMoney(d.account.equity)}、每笔最多亏 ${fmtPct(d.account.risk_per_trade, 2, false)}（${fmtMoney(d.account.equity * d.account.risk_per_trade)}）计算操作。`,
+          h('input', { type: 'number', min: 1000, step: 1000, placeholder: '改资金', style: 'width:100px;margin:0 6px', oninput: e => { v = e.target.value; } }),
+          h('button', { class: 'btn sm', onclick: async () => {
+            if (!(+v >= 1000)) { toast(`请输入资金（${cur}），至少 1000`, 'bad'); return; }
+            try { await put('/account', { equity: +v, cash: +v, risk_per_trade: d.account.risk_per_trade }); toast('已保存，正在计算', 'ok'); load(); } catch (e) { toast(e.message, 'bad'); }
+          } }, '保存'));
+      }
       if (d.account?.equity) {
         return h('div', { class: 'small muted', style: 'padding:6px 16px' }, `按账户资金 ${fmtMoney(d.account.equity)}、每笔最多亏 ${fmtPct(d.account.risk_per_trade, 2, false)}（${fmtMoney(d.account.equity * d.account.risk_per_trade)}）计算操作。`,
           h('a', { href: '#/portfolio', style: 'margin-left:6px' }, '修改'));
       }
       const f = { eq: '' };
       return h('div', { class: 'alert info', style: 'margin:8px 16px;font-size:12px' },
-        h('div', {}, h('b', {}, '填一下账户资金，就能算出每只股票明天买几股：'), '每笔最多亏 = 资金 × 0.75%（10 万 = 750 元，回测校准；可在「持仓」页改）。'),
+        h('div', {}, h('b', {}, '填一下账户资金，就能算出每只股票明天买几股：'), HK ? `每笔最多亏 = 资金 × 0.75%（100 万 = 7,500 港元；这个比例是 A 股回测校准的，港股还没有验证过）。` : '每笔最多亏 = 资金 × 0.75%（10 万 = 750 元，回测校准；可在「持仓」页改）。'),
         h('div', { class: 'row mt-s', style: 'gap:6px' },
-          h('input', { type: 'number', min: 1000, step: 1000, placeholder: '例如 100000', style: 'width:140px', oninput: e => { f.eq = e.target.value; } }), h('span', {}, '元'),
+          h('input', { type: 'number', min: 1000, step: 1000, placeholder: HK ? '例如 1000000' : '例如 100000', style: 'width:140px', oninput: e => { f.eq = e.target.value; } }), h('span', {}, cur),
           h('button', { class: 'btn sm primary', onclick: async () => {
             const eq = +f.eq;
-            if (!(eq >= 1000)) { toast('请输入资金（元），至少 1000', 'bad'); return; }
+            if (!(eq >= 1000)) { toast(`请输入资金（${cur}），至少 1000`, 'bad'); return; }
             try { await put('/account', { equity: eq, cash: eq, risk_per_trade: d.account?.risk_per_trade ?? 0.0075 }); toast('已保存，正在计算', 'ok'); load(); }
             catch (e) { toast(e.message, 'bad'); }
           } }, '保存并计算')));
@@ -402,6 +446,7 @@ export const screener = {
       if (ex.earnings) bits.push(`财报窗口 ${ex.earnings}`); if (ex.anomaly) bits.push(`数据异常 ${ex.anomaly}`);
       return h('div', { class: 'hint', style: 'padding:10px 16px' },
         bits.length ? '风险剔除：' + bits.join('，') + '。' : '',
+        HK ? ' 港股没有财报日历和行业数据：不排除「马上要发财报」的股票，请自己看一眼公告；同行业最多几只的限制也不起作用。' : '',
         sum.earnings_data === false ? (sum.earnings_failed ? ` ⚠ ${sum.earnings_failed} 只候选的财报日历获取失败（上游不可用），未做财报窗口排除。` : '') : '');
     }
 
@@ -412,31 +457,31 @@ export const screener = {
       const no = nextOpen();
       const buyCol = no ? '参考价（今日收盘）' : '触发价';
       const buyPx = c => (no ? (c.entry_ref ?? c.close) : c.trigger_price);
-      const lines = cands.map(c => `${code(c.symbol)}\t${c.name}\t${no ? '次日开盘买，参考价' : '触发价'} ${fmtPrice(buyPx(c))}\t止损价 ${fmtPrice(c.stop_price)}\t${c.shares != null ? c.shares + '股' : '—'}`);
+      const lines = cands.map(c => `${code(c.symbol)}\t${c.name}\t${no ? '次日开盘买，参考价' : '触发价'} ${fmtPrice(buyPx(c))}\t止损价 ${fmtPrice(c.stop_price)}\t${c.shares != null ? c.shares + '股' : '—'}`);   // 港股同样适用
       el.append(h('div', { style: 'padding:12px 16px' },
         h('div', { class: 'row between' }, h('h3', {}, `次日（${d.run.valid_until || '下一交易日'}）执行参数`),
           h('button', { class: 'btn sm', onclick: () => copyText(`代码\t名称\t${buyCol}\t止损价\t股数\n` + lines.join('\n')) }, '一键复制')),
         h('div', { class: 'alert info small', style: 'margin:6px 0 8px' }, no
           ? h('span', {}, h('b', {}, '怎么买：'), '下一个交易日开盘买入（集合竞价或开盘后挂单）。参考价是今天的收盘价，只用来算止损距离和股数。',
-            h('br'), h('b', {}, '高开了怎么办：'), '照样买，但要少买——股数 = 「最多亏」÷（开盘价 − 止损价），按整手向下取整，只少不多。这样无论高开多少，打到止损时亏的钱都不超过计划；高开太多、算出来不足一手就放弃。（回测验证：这样做回撤更小、收益基本不变；「高开就不买」没有稳定好处。）',
-            h('br'), h('b', {}, '怎么卖：'), '买入后在券商端挂两张条件单：「价格 ≤ 止损价 卖出」和「价格 ≥ 止盈价 卖出」（止盈价 = 你的实际买入价 × 1.10）；之后到「持仓」页看每天更新的移动止损。')
+            h('br'), h('b', {}, '高开了怎么办：'), '照样买，但要少买——股数 = 「最多亏」÷（开盘价 − 止损价），按整手向下取整，只少不多。这样无论高开多少，打到止损时亏的钱都不超过计划；高开太多、算出来不足一手就放弃。' + (HK ? '（这是 A 股回测验证过的做法；港股没有验证过。）' : '（回测验证：这样做回撤更小、收益基本不变；「高开就不买」没有稳定好处。）'),
+            h('br'), h('b', {}, '怎么卖：'), HK ? '买入后在券商端挂条件单「价格 ≤ 止损价 卖出」。港股的持仓与移动止损还没做，要自己盯着；止损价已按港交所价位取整。' : '买入后在券商端挂两张条件单：「价格 ≤ 止损价 卖出」和「价格 ≥ 止盈价 卖出」（止盈价 = 你的实际买入价 × 1.10）；之后到「持仓」页看每天更新的移动止损。')
           : h('span', {}, h('b', {}, '怎么买：'), '在券商端设条件单「价格 ≥ 触发价 买入」，只在下一个交易日有效，没触发就作废（追不上就不追）。',
             h('br'), h('b', {}, '怎么卖：'), '成交后设「价格 ≤ 止损价 卖出」的条件单。')),
-        h('p', { class: 'hint' }, (state.market === 'US' ? '美股按整股取整。' : 'A 股股数已按整手取整。') + '系统不接券商下单。',
-          acct ? '' : ' 尚未录入账户净值，股数为空（到「持仓」页录入账户参数）。'),
+        h('p', { class: 'hint' }, (HK ? '港股股数按每手股数取整；每手没查到的是理论股数，下单前请自己按券商里的每手取整。' : state.market === 'US' ? '美股按整股取整。' : 'A 股股数已按整手取整。') + '系统不接券商下单。',
+          acct ? '' : (HK ? ' 尚未录入账户资金，股数为空（回到「个股观察」标签，在清单上方填一次）。' : ' 尚未录入账户净值，股数为空（到「持仓」页录入账户参数）。')),
         ...cands.map(c => {
           const tp = c.take_profit ?? (c.entry_ref ? c.entry_ref * 1.10 : null);
           return h('div', { class: 'exec-card' },
             h('div', { class: 'row between' }, h('span', {}, h('b', {}, c.name), h('span', { class: 'muted num' }, ' ' + code(c.symbol))),
-              h('button', { class: 'btn sm primary', title: '在券商成交后点这里记录（填实际成交价，表单会提示最多该买几股）', onclick: () => openTradeForm({
+              HK ? null : h('button', { class: 'btn sm primary', title: '在券商成交后点这里记录（填实际成交价，表单会提示最多该买几股）', onclick: () => openTradeForm({
                 symbol: c.symbol, name: c.name, side: 'buy', price: c.entry_ref, initial_stop: c.stop_price, setup: c.setup, signal_run_id: d.run.run_id,
                 planned_trigger: c.trigger_price, shares: c.shares, risk_amount: c.op?.risk_budget ?? c.risk_amount, regime: d.run.regime?.state, onDone: load }) }, '成交了')),
             h('div', { class: 'num small' }, `${no ? '参考价' : '触发价'} `, h('b', {}, fmtPrice(buyPx(c))), '　止损 ', h('b', {}, fmtPrice(c.stop_price)),
-              '　止盈 ', h('b', { title: '按参考价估算；实际 = 你的买入价 × 1.10' }, fmtPrice(tp))),
+              HK ? null : ['　止盈 ', h('b', { title: '按参考价估算；实际 = 你的买入价 × 1.10' }, fmtPrice(tp))]),
             h('div', { class: 'num small muted' }, c.shares != null ? `平开买 ${c.shares} 股 · 碰到止损最多亏 ${fmtMoney(c.risk_amount)}` : '填账户资金后显示股数',
               '　', h('a', { href: '#', onclick: e => { e.preventDefault(); S.tab = 'list'; S.sel = c.symbol; render(); showDetail(ctx, c.symbol); } }, '各种开盘价买多少 →')));
         }),
-        h('div', { class: 'row mt' }, h('button', { class: 'btn', onclick: async () => {
+        HK ? null : h('div', { class: 'row mt' }, h('button', { class: 'btn', onclick: async () => {
           const syms = cands.filter(c => !c.watched).map(c => ({ symbol: c.symbol })); if (!syms.length) return toast('都已在自选');
           await put('/watchlist', { add: syms }); await ctx.reloadWatch(); toast(`已加入 ${syms.length} 只到自选`, 'ok'); load();
         } }, '全部加入自选'))));
@@ -520,6 +565,28 @@ function emptyNoRun(d, ctx, reload, jobs) {
         toast('正在扫描…');
         try { await post('/scan/run', {}, { timeout: 300000 }); toast('扫描完成', 'ok'); reload(); } catch (e) { toast(e.message, 'bad'); }
       } }, '立即扫描'), h('a', { class: 'btn', href: '#/settings/data' }, '去设置页初始化数据')));
+}
+
+/** 港股还没有任何清单：行情库没初始化 → 告诉用户去哪初始化；初始化了 → 立即扫描。 */
+function emptyNoRunHK(d, st, reload) {
+  if (!st?.ready) {
+    return h('div', { class: 'empty' }, h('div', { class: 'big' }, '港股个股行情库还没初始化'),
+      h('div', {}, '先取成交额前 800 只的名单，再下载 10 年日线，约几分钟（可以随时中断，下次接着下）。初始化后，每天收盘后自动出清单。'),
+      h('div', { class: 'row', style: 'justify-content:center;margin-top:12px' }, h('a', { class: 'btn primary', href: '#/settings/data' }, '去设置页初始化')));
+  }
+  return h('div', { class: 'empty' }, h('div', { class: 'big' }, '还没有观察清单'), h('div', {}, d.message || ''),
+    h('div', { class: 'row', style: 'justify-content:center;margin-top:12px' },
+      h('button', { class: 'btn primary admin-only', onclick: async () => {
+        toast('正在扫描…（要联网查候选的每手股数，最多约 1 分钟）');
+        try { await post('/scan/run', {}, { timeout: 300000 }); toast('扫描完成', 'ok'); reload(); } catch (e) { toast(e.message, 'bad'); }
+      } }, '立即扫描')));
+}
+
+/** 港股没有做过回测：写明证据强度「无」。 */
+function evidenceNoteHK() {
+  return h('details', { class: 'alert warn', style: 'margin:6px 16px 10px;font-size:12px', open: true },
+    h('summary', {}, evBadge('无', '港股还没有做过回测：形态规则、止损倍数、风险比例都是沿用 A 股 / 美股的默认值，没有在港股上验证过。'), ' 港股还没有回测——只观察，别当成有胜率的信号'),
+    h('div', { style: 'margin-top:4px;line-height:1.7' }, '默认只用「波动收缩突破」（它在 A 股抽样回测里期望值为正但幅度小、未达统计显著，在港股上没验证过）。这份清单只是「按规则筛出来的观察名单」；金额小一点，先观察、对账。港股的回测做完后，参数会重新校准。'));
 }
 
 const RISK_NOTE = { breakout: '「突破」显著差于同日随机买入', pullback: '「回踩」显著差于同日随机买入', oversold: '「强势超跌」在完整成交规则下样本外为负' };
